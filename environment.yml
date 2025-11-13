@@ -1,0 +1,8 @@
+# To create an environment with this file, use the following:
+# mamba env create -f environment.yml
+name: latform
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - rich

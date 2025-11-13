@@ -1,0 +1,22 @@
+name: Test suite
+on:
+  pull_request:
+  push:
+  release:
+    types:
+      - published
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/conda-setup
+      - name: Run unit tests
+        shell: bash -l {0}
+        run: |
+          echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
+          pytest -v --cov=src/ 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
