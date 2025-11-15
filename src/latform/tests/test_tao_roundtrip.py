@@ -13,7 +13,7 @@ from .conftest import LATTICE_FILES
 try:
     from pytao import SubprocessTao as Tao
 except ImportError:
-    pytest.skip("pytao is unavailable")
+    pytest.skip("pytao is unavailable", allow_module_level=True)
 
 lattice_param = pytest.mark.parametrize(
     ("lattice_fn",), [pytest.param(fn, id=fn.name) for fn in LATTICE_FILES]
@@ -28,11 +28,11 @@ def tao_save_lattice(tao: Tao) -> str:
 
 
 def roundtrip_lattice(lattice_fn: pathlib.Path, options: FormatOptions):
-    with Tao(lattice_file=lattice_fn) as tao:
+    with Tao(lattice_file=lattice_fn, noplot=True) as tao:
         orig_lat = tao_save_lattice(tao)
 
     formatted = format_file(lattice_fn, options)
-    with Tao.from_lattice_contents(formatted) as tao:
+    with Tao.from_lattice_contents(formatted, noplot=True) as tao:
         formatted_lat = tao_save_lattice(tao)
 
     print("Original lattice, as written by Tao:")
