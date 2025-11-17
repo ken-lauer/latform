@@ -45,10 +45,9 @@ def _requires_multiline(node: OutputNodeType) -> bool:
     return False
 
 
-NO_SPACE_AFTER = frozenset("({[:")
-NO_SPACE_BEFORE = frozenset(")}],:;")
-SPACE_AFTER = frozenset(",:;")
-CLOSING = frozenset(")}]")
+open_brackets = frozenset("({[")
+close_brackets = frozenset(")]}")
+no_space_after = open_brackets | frozenset(":")
 
 
 def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> bool:
@@ -79,45 +78,41 @@ def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> 
         # Found in foo()%bar parameter names
         return False
 
-    match (prev, cur, next_):
-        # No space around = with opening brackets
-        case (_, "=", "(") | (_, "=", "{") | (_, "=", "["):
-            return False
-        case ("=", "(", _) | ("=", "{", _) | ("=", "[", _):
-            return False
+    # No space around = with opening brackets
+    if (prev == "=" and cur in open_brackets) or (cur == "=" and next_ in open_brackets):
+        return False
 
-        # No space after opening brackets (except before =)
-        case (p, c, _) if p in NO_SPACE_AFTER and c != "=":
-            return False
+    # No space after opening brackets (except before =)
+    if prev in no_space_after and cur != "=":
+        return False
 
-        # No space before closing brackets, commas, colons, semicolons
-        case (_, c, _) if c in NO_SPACE_BEFORE:
-            return False
+    # No space before closing brackets, commas, colons, semicolons
+    if cur in frozenset(")}],:;"):
+        return False
 
-        # Space after commas, colons, semicolons
-        case (p, _, _) if p in SPACE_AFTER:
-            return True
+    # Space after commas, colons, semicolons
+    if prev in frozenset(",:;"):
+        return True
 
-        # Space before = when next is opening bracket
-        case (_, "=", n) if n in set("({["):
-            return True
+    # Space before = when next is opening bracket
+    if cur == "=" and next_ in open_brackets:
+        return True
 
-        # Space around = in other cases
-        case (p, _, _) if p == "=":
-            return True
-        case (_, "=", _):
-            return True
+    # Space around = in other cases
+    if prev == "=":
+        return True
+    if cur == "=":
+        return True
 
-        # Space after closing brackets
-        case (p, _, _) if p in CLOSING:
-            return True
+    # Space after closing brackets
+    if prev in close_brackets:
+        return True
 
-        # Space between alphanumeric tokens
-        case (p, c, _) if p and c and p[-1].isalnum() and c[0].isalnum():
-            return True
-
+    # Space between alphanumeric tokens
+    if prev and cur and prev[-1].isalnum() and cur[0].isalnum():
+        return True
     if cur and cur.is_quoted_string:
-        return prev not in NO_SPACE_AFTER
+        return prev not in no_space_after
 
     return False
 
