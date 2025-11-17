@@ -99,8 +99,15 @@ def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> 
     if prev in close_brackets:
         return True
 
-    if prev == "/" or cur == "/":
+    # Separate addition/subtraction from rest of expressions
+    if prev == "+" or cur == "+":
         return True
+    if prev == "-" or cur == "-":
+        return True
+    if prev == "/" or cur == "/":
+        return False
+    if prev == "*" or cur == "*":
+        return False
 
     # Space between alphanumeric tokens
     if prev and cur and prev[-1].isalnum() and cur[0].isalnum():
