@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pathlib
 
-from .token import Delimiter
+from .token import Delimiter, Role
 
 UNSET_PATH = pathlib.Path("unnamed")
 
@@ -10,8 +10,8 @@ NON_EXPR_DELIMITERS = frozenset("[:](,){}=&;")
 EXPR_DELIMITERS = frozenset("+/-*^")
 DELIMITERS = NON_EXPR_DELIMITERS | EXPR_DELIMITERS
 
-STATEMENT_NAME_COLON = Delimiter(":")
-STATEMENT_NAME_EQUALS = Delimiter("=")
+STATEMENT_NAME_COLON = Delimiter(":", role=Role.statement_definition)
+STATEMENT_NAME_EQUALS = Delimiter("=", role=Role.statement_definition)
 
 COLON = Delimiter(":")
 COMMA = Delimiter(",")

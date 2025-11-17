@@ -12,11 +12,9 @@ from .const import (
     LPAREN,
     OPEN_TO_CLOSE,
     SPACE,
-    STATEMENT_NAME_COLON,
-    STATEMENT_NAME_EQUALS,
 )
 from .statements import Statement
-from .token import Comments, Token
+from .token import Comments, Role, Token
 from .types import (
     Attribute,
     CallName,
@@ -54,24 +52,14 @@ def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> 
     if not prev:
         return False
 
-    # TODO: think of a better way for denoting context-specific information
-    # when creating the output nodes? `Token.purpose` or similar, perhaps...
-    #
-    # ":" serves two purposes:
-    # 1. Delimiter between the element name and its definition;
-    # 2. Delimiter between ranges in expressions.
-    # We use a sentinel value of sorts here to differentiate.
-    # This sentinel also passes COLON == STATEMENT_NAME_COLON.
-    if cur is STATEMENT_NAME_COLON:
+    if cur == ":" and cur.role == Role.statement_definition:
         return False
-    elif prev is STATEMENT_NAME_COLON:
+    if prev == ":" and prev.role == Role.statement_definition:
         return True
 
-    # "=" is similar. It can be either:
-    # 1. Delimiter between the element key and its attributes;
-    # 2. Delimiter between an Attribute name and its value.
-    # We use a sentinel value of sorts here to differentiate.
-    if cur is STATEMENT_NAME_EQUALS or prev is STATEMENT_NAME_EQUALS:
+    if cur == "=" and cur.role == Role.statement_definition:
+        return True
+    if prev == "=" and prev.role == Role.statement_definition:
         return True
 
     if cur.startswith("%"):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import typing
 from typing import Any
 
@@ -8,6 +9,10 @@ from .location import Location
 
 if typing.TYPE_CHECKING:
     from .types import Block
+
+
+class Role(enum.StrEnum):
+    statement_definition = "statement_definition"
 
 
 class Token(str):
@@ -19,12 +24,14 @@ class Token(str):
 
     loc: Location
     comments: Comments
+    role: Role | None = None
 
     def __new__(
         cls,
         content: str,
         loc: Location | None = None,
         comments: Comments | None = None,
+        role: Role | None = None,
     ):
         return super().__new__(cls, content)
 
@@ -33,15 +40,19 @@ class Token(str):
         content: str,
         loc: Location | None = None,
         comments: Comments | None = None,
+        role: Role | None = None,
     ):
         self.loc = loc or Location(end_column=len(content))
         self.comments = comments or Comments()
+        self.role = role
 
         # internal error
         if not isinstance(self.loc, Location):
             raise ValueError(type(self.loc))
         if not isinstance(self.comments, Comments):
             raise ValueError(type(self.comments))
+        if role and not isinstance(self.role, Role):
+            raise ValueError(type(self.role))
 
     def __hash__(self):
         return super().__hash__()
