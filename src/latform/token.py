@@ -89,7 +89,7 @@ class Token(str):
     @classmethod
     def join(cls: type[Token], args: list[Token | Block], delim: Delimiter | None = None):
         if not args:
-            return None
+            return cls("")
 
         from .types import _flatten_blocks
 

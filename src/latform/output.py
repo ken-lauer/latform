@@ -166,7 +166,7 @@ def _output_range_would_break(
     prev = parts[start_idx - 1] if start_idx > 0 else None
 
     for idx, token in enumerate(parts[start_idx:end_idx], start=start_idx):
-        spc, _reason = _needs_space_before(parts, idx)
+        spc, _ = _needs_space_before(parts, idx)
         if prev and spc:
             test_length += 1
 
@@ -409,14 +409,11 @@ def format_nodes(
     return _format(parts, options, outer_comments=outer_comments)
 
 
-def format_statement(statement: Statement, options: FormatOptions) -> str:
+def format_statements(statements: Sequence[Statement] | Statement, options: FormatOptions) -> str:
     """Format a statement and return the code string"""
-    lines = format_nodes(statement, options=options)
-    return "\n".join(line.render(options) for line in lines)
+    if isinstance(statements, Statement):
+        statements = [statements]
 
-
-def format_statements(statements: Sequence[Statement], options: FormatOptions) -> str:
-    """Format a statement and return the code string"""
     res = []
 
     last_statement = None

@@ -247,7 +247,7 @@ class Tokenizer:
         # Exclude any empty statements (semicolons at EOL, for example)
         return [block for block in blocks if block.items]
 
-    def _scan_word(self, delimiters: str) -> tuple[str, int]:
+    def _scan_word(self, delimiters: frozenset[str]) -> tuple[str, int]:
         start = self.pos
         in_quotes = False
         quote_char = None
@@ -280,7 +280,7 @@ class Tokenizer:
 
         return word, self.pos
 
-    def _scan_delimiter(self, prev_token: Token | None, delimiters: str) -> Delimiter | None:
+    def _scan_delimiter(self, delimiters: frozenset[str]) -> Delimiter | None:
         while self.pos < len(self.line) and self.line[self.pos].isspace():
             self.pos += 1
         if self.pos >= len(self.line) or self.line[self.pos] not in delimiters:
@@ -304,19 +304,11 @@ class Tokenizer:
                         return Delimiter("=", loc)  # keep existing squashing
                     return Delimiter(compound, loc)
 
-                    # Fake delimiters - part of species names
-                    # Skip these entirely.
-                    # case ("+", "+") | ("-", "-"):
-                    #     while self.pos < len(self.line) and self.line[self.pos] == ch:
-                    #         self.pos += 1
-                    #     res = self._scan_delimiter(prev_token, delimiters)
-                    #     return res
-
         loc = Location(self.filename, self.lineno, start, self.lineno, start + 1)
         return Delimiter(ch, loc)
 
     def get_next_word(
-        self, delimiters: str = DELIMITERS, upper: bool = False
+        self, delimiters: frozenset[str] = DELIMITERS, upper: bool = False
     ) -> tuple[Token | None, Delimiter | None]:
         """
         Get next word from the parse line.
@@ -343,13 +335,13 @@ class Tokenizer:
             raise EndOfLine()
         # leading delimiter
         if self.line[self.pos] in delimiters:
-            delim = self._scan_delimiter(None, delimiters)
+            delim = self._scan_delimiter(delimiters)
             return None, delim
 
         word, end_pos = self._scan_word(delimiters)
         loc = Location(self.filename, self.lineno, end_pos - len(word), self.lineno, end_pos)
         token = Token(word, loc=loc)
-        delim = self._scan_delimiter(word, delimiters)
+        delim = self._scan_delimiter(delimiters)
         if upper and not (word.startswith('"') or word.startswith("'")):
             token = Token(word.upper(), loc=loc)
         return token, delim

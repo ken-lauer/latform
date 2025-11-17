@@ -44,9 +44,6 @@ from ..tokenizer import tokenize
 T = Token
 
 
-open("tests.txt", "wt").close()
-
-
 def parse_verbose(code: str):
     caller = inspect.stack()[1].function
     prefix = f"{caller}:"
