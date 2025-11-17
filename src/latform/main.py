@@ -11,11 +11,10 @@ import sys
 
 import rich
 
-from latform.types import FormatOptions
-
 from .output import format_statements
 from .parser import parse, parse_file_recursive
 from .tokenizer import Tokenizer
+from .types import FormatOptions
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)

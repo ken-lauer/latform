@@ -100,11 +100,11 @@ def flatten(item: Seq | Attribute | Token | CallName | None) -> list[Token]:
     """Flatten an Array to a list of Tokens."""
     from .types import Attribute, CallName, Seq
 
-    res = []
-
     if isinstance(item, Seq):
         return item.flatten()
-    elif isinstance(item, (CallName, Attribute)):
+
+    res = []
+    if isinstance(item, (CallName, Attribute)):
         for node in item.to_output_nodes():
             res.extend(flatten(node))
     elif isinstance(item, Token):

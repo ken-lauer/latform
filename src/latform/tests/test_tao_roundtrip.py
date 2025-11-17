@@ -5,9 +5,8 @@ import tempfile
 
 import pytest
 
-from latform.types import FormatOptions
-
 from ..output import format_file
+from ..types import FormatOptions
 from .conftest import LATTICE_FILES
 
 try:

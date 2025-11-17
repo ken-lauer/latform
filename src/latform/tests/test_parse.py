@@ -3,8 +3,6 @@ import inspect
 import pytest
 import rich
 
-from latform.types import FormatOptions
-
 from ..const import (
     COMMA,
     EQUALS,
@@ -40,6 +38,7 @@ from ..parser import (
     parse,
 )
 from ..tokenizer import tokenize
+from ..types import FormatOptions
 
 T = Token
 
