@@ -13,6 +13,7 @@ if typing.TYPE_CHECKING:
 
 class Role(enum.StrEnum):
     statement_definition = "statement_definition"
+    optional = "optional"
 
 
 class Token(str):

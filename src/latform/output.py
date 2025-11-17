@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import pathlib
 from typing import Sequence
 
@@ -26,6 +27,8 @@ from .types import (
 from .util import DelimiterState, flatten
 
 OutputNodeType = Delimiter | Attribute | Token | Seq | CallName
+
+logger = logging.getLogger(__name__)
 
 
 def _has_comments(node: OutputNodeType) -> bool:
@@ -96,6 +99,9 @@ def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> 
     if prev in close_brackets:
         return True
 
+    if prev == "/" or cur == "/":
+        return True
+
     # Space between alphanumeric tokens
     if prev and cur and prev[-1].isalnum() and cur[0].isalnum():
         return True
@@ -103,6 +109,23 @@ def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> 
         return prev not in no_space_after
 
     return False
+
+
+def _get_output_block(parts: list[Token], start_idx: int) -> list[Token]:
+    """Scan ahead to check if block contains any comments (including nested blocks)."""
+
+    block = []
+    depth = 0
+    for token in parts[start_idx:]:
+        block.append(token)
+        if token in OPEN_TO_CLOSE:
+            depth += 1
+        elif token in CLOSE_TO_OPEN:
+            depth -= 1
+            if depth == 0:
+                break
+
+    return block
 
 
 def _output_node_block_contains_comments(parts: list[Token], start_idx: int) -> bool:
@@ -121,6 +144,45 @@ def _output_node_block_contains_comments(parts: list[Token], start_idx: int) -> 
                 return False
 
     return False
+
+
+def _output_range_would_break(
+    start_length: int,
+    parts: list[Token],
+    start_idx: int,
+    end_idx: int,
+    max_length: int,
+) -> bool:
+    test_length = start_length
+    prev = parts[start_idx - 1] if start_idx > 0 else None
+
+    for token in parts[start_idx:end_idx]:
+        if prev and _needs_space_before(prev, token, None):
+            test_length += 1
+
+        test_length += len(token)
+        if test_length > max_length:
+            return True
+
+        prev = token
+
+    return False
+
+
+def _output_block_would_break(
+    start_length: int,
+    parts: list[Token],
+    start_idx: int,
+    max_length: int,
+) -> bool:
+    block = _get_output_block(parts, start_idx)
+    return _output_range_would_break(
+        start_length=start_length,
+        parts=parts,
+        start_idx=start_idx,
+        end_idx=start_idx + len(block),
+        max_length=max_length,
+    )
 
 
 def _flatten_output_nodes(nodes: list[OutputNodeType] | Statement | OutputNodeType) -> list[Token]:
@@ -143,33 +205,26 @@ def _flatten_output_nodes(nodes: list[OutputNodeType] | Statement | OutputNodeTy
 
 
 def _should_break_for_length(
-    line: OutputLine, parts: list[Token], start_idx: int, max_length: int
+    start_length: int, parts: list[Token], start_idx: int, max_length: int
 ) -> bool:
     """
     Check if continuing would exceed max_length.
     Only applies outside blocks. Looks ahead until next breakpoint: ,({[=
     """
-    test_length = len(line)
     breakpoints = {COMMA, LPAREN, LBRACE, LBRACK, EQUALS}
-    test_prev = None
+    end_idx = len(parts)
+    for idx, ch in enumerate(parts[start_idx:], start=start_idx):
+        if ch in breakpoints:
+            end_idx = idx
+            break
 
-    for token in parts[start_idx:]:
-        if test_prev and _needs_space_before(test_prev, token, None):
-            test_length += 1
-
-        test_length += len(token)
-
-        if token in breakpoints:
-            if test_length > max_length:
-                return True
-            return False
-
-        if test_length > max_length:
-            return True
-
-        test_prev = token
-
-    return False
+    return _output_range_would_break(
+        start_length=start_length,
+        parts=parts,
+        start_idx=start_idx,
+        end_idx=end_idx,
+        max_length=max_length,
+    )
 
 
 def _format(
@@ -179,6 +234,7 @@ def _format(
     indent_level: int = 0,
     outer_comments: Comments | None = None,
 ) -> list[OutputLine]:
+    top_level_indent = indent_level
     lines: list[OutputLine] = []
     prev: Token | None = None
     idx = 0
@@ -188,7 +244,7 @@ def _format(
 
     line = OutputLine(indent=indent_level, parts=[])
 
-    def newline(lookahead: bool = True):
+    def newline(lookahead: bool = True, reason: str = ""):
         nonlocal idx
         nonlocal line
 
@@ -199,6 +255,9 @@ def _format(
 
         if line is not None and (line.parts or line.comment):
             lines.append(line)
+
+        if reason:
+            logger.debug(f"{idx}: {prev}, {cur}, {next_}: break {reason}")
 
         return OutputLine(indent=indent_level, parts=[])
 
@@ -224,6 +283,12 @@ def _format(
                 is_opening = True
 
         has_comments = is_opening and _output_node_block_contains_comments(parts, idx)
+        would_break_inside = has_comments or (
+            is_opening
+            and _output_block_would_break(
+                parts=parts, start_idx=idx, start_length=len(line), max_length=options.line_length
+            )
+        )
 
         if line.parts and not cur.comments.pre:
             if _needs_space_before(prev, cur, next_):
@@ -237,7 +302,7 @@ def _format(
                 # if multiline_list_final_comma:
                 #  todo this doesn't quite work; and can we assume comma-delimited anyway?
                 #     line.parts.append(COMMA)
-                line = newline(lookahead=False)
+                line = newline(lookahead=False, reason="closing multiline block")
                 line.parts.append(cur)
                 if next_ in {COMMA}:
                     assert isinstance(next_, Delimiter)
@@ -245,7 +310,7 @@ def _format(
                     idx += 1
                 if block_has_newlines_stack and block_has_newlines_stack[-1]:
                     next_ = None
-                    line = newline()
+                    line = newline(reason="newline stack post multiline close")
             else:
                 line.parts.append(cur)
             idx += 1
@@ -254,10 +319,10 @@ def _format(
         line.parts.append(cur)
 
         if is_opening:
-            block_has_newlines_stack.append(has_comments)
-            if has_comments:
+            block_has_newlines_stack.append(would_break_inside)
+            if would_break_inside:
                 indent_level += 1
-                line = newline()
+                line = newline(reason="opening + would break inside")
 
         if cur.comments.inline:
             line.comment = f"!{cur.comments.inline}"
@@ -266,24 +331,27 @@ def _format(
                 # No implicit continuation char?
                 line.parts.append(SPACE)
                 line.parts.append(Delimiter("&"))
-                line = newline()
+                line = newline(reason="inline comment without implicit continuation")
             else:
-                line = newline()
+                line = newline(reason="inline comment")
 
             idx += 1
             continue
 
         # if delim_state.depth == 0 and not is_opening and not is_closing:
-        if cur in {COMMA, LPAREN, LBRACE, EQUALS}:
+        if cur in {COMMA, LPAREN, LBRACE}:  # , EQUALS}:
             if _should_break_for_length(
-                parts=parts, line=line, max_length=options.line_length, start_idx=idx + 1
+                parts=parts,
+                start_length=len(line),
+                max_length=options.line_length,
+                start_idx=idx + 1,
             ):
                 if indent_level == 0:
                     indent_level += 1
-                line = newline()
+                line = newline(reason="break for length ',({'")
 
-        if any(block_has_newlines_stack) and cur in {COMMA}:
-            line = newline()
+        if block_has_newlines_stack and block_has_newlines_stack[-1] and cur in {COMMA}:
+            line = newline(reason="newline stack comma")
 
         idx += 1
 
@@ -305,7 +373,7 @@ def _format(
 
         if outer_comments.pre:
             for comment in reversed(outer_comments.pre):
-                lines.insert(0, OutputLine(indent=indent_level, parts=[f"!{comment}"]))
+                lines.insert(0, OutputLine(indent=top_level_indent, parts=[f"!{comment}"]))
 
     return lines
 

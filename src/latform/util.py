@@ -58,6 +58,8 @@ def delimit(items, delimiter: Delimiter | None):
 
 def comma_delimit(items):
     yield from delimit(items, COMMA)
+    # if items:
+    #     yield OPTIONAL_COMMA
 
 
 T = TypeVar("T")

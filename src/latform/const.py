@@ -15,6 +15,7 @@ STATEMENT_NAME_EQUALS = Delimiter("=", role=Role.statement_definition)
 
 COLON = Delimiter(":")
 COMMA = Delimiter(",")
+OPTIONAL_COMMA = Delimiter(",", role=Role.optional)
 SLASH = Delimiter("/")
 DQUOTE = Delimiter('"')
 EQUALS = Delimiter("=")
