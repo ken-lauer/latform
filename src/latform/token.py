@@ -11,7 +11,7 @@ if typing.TYPE_CHECKING:
     from .types import Block
 
 
-class Role(enum.StrEnum):
+class Role(str, enum.Enum):
     statement_definition = "statement_definition"
     optional = "optional"
 
