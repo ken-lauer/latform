@@ -31,91 +31,93 @@ OutputNodeType = Delimiter | Attribute | Token | Seq | CallName
 logger = logging.getLogger(__name__)
 
 
-def _has_comments(node: OutputNodeType) -> bool:
-    comments: Comments | None = getattr(node, "comments", None)
-    if comments:
-        return bool(comments.pre) or bool(comments.inline)
-    return False
-
-
-def _requires_multiline(node: OutputNodeType) -> bool:
-    if _has_comments(node):
-        return True
-    if isinstance(node, Seq):
-        return any(_requires_multiline(child) for child in node.items)
-    return False
-
-
 open_brackets = frozenset("({[")
 close_brackets = frozenset(")]}")
 no_space_after = open_brackets | frozenset(":")
 
 
-def _needs_space_before(prev: Token | None, cur: Token, next_: Token | None) -> bool:
+def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
+    cur = parts[idx]
+    prev = parts[idx - 1] if idx > 0 else None
+    nxt = parts[idx + 1] if idx < len(parts) - 1 else None
+
     if not prev:
-        return False
+        return False, "no previous token"
 
     if cur == ":" and cur.role == Role.statement_definition:
-        return False
+        return False, "colon in statement definition"
     if prev == ":" and prev.role == Role.statement_definition:
-        return True
+        return True, "after colon in statement definition"
 
     if cur == "=" and cur.role == Role.statement_definition:
-        return True
+        return True, "before equals in statement definition"
     if prev == "=" and prev.role == Role.statement_definition:
-        return True
+        return True, "after equals in statement definition"
 
     if cur.startswith("%"):
         # Found in foo()%bar parameter names
-        return False
+        return False, "token starts with % (parameter name)"
 
     # No space around = with opening brackets
-    if (prev == "=" and cur in open_brackets) or (cur == "=" and next_ in open_brackets):
-        return False
+    if (prev == "=" and cur in open_brackets) or (cur == "=" and nxt in open_brackets):
+        return False, "no space around = with opening brackets"
 
     # No space after opening brackets (except before =)
     if prev in no_space_after and cur != "=":
-        return False
+        return False, f"no space after opening bracket '{prev}'"
 
     # No space before closing brackets, commas, colons, semicolons
     if cur in frozenset(")}],:;"):
-        return False
+        return False, f"no space before '{cur}'"
 
     # Space after commas, colons, semicolons
     if prev in frozenset(",:;"):
-        return True
+        return True, f"space after '{prev}'"
 
     # Space before = when next is opening bracket
-    if cur == "=" and next_ in open_brackets:
-        return True
+    if cur == "=" and nxt in open_brackets:
+        return True, "space before = when next is opening bracket"
 
     # Space around = in other cases
     if prev == "=":
-        return True
+        return True, "space after ="
     if cur == "=":
-        return True
-
-    # Space after closing brackets
-    if prev in close_brackets:
-        return True
+        return True, "space before ="
 
     # Separate addition/subtraction from rest of expressions
     if prev == "+" or cur == "+":
-        return True
-    if prev == "-" or cur == "-":
-        return True
+        return True, "space around +"
+    if prev == "-":
+        prev_prev = parts[idx - 2] if idx >= 2 else None
+        if prev_prev in open_brackets or prev_prev in {"="}:
+            return False, "no space when minus looks like unary negation"
+        if prev_prev in {"-"}:
+            return False, "double minus sign means second is negation"
+        return True, "space after minus"
     if prev == "/" or cur == "/":
-        return False
+        return False, "no space around /"
     if prev == "*" or cur == "*":
-        return False
+        return False, "no space around *"
+    if cur == "-":
+        if prev in close_brackets:
+            return True, "space before minus:- after closing bracket"
+        if prev in open_brackets or prev in {"="}:
+            return False, "no space before minus after opening bracket or ="
+        return True, "space before minus (default case)"
+
+    # Space after closing brackets
+    if prev in close_brackets:
+        return True, f"space after closing bracket '{prev}'"
 
     # Space between alphanumeric tokens
     if prev and cur and prev[-1].isalnum() and cur[0].isalnum():
-        return True
+        return True, "space between alphanumeric tokens"
     if cur and cur.is_quoted_string:
-        return prev not in no_space_after
+        if prev in no_space_after:
+            return False, f"quoted string, prev '{prev}' in {no_space_after}"
+        return True, f"quoted string, prev '{prev}' not in {no_space_after}"
 
-    return False
+    return False, "default: no space"
 
 
 def _get_output_block(parts: list[Token], start_idx: int) -> list[Token]:
@@ -163,8 +165,9 @@ def _output_range_would_break(
     test_length = start_length
     prev = parts[start_idx - 1] if start_idx > 0 else None
 
-    for token in parts[start_idx:end_idx]:
-        if prev and _needs_space_before(prev, token, None):
+    for idx, token in enumerate(parts[start_idx:end_idx], start=start_idx):
+        spc, _reason = _needs_space_before(parts, idx)
+        if prev and spc:
             test_length += 1
 
         test_length += len(token)
@@ -298,8 +301,14 @@ def _format(
         )
 
         if line.parts and not cur.comments.pre:
-            if _needs_space_before(prev, cur, next_):
+            spc, reason = _needs_space_before(parts, idx)
+            if spc:
                 line.parts.append(" ")
+
+            if spc:
+                logger.debug("Adding space before %r: %s", cur, reason)
+            else:
+                logger.debug("No space before %r: %s", cur, reason)
 
         if is_closing:
             had_newlines = block_has_newlines_stack.pop() if block_has_newlines_stack else False

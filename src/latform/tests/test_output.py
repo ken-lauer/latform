@@ -310,7 +310,7 @@ def test_format_element(item, expected):
     [
         pytest.param(
             "O_L: overlay = {p1[L]:(Lcell - 2*Lq)/2}, var = {Lcell}",
-            "O_L: overlay = {p1[L]:(Lcell-2*Lq) /2}, var={Lcell}",
+            "O_L: overlay = {p1[L]:(Lcell - 2*Lq)/2}, var={Lcell}",
             id="overlay_with_expr",
         ),
         pytest.param(
@@ -323,3 +323,74 @@ def test_format_element(item, expected):
 def test_format_element_from_source(code: str, expected: str) -> None:
     (stmt,) = parse(code)
     check_format(stmt, expected=expected)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        pytest.param(
+            "a+ b    - 3",
+            "a + b - 3",
+            id="addition_subtraction_spacing",
+        ),
+        pytest.param(
+            "a/ b    - 3",
+            "a/b - 3",
+            id="division_no_space",
+        ),
+        pytest.param(
+            "a(c) / b    - 3",
+            "a(c)/b - 3",
+            id="function_call_division",
+        ),
+        pytest.param(
+            "a(c) * b    - 3",
+            "a(c)*b - 3",
+            id="function_call_multiplication",
+        ),
+        pytest.param(
+            "- a(c) * b    - 3",
+            "-a(c)*b - 3",
+            id="unary_minus_function_call",
+        ),
+        pytest.param(
+            "5 - -a(c) * b    - 3",
+            "5 - -a(c)*b - 3",
+            id="binary_minus_unary_minus",
+        ),
+        pytest.param(
+            "b01w[   rho  ]   /b01w[L]",
+            "b01w[rho]/b01w[L]",
+            id="array_indexing_division",
+        ),
+        pytest.param(
+            "ename[frequencies(1)%amp]",
+            "ename[frequencies(1)%amp]",
+            id="nested_indexing_with_percent",
+        ),
+        pytest.param(
+            "species(He++)",
+            "species(He++)",
+            id="double_plus_species",
+        ),
+        pytest.param(
+            "species(He--)",
+            "species(He--)",
+            id="double_minus_species",
+        ),
+        pytest.param(
+            "species(He+)",
+            "species(He+)",
+            id="single_plus_species",
+        ),
+        pytest.param(
+            "species(He-)",
+            "species(He-)",
+            id="single_minus_species",
+        ),
+    ],
+)
+def test_format_expression(expression: str, expected: str) -> None:
+    prefix = "ele: name, foo = "
+    (stmt,) = parse(f"{prefix}{expression}")
+    check_format(stmt, expected=f"{prefix}{expected}")
