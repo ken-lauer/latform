@@ -22,14 +22,7 @@ requires-python = ">=3.10"
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
-doc = [
-  "mkdocs",
-  "mkdocs-jupyter",
-  "mkdocs-macros-plugin",
-  "mkdocs-material",
-  "mkdocstrings",
-  "mkdocstrings-python",
-]
+doc = ["mkdocs", "mkdocs-macros-plugin", "mkdocstrings", "mkdocstrings-python"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

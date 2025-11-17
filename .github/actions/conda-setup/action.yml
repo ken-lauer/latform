@@ -49,4 +49,5 @@ runs:
       run: |
         # Export as environment variable for convenience
         echo "${{ inputs.env_var }}=${{ github.workspace }}" >> "${GITHUB_ENV}"
-        pip install .[test,doc]
+        # Conda has our main requirements; install testing requirements from pip
+        pip install --no-deps .[test,doc]
