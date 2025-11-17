@@ -6,3 +6,11 @@ channels:
 dependencies:
   - python=3.12
   - rich
+  # For testing and documentation:
+  - pytao
+  - pytest
+  - pytest-cov
+  - mkdocs
+  # - mkdocs-macros-plugin
+  - mkdocstrings
+  - mkdocstrings-python

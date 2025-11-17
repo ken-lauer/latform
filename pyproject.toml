@@ -21,14 +21,19 @@ readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-cov"]
-doc = ["mkdocs", "mkdocs-macros-plugin", "mkdocstrings", "mkdocstrings-python"]
+doc = [
+  "mkdocs",
+  # "mkdocs-macros-plugin",
+  "mkdocstrings",
+  "mkdocstrings-python",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = false
 
 [project.license]
+test = ["pytest", "pytest-cov"]
 file = "LICENSE"
 
 [project.scripts]
