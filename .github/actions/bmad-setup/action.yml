@@ -1,0 +1,15 @@
+name: "bmad setup"
+description: "Clone the latest bmad"
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v5
+      with:
+        repository: bmad-sim/bmad-ecosystem
+        fetch-depth: 1
+        path: bmad-eco
+
+    - name: Set ACC_ROOT_DIR
+      shell: bash -l {0}
+      run: |
+        echo "ACC_ROOT_DIR=$GITHUB_WORKSPACE/bmad-eco" >> $GITHUB_ENV

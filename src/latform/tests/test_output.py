@@ -318,6 +318,16 @@ def test_format_element(item, expected):
             "ele: key, foo = call::/path/to/file",
             id="call_expr",
         ),
+        pytest.param(
+            "ele: line = (a, b, c)",
+            "ele: line = (a, b, c)",
+            id="simple_line",
+        ),
+        pytest.param(
+            "ele: line = (a, b, c, --d, e, f)",
+            "ele: line = (a, b, c, --d, e, f)",
+            id="line_with_reverse",
+        ),
     ],
 )
 def test_format_element_from_source(code: str, expected: str) -> None:

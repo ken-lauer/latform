@@ -106,6 +106,21 @@ def _nab_comments(items) -> Comments:
     return res
 
 
+def _line_elements_from_block(block: Block) -> Seq:
+    if block.opener != "(":
+        raise ValueError(f"Unexpected block opener: {block.opener}")
+
+    eles = Seq.from_delimited_block(block, delimiter=COMMA)
+    assert isinstance(eles, Seq)
+    for idx, ele in enumerate(list(eles.items)):
+        match ele:
+            case Seq(items=["-", "-", name]):
+                assert isinstance(ele, Seq)
+                eles.items[idx].items = [Delimiter("--"), name]
+
+    return eles
+
+
 def parse_items(items: list[TokenizerItem]):
     if not items:
         raise ValueError("No items provided")
@@ -151,14 +166,14 @@ def parse_items(items: list[TokenizerItem]):
             return ElementList(
                 comments=comments,
                 name=name,
-                elements=Seq.from_delimited_block(elements_block, delimiter=COMMA),
+                elements=_line_elements_from_block(elements_block),
             )
 
         case [Token() as name, ":", Token("line"), "=", Block(opener="(") as elements_block]:
             return Line(
                 comments=comments,
                 name=name,
-                elements=Seq.from_delimited_block(elements_block, delimiter=COMMA),
+                elements=_line_elements_from_block(elements_block),
             )
 
         case [
@@ -167,12 +182,12 @@ def parse_items(items: list[TokenizerItem]):
             Token("line"),
             Block(opener="[") as multipass,
             "=",
-            Block(opener="(") as eles,
+            Block(opener="(") as elements_block,
         ] if _is_multipass_marker(multipass):
             return Line(
                 comments=comments,
                 name=name,
-                elements=Seq.from_delimited_block(eles, delimiter=COMMA),
+                elements=_line_elements_from_block(elements_block),
                 multipass=True,
             )
 
@@ -182,7 +197,7 @@ def parse_items(items: list[TokenizerItem]):
             ":",
             Token("line"),
             "=",
-            Block(opener="(") as eles,
+            Block(opener="(") as elements_block,
         ]:
             return Line(
                 comments=comments,
@@ -190,7 +205,7 @@ def parse_items(items: list[TokenizerItem]):
                     name=Seq.from_item(name),
                     args=Seq.from_item(line_args),
                 ),
-                elements=Seq.from_delimited_block(eles, delimiter=COMMA),
+                elements=_line_elements_from_block(elements_block),
             )
 
         case [Token() as name, ":", Token() as element_type, *rest]:

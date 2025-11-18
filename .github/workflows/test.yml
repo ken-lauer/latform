@@ -37,6 +37,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: ./.github/actions/bmad-setup # -> sets ACC_ROOT_DIR
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:

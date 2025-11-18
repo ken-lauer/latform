@@ -8,7 +8,6 @@ from ..const import (
     EQUALS,
     LBRACE,
     LPAREN,
-    MINUS,
     OPEN_TO_CLOSE,
     RBRACE,
     RPAREN,
@@ -1361,8 +1360,7 @@ fig8 : line  = (ir1, L4, ir2, ir1, p1, --L3, p2, ir2);
                             T("p1"),
                             Seq(
                                 items=[
-                                    MINUS,
-                                    MINUS,
+                                    Delimiter("--"),
                                     T("L3"),
                                 ],
                                 delimiter=SPACE,
