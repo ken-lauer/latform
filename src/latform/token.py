@@ -20,6 +20,7 @@ class Role(str, enum.Enum):
     name_ = "name"
     builtin = "builtin"
     kind = "kind"
+    attribute_name = "attribute_name"
     statement_definition = "statement_definition"
 
 

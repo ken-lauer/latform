@@ -308,7 +308,7 @@ def _format(
     line = OutputLine(indent=indent_level, parts=[])
 
     def add_part_to_line(part: Token):
-        if part.role in {Role.name_, Role.kind, Role.builtin}:
+        if part.role in {Role.name_, Role.kind, Role.builtin, Role.attribute_name}:
             if options.name_case == "upper":
                 line.parts.append(part.upper())
                 return

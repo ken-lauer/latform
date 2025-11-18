@@ -154,6 +154,7 @@ class Seq:
 
         res = cls(items=[Seq.from_items([item]) for item in items], delimiter=SPACE)
         _filter_species_calls(res.items)
+        _annotate_names(res.items)
         return res
 
     def to_output_nodes(self):
@@ -241,6 +242,21 @@ class Seq:
             items=list(item.with_(role=role) for item in self.items),
             delimiter=self.delimiter,
         )
+
+
+def _annotate_names(items):
+    for idx, item in enumerate(items[:-1]):
+        if isinstance(item, Seq):
+            _annotate_names(item.items)
+        elif isinstance(item, Token):
+            nxt = items[idx + 1]
+            if (
+                isinstance(nxt, Seq)
+                and nxt.opener == "["
+                and all(isinstance(inner, Token) for inner in nxt.items)
+            ):
+                item.role = Role.name_
+                nxt.items = nxt.with_(role=Role.attribute_name).items
 
 
 def _filter_species_calls(items):
