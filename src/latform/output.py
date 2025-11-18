@@ -92,7 +92,7 @@ def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
         return True, "space around +"
     if prev == "-":
         prev_prev = parts[idx - 2] if idx >= 2 else None
-        if prev_prev in open_brackets or prev_prev in {"="}:
+        if prev_prev in open_brackets or prev_prev in {"=", ":"}:
             return False, "no space when minus looks like unary negation"
         if prev_prev in {"-"}:
             return False, "double minus sign means second is negation"
@@ -106,8 +106,8 @@ def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
     if cur == "-":
         if prev in close_brackets:
             return True, "space before minus:- after closing bracket"
-        if prev in open_brackets or prev in {"="}:
-            return False, "no space before minus after opening bracket or ="
+        if prev in open_brackets or prev in {"=", ":"}:
+            return False, "no space before minus after opening bracket or =/:"
         return True, "space before minus (default case)"
 
     # Space after closing brackets
@@ -140,6 +140,36 @@ def _get_output_block(parts: list[Token], start_idx: int) -> list[Token]:
                 break
 
     return block
+
+
+def _tokens_at_depth(parts: list[Token], target_depth: int):
+    depth = 0
+
+    for token in parts:
+        if depth == target_depth:
+            yield token
+
+        if token in OPEN_TO_CLOSE:
+            depth += 1
+        elif token in CLOSE_TO_OPEN:
+            depth -= 1
+
+
+def _count_top_level(parts: list[Token], to_count: Token) -> int:
+    count = 0
+
+    for tok in _tokens_at_depth(parts, target_depth=0):
+        if tok == to_count:
+            count += 1
+    return count
+
+
+def _length_top_level(parts: list[Token]) -> int:
+    length = 0
+
+    for tok in _tokens_at_depth(parts, target_depth=0):
+        length += len(tok)
+    return length
 
 
 def _output_node_block_contains_comments(parts: list[Token], start_idx: int) -> bool:
@@ -257,10 +287,29 @@ def _format(
     block_has_newlines_stack: list[bool] = []
     nxt = None
 
+    commas = _count_top_level(parts, COMMA)
+    top_level_length = _length_top_level(parts)
+
+    if commas > options.statement_comma_threshold_for_multiline or top_level_length > (
+        options.line_length * options.always_multiline_factor
+    ):
+        block_has_newlines_stack.append(True)
+    else:
+        block_has_newlines_stack.append(False)
+    top_level_multiline = block_has_newlines_stack[0]
+
+    if LATFORM_OUTPUT_DEBUG:
+        logger.debug(
+            f"{top_level_multiline=}:"
+            f"\n* {commas=} vs {options.statement_comma_threshold_for_multiline=}, "
+            f"\n* {top_level_length=} vs {options.line_length=} * {options.always_multiline_factor=}"
+        )
+
     line = OutputLine(indent=indent_level, parts=[])
 
     def newline(lookahead: bool = True, reason: str = ""):
         nonlocal idx
+        nonlocal indent_level
         nonlocal line
 
         if lookahead and nxt is not None and nxt in {COMMA}:
@@ -271,6 +320,9 @@ def _format(
 
         if line is not None and (line.parts or line.comment):
             lines.append(line)
+
+        if indent_level == top_level_indent and top_level_multiline and len(lines) == 1:
+            indent_level += 1
 
         if reason and LATFORM_OUTPUT_DEBUG:
             logger.debug(f"{idx}: {prev}, {cur}, {nxt}: break {reason}")
