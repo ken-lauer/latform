@@ -18,6 +18,8 @@ jobs:
         with:
           extra_packages: pytao
 
+      - uses: ./.github/actions/bmad-setup # -> sets ACC_ROOT_DIR
+
       - name: Run unit tests
         shell: bash -l -e -o pipefail {0}
         run: |
@@ -36,8 +38,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
-      - uses: ./.github/actions/bmad-setup # -> sets ACC_ROOT_DIR
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6

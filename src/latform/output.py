@@ -358,15 +358,12 @@ def _format(
         if cur == COMMA:
             if nxt in close_brackets:
                 if not options.trailing_comma:
-                    print(cur, nxt, "trailing comma removal: option")
                     idx += 1
                     continue
                 elif not in_newline_block():
-                    print(cur, nxt, "trailing comma removal: not in newline")
                     idx += 1
                     continue
             if nxt is None:
-                print(cur, nxt, "comma removal: not in block")
                 idx += 1
                 continue
 

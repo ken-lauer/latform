@@ -4,12 +4,17 @@ import pytest
 import rich
 
 from ..const import (
+    AMPERSAND,
+    COLON,
     COMMA,
     EQUALS,
     LBRACE,
+    LBRACK,
     LPAREN,
     OPEN_TO_CLOSE,
+    PLUS,
     RBRACE,
+    RBRACK,
     RPAREN,
     SLASH,
     SPACE,
@@ -721,7 +726,7 @@ cst3: crystal, b_param =  0.6, crystal_type = "Ge(111)",
                         items=[
                             T("b01w"),
                             make_seq(
-                                opener=Delimiter("["),
+                                opener=LBRACK,
                                 items=[T("rho")],
                                 delimiter=SPACE,
                             ),
@@ -1036,8 +1041,8 @@ section = { s = A.B.Gat02[L],
                                                                 items=[
                                                                     Token("A.B.Gat02"),
                                                                     Seq(
-                                                                        opener=Delimiter("["),
-                                                                        closer=Delimiter("]"),
+                                                                        opener=LBRACK,
+                                                                        closer=RBRACK,
                                                                         items=[
                                                                             Token(
                                                                                 "aperture",
@@ -1075,8 +1080,8 @@ section = { s = A.B.Gat02[L],
                                                         items=[
                                                             Token("A.B.Gat02"),
                                                             Seq(
-                                                                opener=Delimiter("["),
-                                                                closer=Delimiter("]"),
+                                                                opener=LBRACK,
+                                                                closer=RBRACK,
                                                                 items=[Token("L")],
                                                                 delimiter=SPACE,
                                                             ),
@@ -1106,8 +1111,8 @@ section = { s = A.B.Gat02[L],
                                                                 items=[
                                                                     Token("A.B.Gat02"),
                                                                     Seq(
-                                                                        opener=Delimiter("["),
-                                                                        closer=Delimiter("]"),
+                                                                        opener=LBRACK,
+                                                                        closer=RBRACK,
                                                                         items=[Token("aperture")],
                                                                         delimiter=SPACE,
                                                                     ),
@@ -1147,13 +1152,13 @@ QTov1 : overlay = {QT1[k1]:k1*dk , QT4[k1]:k1*dk , QT13[k1]:k1*dk, QT16[k1]:k1*d
                                 items=[
                                     T("QT1"),
                                     Seq(
-                                        opener=Delimiter("["),
-                                        closer=Delimiter("]"),
+                                        opener=LBRACK,
+                                        closer=RBRACK,
                                         items=[T("k1")],
                                     ),
-                                    Delimiter(":"),
+                                    COLON,
                                     T("k1"),
-                                    Delimiter("*"),
+                                    STAR,
                                     T("dk"),
                                 ],
                             ),
@@ -1161,13 +1166,13 @@ QTov1 : overlay = {QT1[k1]:k1*dk , QT4[k1]:k1*dk , QT13[k1]:k1*dk, QT16[k1]:k1*d
                                 items=[
                                     T("QT4"),
                                     Seq(
-                                        opener=Delimiter("["),
-                                        closer=Delimiter("]"),
+                                        opener=LBRACK,
+                                        closer=RBRACK,
                                         items=[T("k1")],
                                     ),
-                                    Delimiter(":"),
+                                    COLON,
                                     T("k1"),
-                                    Delimiter("*"),
+                                    STAR,
                                     T("dk"),
                                 ],
                             ),
@@ -1175,13 +1180,13 @@ QTov1 : overlay = {QT1[k1]:k1*dk , QT4[k1]:k1*dk , QT13[k1]:k1*dk, QT16[k1]:k1*d
                                 items=[
                                     T("QT13"),
                                     Seq(
-                                        opener=Delimiter("["),
-                                        closer=Delimiter("]"),
+                                        opener=LBRACK,
+                                        closer=RBRACK,
                                         items=[T("k1")],
                                     ),
-                                    Delimiter(":"),
+                                    COLON,
                                     T("k1"),
-                                    Delimiter("*"),
+                                    STAR,
                                     T("dk"),
                                 ],
                             ),
@@ -1189,13 +1194,13 @@ QTov1 : overlay = {QT1[k1]:k1*dk , QT4[k1]:k1*dk , QT13[k1]:k1*dk, QT16[k1]:k1*d
                                 items=[
                                     T("QT16"),
                                     Seq(
-                                        opener=Delimiter("["),
-                                        closer=Delimiter("]"),
+                                        opener=LBRACK,
+                                        closer=RBRACK,
                                         items=[T("k1")],
                                     ),
-                                    Delimiter(":"),
+                                    COLON,
                                     T("k1"),
-                                    Delimiter("*"),
+                                    STAR,
                                     T("dk"),
                                 ],
                             ),
@@ -1264,19 +1269,15 @@ O_B7_b12: overlay = {B7, B12, B4:-g*b7[l]/b4[l]}, var = {g}
                             Seq(
                                 items=[
                                     T("B4"),
-                                    Delimiter(":"),
+                                    COLON,
                                     Delimiter("-"),
                                     T("g"),
-                                    Delimiter("*"),
+                                    STAR,
                                     T("b7"),
-                                    make_seq(
-                                        opener=Delimiter("["), items=[T("l")], delimiter=SPACE
-                                    ),
-                                    Delimiter("/"),
+                                    make_seq(opener=LBRACK, items=[T("l")], delimiter=SPACE),
+                                    SLASH,
                                     T("b4"),
-                                    make_seq(
-                                        opener=Delimiter("["), items=[T("l")], delimiter=SPACE
-                                    ),
+                                    make_seq(opener=LBRACK, items=[T("l")], delimiter=SPACE),
                                 ],
                             ),
                         ],
@@ -1313,10 +1314,8 @@ delta1: group = {len1[L]:0.23061/360*deg}, var={deg}
                                 delimiter=SPACE,
                                 items=[
                                     T("len1"),
-                                    make_seq(
-                                        opener=Delimiter("["), items=[T("L")], delimiter=SPACE
-                                    ),
-                                    Delimiter(":"),
+                                    make_seq(opener=LBRACK, items=[T("L")], delimiter=SPACE),
+                                    COLON,
                                     T("0.23061"),
                                     SLASH,
                                     T("360"),
@@ -1515,8 +1514,8 @@ RETURN7.TIME_PATCH[T_OFFSET] = RETURN1.TIME_PATCH[T_OFFSET]
                         items=[
                             T("RETURN1.TIME_PATCH"),
                             Seq(
-                                opener=Delimiter("["),
-                                closer=Delimiter("]"),
+                                opener=LBRACK,
+                                closer=RBRACK,
                                 items=[T("T_OFFSET")],
                             ),
                         ],
@@ -1543,8 +1542,8 @@ RETURN5.TIME_MATCH[DELTA_TIME] =  return3.time_match[delta_time]
                         items=[
                             T("return3.time_match"),
                             Seq(
-                                opener=Delimiter("["),
-                                closer=Delimiter("]"),
+                                opener=LBRACK,
+                                closer=RBRACK,
                                 items=[T("delta_time")],
                             ),
                         ],
@@ -1673,8 +1672,8 @@ IN.CRMOD.Pip01: PIPE, L = 5.318*0.0254, aperture = 0.060198/2,
                                                                 items=[
                                                                     T("IN.CRMOD.Pip01"),
                                                                     Seq(
-                                                                        opener=Delimiter("["),
-                                                                        closer=Delimiter("]"),
+                                                                        opener=LBRACK,
+                                                                        closer=RBRACK,
                                                                         items=[T("aperture")],
                                                                     ),
                                                                 ],
@@ -1698,8 +1697,8 @@ IN.CRMOD.Pip01: PIPE, L = 5.318*0.0254, aperture = 0.060198/2,
                                                         items=[
                                                             T("IN.CRMOD.Pip01"),
                                                             Seq(
-                                                                opener=Delimiter("["),
-                                                                closer=Delimiter("]"),
+                                                                opener=LBRACK,
+                                                                closer=RBRACK,
                                                                 items=[T("L")],
                                                             ),
                                                         ],
@@ -1725,8 +1724,8 @@ IN.CRMOD.Pip01: PIPE, L = 5.318*0.0254, aperture = 0.060198/2,
                                                                 items=[
                                                                     T("IN.CRMOD.Pip01"),
                                                                     Seq(
-                                                                        opener=Delimiter("["),
-                                                                        closer=Delimiter("]"),
+                                                                        opener=LBRACK,
+                                                                        closer=RBRACK,
                                                                         items=[T("aperture")],
                                                                     ),
                                                                 ],
@@ -1856,7 +1855,7 @@ quadrupole::Q*[k1] = 0.234    ! Matches all quadrupoles with names beginning wit
                     ),
                     target=Seq(
                         delimiter=SPACE,
-                        items=[T("quadrupole"), Delimiter("::"), T("Q"), Delimiter("*")],
+                        items=[T("quadrupole"), Delimiter("::"), T("Q"), STAR],
                     ),
                     name=T("k1"),
                     value=T("0.234"),
@@ -1895,7 +1894,7 @@ b2>>si_cryst##2[tilt] = 0.1 ! Tilt the 2nd instance of "si_cryst" in branch "b2"
                     comments=Comments(
                         inline=T(" Sets elements with indexes 5 through 32 in branch 0.")
                     ),
-                    target=Seq(items=[T("5"), Delimiter(":"), T("32")]),
+                    target=Seq(items=[T("5"), COLON, T("32")]),
                     name=T("x_limit"),
                     value=T("0.3"),
                 ),
@@ -1912,7 +1911,7 @@ x_br>>quad::q*[k1] = 0.5
                 Parameter(
                     target=Seq(
                         delimiter=SPACE,
-                        items=[T("x_br>>quad"), Delimiter("::"), T("q"), Delimiter("*")],
+                        items=[T("x_br>>quad"), Delimiter("::"), T("q"), STAR],
                     ),
                     name=T("k1"),
                     value=T("0.5"),
@@ -1932,7 +1931,7 @@ sbend::q1:q5[field_master] = T
                             T("sbend"),
                             Delimiter("::"),
                             T("q1"),
-                            Delimiter(":"),
+                            COLON,
                             T("q5"),
                         ],
                     ),
@@ -1950,7 +1949,7 @@ sbend::q1:q5[field_master] = T
                 Parameter(
                     target=Seq(
                         delimiter=COMMA,
-                        items=[T("3"), Seq(items=[T("15"), Delimiter(":"), T("17")])],
+                        items=[T("3"), Seq(items=[T("15"), COLON, T("17")])],
                     ),
                     name=T("x_offset"),
                     value=T("0.001"),
@@ -1965,7 +1964,7 @@ sbend::q1:q5[field_master] = T
             [
                 Parameter(
                     target=Seq(
-                        items=[T("3"), T("15"), Delimiter(":"), T("17")],
+                        items=[T("3"), T("15"), COLON, T("17")],
                     ),
                     name=T("x_offset"),
                     value=T("0.001"),
@@ -1982,9 +1981,9 @@ sbend::q1:q5[field_master] = T
                     target=Seq(
                         items=[
                             T("100"),
-                            Delimiter(":"),
+                            COLON,
                             T("200"),
-                            Delimiter("&"),
+                            AMPERSAND,
                             T("sbend"),
                             Delimiter("::"),
                             T("*"),
@@ -2005,8 +2004,8 @@ q* & quad::* b1[k1] = 0.5
                     target=Seq(
                         items=[
                             T("q"),
-                            Delimiter("*"),
-                            Delimiter("&"),
+                            STAR,
+                            AMPERSAND,
                             T("quad"),
                             Delimiter("::"),
                             T("*"),
@@ -2058,8 +2057,8 @@ b*, ~b1*, b13[hkick] = 0.01
                     target=Seq(
                         delimiter=COMMA,
                         items=[
-                            Seq(delimiter=SPACE, items=[T("b"), Delimiter("*")]),
-                            Seq(delimiter=SPACE, items=[T("~b1"), Delimiter("*")]),
+                            Seq(delimiter=SPACE, items=[T("b"), STAR]),
+                            Seq(delimiter=SPACE, items=[T("~b1"), STAR]),
                             T("b13"),
                         ],
                     ),
@@ -2109,8 +2108,8 @@ s%z[k2] = %[k2] + 0.03 * ran_gauss()  ! %[k2] refers to the element being set (l
                         items=[
                             T("%"),
                             Seq(
-                                opener=Delimiter("["),
-                                closer=Delimiter("]"),
+                                opener=LBRACK,
+                                closer=RBRACK,
                                 items=[T("k2")],
                                 delimiter=SPACE,
                             ),
@@ -2142,7 +2141,7 @@ c: crystal, call::$AB/my_curvature.bmad, h_misalign = call::my_surface.bmad
                                     T("call"),
                                     Delimiter("::"),
                                     T("$AB"),
-                                    Delimiter("/"),
+                                    SLASH,
                                     T("my_curvature.bmad"),
                                 ],
                             ),
@@ -2184,8 +2183,8 @@ c: crystal, call::$AB/my_curvature.bmad, h_misalign = call::my_surface.bmad
                                         items=[
                                             T("parameter"),
                                             Seq(
-                                                opener=Delimiter("["),
-                                                closer=Delimiter("]"),
+                                                opener=LBRACK,
+                                                closer=RBRACK,
                                                 items=[T("particle")],
                                                 delimiter=SPACE,
                                             ),
@@ -2316,7 +2315,7 @@ b[y_offset] = 0.002*ran_gauss()
                     value=Seq(
                         items=[
                             T("0.001"),
-                            Delimiter("*"),
+                            STAR,
                             T("ran_gauss"),
                             Seq(
                                 opener=LPAREN,
@@ -2333,7 +2332,7 @@ b[y_offset] = 0.002*ran_gauss()
                     value=Seq(
                         items=[
                             T("0.002"),
-                            Delimiter("*"),
+                            STAR,
                             T("ran_gauss"),
                             Seq(opener=LPAREN, closer=RPAREN, items=[], delimiter=COMMA),
                         ],
@@ -2372,9 +2371,9 @@ beginning[theta_position] = theta_in + phi/2
                     value=Seq(
                         items=[
                             T("theta_in"),
-                            Delimiter("+"),
+                            PLUS,
                             T("phi"),
-                            Delimiter("/"),
+                            SLASH,
                             T("2"),
                         ]
                     ),
