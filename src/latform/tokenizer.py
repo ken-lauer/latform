@@ -185,8 +185,8 @@ class Tokenizer:
                     blocks.append(block)
                     continue
 
-                # TODO : do these in a second pass
                 elif last_delim in frozenset({"+", "-"}) and token and token[0].isnumeric():
+                    # TODO : do these in a second pass
                     prev_item = block.items[-2] if len(block.items) > 1 else None
                     if (
                         prev_item in {"+", "-", "*", "/", "=", ",", LBRACE, LBRACK, LPAREN}

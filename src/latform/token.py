@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import typing
-from typing import Any
+from typing import Any, Sequence
 
 try:
     from typing import Self
@@ -92,13 +92,13 @@ class Token(str):
         return f"{type(self).__name__}({desc})"
 
     @classmethod
-    def join(cls: type[Token], args: list[Token | Block], delim: Delimiter | None = None):
+    def join(cls: type[Token], args: Sequence[Token | Block], delim: Delimiter | None = None):
         if not args:
             return cls("")
 
         from .types import _flatten_blocks
 
-        strs = _flatten_blocks(args)
+        strs = _flatten_blocks(list(args))
         if not strs:
             return cls("")
 

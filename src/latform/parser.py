@@ -36,16 +36,6 @@ from .types import (
 from .util import partition_items
 
 
-def to_token(item: Token | Block | Seq):
-    if isinstance(item, Token):
-        return item
-    if isinstance(item, Block):
-        return item.to_token()
-    if isinstance(item, Seq):
-        return item.to_token()
-    raise NotImplementedError(type(item))
-
-
 def _make_attribute(item: Attribute | Token | Seq) -> Attribute:
     if isinstance(item, Attribute):
         return item
@@ -295,7 +285,7 @@ def parse_items(items: list[TokenizerItem]):
                     if "%" in name:
                         raise ValueError("Nonstandard parameter name")
                 except ValueError:
-                    name = to_token(Seq.from_items(name_block.items))
+                    name = name_block.to_token(include_opener=False)
                     name = Token(name.replace(" ", ""), comments=name.comments, loc=name.loc)
                     cls = NonstandardParameter
                 else:

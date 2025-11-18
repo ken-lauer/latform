@@ -196,12 +196,23 @@ class Seq:
         from .output import FormatOptions, format_nodes
 
         if not include_opener:
-            (line,) = format_nodes(
-                Seq(items=self.items, delimiter=self.delimiter).to_output_nodes()
-            )
+            nodes = Seq(items=self.items, delimiter=self.delimiter).to_output_nodes()
         else:
-            (line,) = format_nodes(self.to_output_nodes())
-        return Token(line.render(options=FormatOptions()), loc=self.loc)
+            nodes = self.to_output_nodes()
+
+        def check_can_tokenize(seq: Seq):
+            for item in seq.items:
+                if isinstance(item, Attribute):
+                    raise ValueError("Unable to tokenize Attributes")
+                elif isinstance(item, Seq):
+                    check_can_tokenize(item)
+
+        check_can_tokenize(self)
+
+        # TODO: comments would be a problem here
+        opts = FormatOptions()
+        (line,) = format_nodes(list(nodes), options=opts)
+        return Token(line.render(options=opts), loc=self.loc)
 
     def flatten(self) -> list[Token]:
         res = []
@@ -302,11 +313,11 @@ class Block:
             return [self.opener, *self.items, self.closer]
         return list(self.items)
 
-    def to_token(self) -> Token:
+    def to_token(self, include_opener: bool = True) -> Token:
         """
         Convert this Block to a single Token with merged location information.
         """
-        return Token.join(self.flatten())
+        return Token.join(self.flatten(include_opener=include_opener))
 
     @property
     def comments(self) -> Comments:
@@ -315,8 +326,8 @@ class Block:
             return Comments()
         return items[0].comments
 
-    def flatten(self) -> list[Token]:
-        if self.opener:
+    def flatten(self, include_opener: bool = True) -> list[Token]:
+        if self.opener and self.closer and include_opener:
             return _flatten_blocks([self.opener, *self.items, self.closer])
         return _flatten_blocks(self.items)
 
