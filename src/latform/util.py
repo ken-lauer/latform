@@ -45,7 +45,7 @@ class DelimiterState:
         return list(self._stack)
 
 
-def delimit(items, delimiter: Delimiter | None):
+def delimit(items, delimiter: Delimiter | None, trailing: bool = False):
     if not items:
         return
 
@@ -54,12 +54,12 @@ def delimit(items, delimiter: Delimiter | None):
         if delimiter is not None:
             yield delimiter
     yield items[-1]
+    if trailing:
+        yield delimiter
 
 
-def comma_delimit(items):
-    yield from delimit(items, COMMA)
-    # if items:
-    #     yield OPTIONAL_COMMA
+def comma_delimit(items, trailing: bool = False):
+    yield from delimit(items, COMMA, trailing=trailing)
 
 
 T = TypeVar("T")

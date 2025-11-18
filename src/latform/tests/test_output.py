@@ -34,8 +34,9 @@ def render(lines: list[OutputLine], options: FormatOptions) -> str:
     return "\n".join(line.render(options) for line in lines)
 
 
-def check_format(item, expected: str) -> None:
-    options = FormatOptions()
+def check_format(item, expected: str, options: FormatOptions | None = None) -> None:
+    if options is None:
+        options = FormatOptions()
     options.comment_col = 0
     rich.print(item)
 
@@ -404,3 +405,48 @@ def test_format_expression(expression: str, expected: str) -> None:
     prefix = "ele: name, foo = "
     (stmt,) = parse(f"{prefix}{expression}")
     check_format(stmt, expected=f"{prefix}{expected}")
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "trailing_comma"),
+    [
+        pytest.param(
+            "{1, 2, 3,}",
+            "{1, 2, 3}",
+            False,
+            id="single_line_no_trailing_comma",
+        ),
+        pytest.param(
+            "{1, 2, 3,}",
+            "{1, 2, 3}",
+            True,  # -> we never put a trailing comma in a sequence on a single line
+            id="single_line_trailing_comma",
+        ),
+        pytest.param(
+            """
+            {
+            1, 2,  ! foo
+            3,}
+            """,
+            "{\n  1,\n  2,  ! foo\n  3\n}",
+            False,
+            id="multi_line_no_trailing_comma",
+        ),
+        pytest.param(
+            """
+            {
+            1, 2,  ! foo
+            3,}
+            """,
+            "{\n  1,\n  2,  ! foo\n  3,\n}",
+            True,
+            id="multi_line_trailing_comma",
+        ),
+    ],
+)
+def test_format_trailing_comma(expression: str, expected: str, trailing_comma: bool) -> None:
+    prefix = "ele: name, foo="
+    (stmt,) = parse(f"{prefix}{expression}")
+    check_format(
+        stmt, expected=f"{prefix}{expected}", options=FormatOptions(trailing_comma=trailing_comma)
+    )

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from .const import COMMA, EQUALS, SPACE
 from .exceptions import UnexpectedCallName
 from .token import Comments, Delimiter, Location, Token
-from .util import comma_delimit, delimit, flatten, partition_items, split_items
+from .util import delimit, flatten, partition_items, split_items
 
 try:
     from typing import Self
@@ -36,7 +36,7 @@ class Seq:
     Ordered sequence of mixed items:
     * Attribute (a named value, i.e., a name=value pair)
     * Expression (may be a single token)
-    * Array (a nested array)
+    * Seq (a nested sequence)
     """
 
     opener: Delimiter | None = None
@@ -152,13 +152,19 @@ class Seq:
         return res
 
     def to_output_nodes(self):
-        # return [self]
+        delimiter = self.delimiter
+        if delimiter == SPACE:
+            delimiter = None
         if self.opener and self.closer:
-            return [self.opener, *comma_delimit(self.items), self.closer]
-        return list(delimit(self.items, self.delimiter))
+            return [
+                self.opener,
+                *delimit(self.items, delimiter, trailing=delimiter == COMMA),
+                self.closer,
+            ]
+        return list(delimit(self.items, delimiter))
 
     def to_call_name(self) -> CallName:
-        """Convert Array to a single Token."""
+        """Convert Seq to a single Token."""
         match self.items:
             case Token() as name, Seq(opener="(") as args:
                 return CallName(name=name, args=args)
@@ -185,25 +191,22 @@ class Seq:
             end_column=self.items[-1].loc.end_column,
         )
 
-    def to_token(self) -> Token:
-        """Convert Array to a single Token."""
-        return Token.join(self.flatten())
+    def to_token(self, include_opener: bool = True) -> Token:
+        """Convert Seq to a single Token."""
+        from .output import FormatOptions, format_nodes
+
+        if not include_opener:
+            (line,) = format_nodes(
+                Seq(items=self.items, delimiter=self.delimiter).to_output_nodes()
+            )
+        else:
+            (line,) = format_nodes(self.to_output_nodes())
+        return Token(line.render(options=FormatOptions()), loc=self.loc)
 
     def flatten(self) -> list[Token]:
         res = []
-        if self.opener:
-            res.append(self.opener)
-
-        for idx, item in enumerate(self.items):
-            res.extend(flatten(item))
-            if self.delimiter is not None and idx < len(self.items) - 1:
-                if self.delimiter == SPACE:
-                    # TODO
-                    continue
-                res.append(self.delimiter)
-
-        if self.opener:
-            res.append(self.closer)
+        for node in self.to_output_nodes():
+            res.extend(flatten(node))
         return res
 
 
@@ -227,8 +230,8 @@ def _filter_species_calls(items):
                 and nxt.opener == "("
                 and all(isinstance(inner, Token) for inner in nxt.items)
             ):
-                new_inner = [Token.join(list(flatten(nxt))[1:-1])]
-                nxt.items = new_inner
+                new_inner = [nxt.to_token(include_opener=False).replace(" ", "")]
+                nxt.items = list(new_inner)
             elif (
                 isinstance(nxt, Seq)
                 and nxt.opener == "("
@@ -237,8 +240,8 @@ def _filter_species_calls(items):
                 and all(isinstance(inner, Token) for inner in nxt.items[0].items)
                 and not nxt.items[0].opener
             ):
-                new_inner = [Token.join(list(flatten(nxt.items[0])))]
-                nxt.items = new_inner
+                new_inner = [nxt.to_token(include_opener=False).replace(" ", "")]
+                nxt.items = list(new_inner)
 
 
 @dataclass
@@ -340,6 +343,7 @@ class FormatOptions:
     indent_char: str = " "
     comment_col: int = 40
     newline_before_new_type: bool = False
+    trailing_comma: bool = False
 
 
 @dataclass

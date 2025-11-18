@@ -15,20 +15,20 @@ STATEMENT_NAME_EQUALS = Delimiter("=", role=Role.statement_definition)
 
 COLON = Delimiter(":")
 COMMA = Delimiter(",")
-OPTIONAL_COMMA = Delimiter(",", role=Role.optional)
-SLASH = Delimiter("/")
 DQUOTE = Delimiter('"')
 EQUALS = Delimiter("=")
 LBRACE = Delimiter("{")
 LBRACK = Delimiter("[")
 LPAREN = Delimiter("(")
+MINUS = Delimiter("-")
 RBRACE = Delimiter("}")
 RBRACK = Delimiter("]")
 RPAREN = Delimiter(")")
+SLASH = Delimiter("/")
 SPACE = Delimiter(" ")
-STAR = Delimiter("*")  # easier to type than asterisk
-MINUS = Delimiter("-")
 SQUOTE = Delimiter("'")
+STAR = Delimiter("*")  # easier to type than asterisk
+
 OPEN_TO_CLOSE = {
     "{": "}",
     "[": "]",

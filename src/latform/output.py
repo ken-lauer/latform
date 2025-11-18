@@ -250,7 +250,7 @@ def _format(
     idx = 0
     delim_state = DelimiterState()
     block_has_newlines_stack: list[bool] = []
-    next_ = None
+    nxt = None
 
     line = OutputLine(indent=indent_level, parts=[])
 
@@ -258,23 +258,43 @@ def _format(
         nonlocal idx
         nonlocal line
 
-        if lookahead and next_ in {COMMA}:
-            assert isinstance(next_, Delimiter)
-            line.parts.append(next_)
+        if lookahead and nxt is not None and nxt in {COMMA}:
             idx += 1
+
+            if should_include_comma():
+                line.parts.append(nxt)
 
         if line is not None and (line.parts or line.comment):
             lines.append(line)
 
         if reason:
-            logger.debug(f"{idx}: {prev}, {cur}, {next_}: break {reason}")
+            logger.debug(f"{idx}: {prev}, {cur}, {nxt}: break {reason}")
 
         return OutputLine(indent=indent_level, parts=[])
+
+    def in_newline_block() -> bool:
+        return bool(block_has_newlines_stack and block_has_newlines_stack[-1])
+
+    def should_include_comma():
+        cur = parts[idx]
+
+        assert cur == COMMA
+
+        nxt = parts[idx + 1] if idx < len(parts) - 1 else None
+
+        if nxt in close_brackets:
+            if not options.trailing_comma:
+                return False
+            if not in_newline_block():
+                return False
+        if nxt is None:
+            return False
+        return True
 
     while idx < len(parts):
         cur = parts[idx]
         prev = parts[idx - 1] if idx > 0 else None
-        next_ = parts[idx + 1] if idx < len(parts) - 1 else None
+        nxt = parts[idx + 1] if idx < len(parts) - 1 else None
 
         if cur.comments.pre:
             for pre_comment in cur.comments.pre:
@@ -315,22 +335,40 @@ def _format(
             if had_newlines:
                 # don't use the lookahead logic since we haven't yet added the closing delimiter
                 indent_level -= 1
-                # if multiline_list_final_comma:
-                #  todo this doesn't quite work; and can we assume comma-delimited anyway?
-                #     line.parts.append(COMMA)
+
                 line = newline(lookahead=False, reason="closing multiline block")
                 line.parts.append(cur)
-                if next_ in {COMMA}:
-                    assert isinstance(next_, Delimiter)
-                    line.parts.append(next_)
+                if nxt in {COMMA}:
+                    assert isinstance(nxt, Delimiter)
                     idx += 1
+                    if should_include_comma():
+                        line.parts.append(nxt)
                 if block_has_newlines_stack and block_has_newlines_stack[-1]:
-                    next_ = None
+                    nxt = None
                     line = newline(reason="newline stack post multiline close")
             else:
+                # single line block
+                if line.parts and line.parts[-1] == COMMA:
+                    # Never a trailing comma when full sequence is on a single line
+                    line.parts.pop()
                 line.parts.append(cur)
             idx += 1
             continue
+
+        if cur == COMMA:
+            if nxt in close_brackets:
+                if not options.trailing_comma:
+                    print(cur, nxt, "trailing comma removal: option")
+                    idx += 1
+                    continue
+                elif not in_newline_block():
+                    print(cur, nxt, "trailing comma removal: not in newline")
+                    idx += 1
+                    continue
+            if nxt is None:
+                print(cur, nxt, "comma removal: not in block")
+                idx += 1
+                continue
 
         line.parts.append(cur)
 
@@ -343,7 +381,7 @@ def _format(
         if cur.comments.inline:
             line.comment = f"!{cur.comments.inline}"
 
-            if delim_state.depth == 0 and next_ not in {EQUALS, COMMA, None}:
+            if delim_state.depth == 0 and nxt not in {EQUALS, COMMA, None}:
                 # No implicit continuation char?
                 line.parts.append(SPACE)
                 line.parts.append(Delimiter("&"))
@@ -355,7 +393,7 @@ def _format(
             continue
 
         # if delim_state.depth == 0 and not is_opening and not is_closing:
-        if cur in {COMMA, LPAREN, LBRACE}:  # , EQUALS}:
+        if cur in {COMMA, LPAREN, LBRACE}:
             if _should_break_for_length(
                 parts=parts,
                 start_length=len(line),
@@ -366,8 +404,8 @@ def _format(
                     indent_level += 1
                 line = newline(reason="break for length ',({'")
 
-        if block_has_newlines_stack and block_has_newlines_stack[-1] and cur in {COMMA}:
-            line = newline(reason="newline stack comma")
+        if in_newline_block() and cur in {COMMA}:
+            line = newline(reason="multiline block post comma")
 
         idx += 1
 

@@ -22,6 +22,11 @@ class Statement:
     def to_output_nodes(self):
         raise NotImplementedError()
 
+    # @classmethod
+    # def from_text(cls,
+    #
+    #               *, strict_class: bool  = False):
+
 
 @dataclass
 class Empty(Statement):

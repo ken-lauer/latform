@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -112,11 +113,10 @@ def _line_elements_from_block(block: Block) -> Seq:
 
     eles = Seq.from_delimited_block(block, delimiter=COMMA)
     assert isinstance(eles, Seq)
-    for idx, ele in enumerate(list(eles.items)):
+    for ele in eles.items:
         match ele:
             case Seq(items=["-", "-", name]):
-                assert isinstance(ele, Seq)
-                eles.items[idx].items = [Delimiter("--"), name]
+                ele.items = [Delimiter("--"), name]
 
     return eles
 
@@ -302,7 +302,7 @@ def parse_items(items: list[TokenizerItem]):
                     cls = Parameter
 
                 if name == "particle" and isinstance(value, Seq):
-                    value = value.to_token()
+                    value = value.to_token(include_opener=False).replace(" ", "")
 
                 return cls(
                     comments=comments,
@@ -358,7 +358,7 @@ class Files:
             filename = self.stack.pop()
             num_lines = len(filename.read_text().splitlines())
             total_lines += num_lines
-            print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)")
+            print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)", file=sys.stderr)
 
             statements = list(parse_file(parent_fn))
             self.by_filename[parent_fn] = statements

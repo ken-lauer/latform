@@ -4,6 +4,11 @@ import enum
 import typing
 from typing import Any
 
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+
 from .comments import Comments
 from .location import Location
 
@@ -137,6 +142,14 @@ class Token(str):
             "".join(result_parts),
             loc=Location.from_items(strs),
             comments=str0.comments,
+        )
+
+    def replace(self, old, new, count=-1) -> Self:
+        return type(self)(
+            str(self).replace(old, new, count),
+            loc=self.loc,
+            comments=self.comments,
+            role=self.role,
         )
 
 
