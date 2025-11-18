@@ -355,7 +355,7 @@ def parse_file(filename: pathlib.Path | str) -> Sequence[Statement]:
 
 
 def parse_file_recursive(filename: pathlib.Path | str) -> Files:
-    files = Files(main=filename)
+    files = Files(main=pathlib.Path(filename))
     files.parse()
     return files
 

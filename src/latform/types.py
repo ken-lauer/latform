@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pathlib
+import typing
 from dataclasses import dataclass, field
 
 from .const import COMMA, EQUALS, SPACE
@@ -11,6 +13,9 @@ try:
     from typing import Self
 except ImportError:
     from typing_extensions import Self
+
+if typing.TYPE_CHECKING:
+    from .output import FormatOptions
 
 
 def _flatten_blocks(
@@ -191,6 +196,15 @@ class Seq:
             end_column=self.items[-1].loc.end_column,
         )
 
+    def to_text(self, opts: FormatOptions | None = None) -> str:
+        """Convert Seq to its full output representation."""
+        from .output import FormatOptions, format_nodes
+
+        if opts is None:
+            opts = FormatOptions()
+        lines = format_nodes([self], options=opts)
+        return "\n".join(line.render(options=opts) for line in lines)
+
     def to_token(self, include_opener: bool = True) -> Token:
         """Convert Seq to a single Token."""
         from .output import FormatOptions, format_nodes
@@ -209,9 +223,9 @@ class Seq:
 
         check_can_tokenize(self)
 
-        # TODO: comments would be a problem here
         opts = FormatOptions()
         (line,) = format_nodes(list(nodes), options=opts)
+        line.comment = None
         return Token(line.render(options=opts), loc=self.loc)
 
     def flatten(self) -> list[Token]:
@@ -253,6 +267,20 @@ def _filter_species_calls(items):
             ):
                 new_inner = [nxt.to_token(include_opener=False).replace(" ", "")]
                 nxt.items = list(new_inner)
+
+
+def sequence_part_from_text(
+    contents: str,
+    filename: pathlib.Path | str | None = None,
+    delimiter: Delimiter | None = COMMA,
+) -> list[Attribute | Seq | Token]:
+    from .tokenizer import tokenize
+
+    blocks = tokenize(contents, filename or "unset")
+
+    if delimiter:
+        return [Seq.from_delimited_block(block, delimiter) for block in blocks]
+    return [Seq.from_item(block) for block in blocks]
 
 
 @dataclass

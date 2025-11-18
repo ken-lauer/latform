@@ -39,6 +39,14 @@ class _StatementTokenBlock:
             else:
                 stack[-1].items.append(tok)
 
+        if (
+            not root.opener
+            and not root.closer
+            and len(root.items) == 1
+            and isinstance(root.items[0], Block)
+        ):
+            return root.items[0]
+
         return root
 
 
