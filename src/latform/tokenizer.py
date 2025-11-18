@@ -19,7 +19,7 @@ class _StatementTokenBlock:
     lineno: int
     items: list[Token | Delimiter] = field(default_factory=list)
 
-    def stack(self):
+    def stack(self) -> Block:
         root = Block()
         stack = [root]
         delim_state = DelimiterState()

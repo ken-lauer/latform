@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os.path
+import pathlib
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -232,3 +234,27 @@ class Element(Statement):
                 *comma_delimit(self.attributes),
             ]
         return [self.name, STATEMENT_NAME_COLON, *comma_delimit([self.keyword, *self.attributes])]
+
+
+def get_call_filename(
+    st: Simple,
+    *,
+    caller_filename: pathlib.Path | None + None,
+    expand_vars: bool = True,
+) -> tuple[str, pathlib.Path]:
+    if not isinstance(st, Simple):
+        raise ValueError(f"Unexpected type: {type(st).__name__}")
+
+    if st.statement != "call":
+        raise ValueError(f"Statement is not 'call': {st.statement}")
+
+    attr = st.get_named_attribute("filename", partial_match=True)
+
+    sub_filename = (
+        attr.value if isinstance(attr.value, Token) else attr.value.to_token()
+    ).remove_quotes()
+    expanded = os.path.expandvars(sub_filename) if expand_vars else sub_filename
+
+    if not caller_filename:
+        return sub_filename, pathlib.Path(expanded)
+    return sub_filename, caller_filename.parent / expanded

@@ -10,6 +10,7 @@ STATEMENT_NAME_COLON = Delimiter(":", role=Role.statement_definition)
 STATEMENT_NAME_EQUALS = Delimiter("=", role=Role.statement_definition)
 
 AMPERSAND = Delimiter("&")
+CARET = Delimiter("^")
 COLON = Delimiter(":")
 COMMA = Delimiter(",")
 DQUOTE = Delimiter('"')

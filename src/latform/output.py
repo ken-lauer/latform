@@ -101,6 +101,8 @@ def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
         return False, "no space around /"
     if prev == "*" or cur == "*":
         return False, "no space around *"
+    if cur == "^":
+        return False, "no space around caret"
     if cur == "-":
         if prev in close_brackets:
             return True, "space before minus:- after closing bracket"

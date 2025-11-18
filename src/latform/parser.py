@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import pathlib
 import sys
 from dataclasses import dataclass, field
@@ -19,6 +18,7 @@ from .statements import (
     Parameter,
     Simple,
     Statement,
+    get_call_filename,
 )
 from .token import Comments
 from .tokenizer import tokenize
@@ -384,18 +384,15 @@ class Files:
             self.by_filename[parent_fn] = statements
             for st in statements:
                 if isinstance(st, Simple) and st.statement == "call":
-                    attr = st.get_named_attribute("filename", partial_match=True)
-
-                    sub_filename = (
-                        attr.value if isinstance(attr.value, Token) else attr.value.to_token()
-                    ).remove_quotes()
-                    fn = parent_fn.parent / os.path.expandvars(sub_filename)
+                    sub_filename, fn = get_call_filename(
+                        st, caller_filename=parent_fn, expand_vars=True
+                    )
                     self.local_file_to_source_filename[sub_filename] = fn
                     self.stack.append(fn)
             parent_fn = pathlib.Path(filename)
         return self.by_filename
 
-    def reformat(self, options: FormatOptions) -> None:
+    def reformat(self, options: FormatOptions, *, dest: pathlib.Path | None = None) -> None:
         from .output import format_statements
 
         for fn, statements in self.by_filename.items():

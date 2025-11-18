@@ -375,6 +375,21 @@ def test_format_element_from_source(code: str, expected: str) -> None:
             id="array_indexing_division",
         ),
         pytest.param(
+            "b01w[   rho  ]   ^3",
+            "b01w[rho]^3",
+            id="exp_after_bracket",
+        ),
+        pytest.param(
+            "sqrt(foo)   ^3",
+            "sqrt(foo)^3",
+            id="exp_after_func",
+        ),
+        pytest.param(
+            "1.3e4 ^ 4",
+            "1.3e4^4",
+            id="exp_after_sci_not",
+        ),
+        pytest.param(
             "ename[frequencies(1)%amp]",
             "ename[frequencies(1)%amp]",
             id="nested_indexing_with_percent",

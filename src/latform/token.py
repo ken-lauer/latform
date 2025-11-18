@@ -69,6 +69,9 @@ class Token(str):
 
         return case_insensitive_equality
 
+    def __ne__(self, other) -> bool:
+        return not (self == other)
+
     @property
     def is_quoted_string(self) -> bool:
         return (self.startswith(_SQUOTE) and self.endswith(_SQUOTE)) or (
