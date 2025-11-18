@@ -18,6 +18,7 @@ if typing.TYPE_CHECKING:
 
 class Role(str, enum.Enum):
     name_ = "name"
+    builtin = "builtin"
     kind = "kind"
     statement_definition = "statement_definition"
 

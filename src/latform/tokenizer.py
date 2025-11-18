@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 
 from .const import DELIMITERS, LBRACE, LBRACK, LPAREN
 from .exceptions import EndOfLine, MissingCloseDelimiter
-from .token import Comments, Delimiter, Location, Token
+from .funcs import ALL_BUILTIN
+from .token import Comments, Delimiter, Location, Role, Token
 from .types import Block
 from .util import DelimiterState
 
@@ -348,10 +349,13 @@ class Tokenizer:
 
         word, end_pos = self._scan_word(delimiters)
         loc = Location(self.filename, self.lineno, end_pos - len(word), self.lineno, end_pos)
-        token = Token(word, loc=loc)
+        role = Role.builtin if word.lower() in ALL_BUILTIN else None
+        token = Token(word, loc=loc, role=role)
         delim = self._scan_delimiter(delimiters)
+
         if upper and not (word.startswith('"') or word.startswith("'")):
             token = Token(word.upper(), loc=loc)
+
         return token, delim
 
 

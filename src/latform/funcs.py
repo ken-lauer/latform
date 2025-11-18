@@ -313,3 +313,5 @@ BUILTIN_CONSTANTS = {
     "anom_moment_deuteron",
     "anom_moment_he3",
 }
+
+ALL_BUILTIN = frozenset(BUILTIN_CONSTANTS | RESERVED_NAMES | set(INTRINSIC_FUNCTIONS))

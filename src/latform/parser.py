@@ -105,7 +105,11 @@ def _line_elements_from_block(block: Block) -> Seq:
     for ele in eles.items:
         match ele:
             case Seq(items=["-", "-", name]):
-                ele.items = [Delimiter("--"), name]
+                ele.items = [Delimiter("--"), name.with_(role=Role.name_)]
+            case Token():
+                ele.role = Role.name_
+            case _:
+                raise ValueError(f"Unexpected type found in element list: {type(ele)} {ele=}")
 
     return eles
 
@@ -392,7 +396,7 @@ class Files:
                     sub_filename, fn = get_call_filename(
                         st, caller_filename=parent_fn, expand_vars=True
                     )
-                    self.local_file_to_source_filename[sub_filename] = fn
+                    self.local_file_to_source_filename[fn] = sub_filename
                     self.stack.append(fn)
             parent_fn = pathlib.Path(filename)
         return self.by_filename
