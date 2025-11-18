@@ -105,9 +105,12 @@ def _line_elements_from_block(block: Block) -> Seq:
     for ele in eles.items:
         match ele:
             case Seq(items=["-", "-", name]):
+                # Element reversal and reflection
                 ele.items = [Delimiter("--"), name.with_(role=Role.name_)]
             case Token():
                 ele.role = Role.name_
+            case Seq():
+                ele.items = ele.with_(role=Role.name_).items
             case _:
                 raise ValueError(f"Unexpected type found in element list: {type(ele)} {ele=}")
 
