@@ -31,7 +31,13 @@ def roundtrip_lattice(lattice_fn: pathlib.Path, options: FormatOptions):
         orig_lat = tao_save_lattice(tao)
 
     formatted = format_file(lattice_fn, options)
-    with Tao.from_lattice_contents(formatted, noplot=True) as tao:
+
+    assert "ran(" not in formatted
+    assert "ran_gauss(" not in formatted
+
+    formatted_fn = lattice_fn.with_suffix(".latform.bmad")
+    formatted_fn.write_text(formatted)
+    with Tao(lattice_file=formatted_fn, noplot=True) as tao:
         formatted_lat = tao_save_lattice(tao)
 
     print("Original lattice, as written by Tao:")

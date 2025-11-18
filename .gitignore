@@ -90,3 +90,9 @@ cython_debug/
 
 # setuptools-scm versioning file
 _version.py
+
+# Latform-formatted output
+*.latform.bmad
+
+# Bmad digested lattices
+*.digested*

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 from typing import Sequence
 
@@ -34,6 +35,8 @@ logger = logging.getLogger(__name__)
 open_brackets = frozenset("({[")
 close_brackets = frozenset(")]}")
 no_space_after = open_brackets | frozenset(":")
+
+LATFORM_OUTPUT_DEBUG = os.environ.get("LATFORM_OUTPUT_DEBUG", "") == "1"
 
 
 def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
@@ -267,7 +270,7 @@ def _format(
         if line is not None and (line.parts or line.comment):
             lines.append(line)
 
-        if reason:
+        if reason and LATFORM_OUTPUT_DEBUG:
             logger.debug(f"{idx}: {prev}, {cur}, {nxt}: break {reason}")
 
         return OutputLine(indent=indent_level, parts=[])
@@ -325,10 +328,11 @@ def _format(
             if spc:
                 line.parts.append(" ")
 
-            if spc:
-                logger.debug("Adding space before %r: %s", cur, reason)
-            else:
-                logger.debug("No space before %r: %s", cur, reason)
+            if LATFORM_OUTPUT_DEBUG:
+                if spc:
+                    logger.debug("Adding space before %r: %s", cur, reason)
+                else:
+                    logger.debug("No space before %r: %s", cur, reason)
 
         if is_closing:
             had_newlines = block_has_newlines_stack.pop() if block_has_newlines_stack else False

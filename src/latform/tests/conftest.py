@@ -7,6 +7,7 @@ TEST_ROOT = pathlib.Path(__file__).resolve().parent
 LATTICE_ROOT = TEST_ROOT / "files"
 LATTICE_FILES = [
     LATTICE_ROOT / "fodo.bmad",
+    LATTICE_ROOT / "parse_test.bmad",
 ]
 
 ACC_ROOT_DIR = (

@@ -110,10 +110,63 @@ class Assignment(Statement):
 
 
 @dataclass
+class BmadParameter:
+    target: str
+    name: str
+    type: type | str
+    comment: str
+
+
+@dataclass
 class Parameter(Statement):
     target: Seq | Token
     name: Token
     value: Seq | Token
+
+    known: ClassVar[list[BmadParameter]] = [
+        # BmadParameter(
+        #     "parameter",
+        #     "custom_attributeN",
+        #     type=str,
+        #     comment="Defining custom attributes (\\sref{s:cust.att}).",
+        # ),
+        BmadParameter(
+            "parameter",
+            "default_tracking_species",
+            type="species",
+            comment="Default type of tracked particle. Default is ref_particle.",
+        ),
+        BmadParameter(
+            "parameter",
+            "e_tot",
+            type=float,
+            comment="Reference total Energy. Default: 1000 * rest_energy.",
+        ),
+        BmadParameter(
+            "parameter",
+            "electric_dipole_moment",
+            type=float,
+            comment="Particle electric dipole moment.",
+        ),
+        BmadParameter("parameter", "live_branch", type=bool, comment="Is branch fit for tracking?"),
+        BmadParameter("parameter", "geometry", type="geometry", comment="Open or closed"),
+        BmadParameter("parameter", "lattice", type=str, comment="Lattice name."),
+        BmadParameter("parameter", "machine", type=str, comment="Machine name."),
+        BmadParameter("parameter", "n_part", type=float, comment="Number of particles in a bunch."),
+        BmadParameter("parameter", "no_end_marker", type=bool, comment="Default: False."),
+        BmadParameter("parameter", "p0c", type=float, comment="Reference momentum."),
+        BmadParameter(
+            "parameter",
+            "particle",
+            type="species",
+            comment="Reference species: positron, proton, etc.",
+        ),
+        BmadParameter(
+            "parameter", "photon_type", type=str, comment="Incoherent or coherent photons?"
+        ),
+        BmadParameter("parameter", "ran_seed", type=int, comment="Random number generator init."),
+        BmadParameter("parameter", "taylor_order", type=int, comment="Default: 3"),
+    ]
 
     def to_output_nodes(self):
         return [

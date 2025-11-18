@@ -111,6 +111,48 @@ def _line_elements_from_block(block: Block) -> Seq:
     return eles
 
 
+known_parameters_keyed = {(param.target, param.name): param for param in Parameter.known}
+
+
+def fix_parameter_value(
+    target: Token, name: Token, value: Token | Seq, raw_value: list[Token | Block]
+):
+    key = (str(target).lower(), str(name).lower())
+    try:
+        param = known_parameters_keyed[key]
+    except KeyError:
+        return value
+
+    if param.type == "species":
+        if isinstance(value, Seq):
+            return value.to_token(include_opener=False).replace(" ", "")
+        return value
+
+    if param.type is str:
+        value = Token.join(raw_value)
+        if not value.is_quoted_string:
+            return Token(f'"{value}"', loc=value.loc, comments=value.comments)
+        return value
+
+    if param.type == "geometry":
+        if isinstance(value, Token):
+            if value.lower().startswith("o"):
+                return Token("open", loc=value.loc, comments=value.comments)
+            if value.lower().startswith("c"):
+                return Token("closed", loc=value.loc, comments=value.comments)
+        return value
+
+    if param.type is bool:
+        if isinstance(value, Token):
+            if value.lower().startswith("t"):
+                return Token("True", loc=value.loc, comments=value.comments)
+            if value.lower().startswith("f"):
+                return Token("False", loc=value.loc, comments=value.comments)
+        return value
+
+    return value
+
+
 def parse_items(items: list[TokenizerItem]):
     if not items:
         raise ValueError("No items provided")
@@ -120,21 +162,9 @@ def parse_items(items: list[TokenizerItem]):
     first.comments.clear()
 
     match items:
-        case [Token("beginning") as target, Block() as name, "=", _ as value]:
-            return Parameter(
-                comments=comments,
-                target=target,
-                name=name.squeeze_single_token(),
-                value=Seq.from_item(value),
-            )
-
-        case [Token("parameter") as target, Block() as name, "=", Token() as value]:
-            return Parameter(
-                comments=comments,
-                target=target,
-                name=name.squeeze_single_token(),
-                value=value,
-            )
+        # These two cases are handled at the end, along with general 'parameters'.
+        # case [Token("beginning") as target, Block() as name, "=", _ as value]:
+        # case [Token("parameter") as target, Block() as name, "=", Token() as value]:
 
         case [Token("redef"), ":", Token() as name, "=", *rest]:
             value = Seq.from_items(rest)
@@ -291,8 +321,8 @@ def parse_items(items: list[TokenizerItem]):
                 else:
                     cls = Parameter
 
-                if name == "particle" and isinstance(value, Seq):
-                    value = value.to_token(include_opener=False).replace(" ", "")
+                if isinstance(target, Token):
+                    value = fix_parameter_value(target, name, value, raw_value=after_equals)
 
                 return cls(
                     comments=comments,

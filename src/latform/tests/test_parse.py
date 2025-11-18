@@ -642,6 +642,19 @@ cst3: crystal, b_param =  0.6, crystal_type = "Ge(111)",
         ),
         pytest.param(
             """
+        parameter[lattice] = CBETA
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("lattice"),
+                    value=T('"CBETA"'),
+                ),
+            ],
+            id="parameter_lattice_unquoted",
+        ),
+        pytest.param(
+            """
         parameter[lattice] = "CBETA"
         """,
             [
@@ -651,7 +664,124 @@ cst3: crystal, b_param =  0.6, crystal_type = "Ge(111)",
                     value=T('"CBETA"'),
                 ),
             ],
-            id="parameter",
+            id="parameter_lattice_quoted",
+        ),
+        pytest.param(
+            """
+        parameter[default_tracking_species] = He++
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("default_tracking_species"),
+                    value=T("He++"),
+                ),
+            ],
+            id="parameter_default_tracking_species",
+        ),
+        pytest.param(
+            """
+        parameter[live_branch] = t
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("live_branch"),
+                    value=T("True"),
+                ),
+            ],
+            id="parameter_live_branch_bool_true",
+        ),
+        pytest.param(
+            """
+        parameter[live_branch] = f
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("live_branch"),
+                    value=T("False"),
+                ),
+            ],
+            id="parameter_live_branch_bool_false",
+        ),
+        pytest.param(
+            """
+        parameter[machine] = machine-name-with-dashes-because:why-not
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("machine"),
+                    value=T('"machine-name-with-dashes-because:why-not"'),
+                ),
+            ],
+            id="parameter_dumb_machine_name",
+        ),
+        pytest.param(
+            """
+        parameter[lattice] = lattice-name-with-dashes-because:why-not
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("lattice"),
+                    value=T('"lattice-name-with-dashes-because:why-not"'),
+                ),
+            ],
+            id="parameter_dumb_lattice_name",
+        ),
+        pytest.param(
+            """
+        parameter[no_end_marker] = f
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("no_end_marker"),
+                    value=T("False"),
+                ),
+            ],
+            id="parameter_no_end_marker",
+        ),
+        pytest.param(
+            """
+        parameter[p0c] = 1.2
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("p0c"),
+                    value=T("1.2"),
+                ),
+            ],
+            id="parameter_p0c",
+        ),
+        pytest.param(
+            """
+        parameter[ran_seed] = 1
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("ran_seed"),
+                    value=T("1"),
+                ),
+            ],
+            id="parameter_ran_seed",
+        ),
+        pytest.param(
+            """
+        parameter[taylor_order] = 1
+        """,
+            [
+                Parameter(
+                    target=T("parameter"),
+                    name=T("taylor_order"),
+                    value=T("1"),
+                ),
+            ],
+            id="parameter_taylor_order",
         ),
         pytest.param(
             """
