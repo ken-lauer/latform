@@ -19,7 +19,7 @@ jobs:
           extra_packages: pytao
 
       - name: Run unit tests
-        shell: bash -l {0} -e -o pipefail
+        shell: bash -l -e -o pipefail {0}
         run: |
           set -e -o pipefail
           echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
@@ -47,7 +47,7 @@ jobs:
           python -m pip install .[test,doc]
 
       - name: Run unit tests
-        shell: bash -l {0} -e -o pipefail
+        shell: bash -l -e -o pipefail {0}
         run: |
           echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
           pytest -v --cov=src/ 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
