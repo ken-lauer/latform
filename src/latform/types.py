@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Self
 
 from .const import COMMA, EQUALS, SPACE
 from .exceptions import UnexpectedCallName
 from .token import Comments, Delimiter, Location, Token
 from .util import comma_delimit, delimit, flatten, partition_items, split_items
+
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
 
 
 def _flatten_blocks(
