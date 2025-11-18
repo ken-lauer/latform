@@ -17,6 +17,8 @@ if typing.TYPE_CHECKING:
 
 
 class Role(str, enum.Enum):
+    name_ = "name"
+    kind = "kind"
     statement_definition = "statement_definition"
 
 
@@ -149,6 +151,36 @@ class Token(str):
     def replace(self, old, new, count=-1) -> Self:
         return type(self)(
             str(self).replace(old, new, count),
+            loc=self.loc,
+            comments=self.comments,
+            role=self.role,
+        )
+
+    def with_(
+        self,
+        *,
+        loc: Location | None = None,
+        comments: Comments | None = None,
+        role: Role | None = None,
+    ):
+        return type(self)(
+            str(self),
+            loc=loc or self.loc,
+            comments=comments or self.comments,
+            role=role or self.role,
+        )
+
+    def upper(self):
+        return type(self)(
+            super().upper(),
+            loc=self.loc,
+            comments=self.comments,
+            role=self.role,
+        )
+
+    def lower(self):
+        return type(self)(
+            super().lower(),
             loc=self.loc,
             comments=self.comments,
             role=self.role,

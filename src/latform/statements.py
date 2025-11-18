@@ -5,14 +5,14 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+from .comments import Comments
 from .const import COMMA, STATEMENT_NAME_COLON, STATEMENT_NAME_EQUALS
+from .token import Role, Token
 from .types import (
     Attribute,
     CallName,
-    Comments,
     Delimiter,
     Seq,
-    Token,
 )
 from .util import comma_delimit
 
@@ -96,7 +96,7 @@ class Constant(Statement):
     redef: bool = False
 
     def to_output_nodes(self):
-        nodes = [self.name, STATEMENT_NAME_EQUALS, self.value]
+        nodes = [self.name.with_(role=Role.name_), STATEMENT_NAME_EQUALS, self.value]
         if self.redef:
             return [Token("redef:"), *nodes]
         return nodes
@@ -108,7 +108,7 @@ class Assignment(Statement):
     value: Seq | Token
 
     def to_output_nodes(self):
-        return [self.name, STATEMENT_NAME_EQUALS, self.value]
+        return [self.name.with_(role=Role.name_), STATEMENT_NAME_EQUALS, self.value]
 
 
 @dataclass
@@ -172,9 +172,9 @@ class Parameter(Statement):
 
     def to_output_nodes(self):
         return [
-            self.target,
+            self.target.with_(role=Role.name_),
             Delimiter("["),
-            self.name,
+            self.name.with_(role=Role.name_),
             Delimiter("]"),
             STATEMENT_NAME_EQUALS,
             self.value,
@@ -194,10 +194,15 @@ class Line(Statement):
 
     def to_output_nodes(self):
         if self.multipass:
-            key = Token("line[multipass]")
+            key = Token("line[multipass]", role=Role.kind)
         else:
-            key = Token("line")
-        return [self.name, STATEMENT_NAME_COLON, key, STATEMENT_NAME_EQUALS, self.elements]
+            key = Token("line", role=Role.name_)
+
+        if isinstance(self.name, Token):
+            name = self.name.with_(role=Role.name_)
+        else:
+            name = CallName(name=self.name.name.with_(role=Role.name_), args=self.name.args)
+        return [name, STATEMENT_NAME_COLON, key, STATEMENT_NAME_EQUALS, self.elements]
 
 
 @dataclass
@@ -207,9 +212,9 @@ class ElementList(Statement):
 
     def to_output_nodes(self):
         return [
-            self.name,
+            self.name.with_(role=Role.name_),
             STATEMENT_NAME_COLON,
-            Token("list"),
+            Token("list", role=Role.kind),
             STATEMENT_NAME_EQUALS,
             self.elements,
         ]
@@ -225,15 +230,19 @@ class Element(Statement):
     def to_output_nodes(self):
         if self.ele_list is not None:
             return [
-                self.name,
+                self.name.with_(role=Role.name_),
                 STATEMENT_NAME_COLON,
-                self.keyword,
+                self.keyword.with_(role=Role.kind),
                 STATEMENT_NAME_EQUALS,
                 self.ele_list,
                 COMMA,
                 *comma_delimit(self.attributes),
             ]
-        return [self.name, STATEMENT_NAME_COLON, *comma_delimit([self.keyword, *self.attributes])]
+        return [
+            self.name.with_(role=Role.name_),
+            STATEMENT_NAME_COLON,
+            *comma_delimit([self.keyword.with_(role=Role.kind), *self.attributes]),
+        ]
 
 
 def get_call_filename(

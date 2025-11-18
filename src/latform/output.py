@@ -307,6 +307,17 @@ def _format(
 
     line = OutputLine(indent=indent_level, parts=[])
 
+    def add_part_to_line(part: Token):
+        if part.role in {Role.name_, Role.kind}:
+            if options.name_case == "upper":
+                line.parts.append(part.upper())
+                return
+            elif options.name_case == "lower":
+                line.parts.append(part.lower())
+                return
+
+        line.parts.append(part)
+
     def newline(lookahead: bool = True, reason: str = ""):
         nonlocal idx
         nonlocal indent_level
@@ -316,7 +327,7 @@ def _format(
             idx += 1
 
             if should_include_comma():
-                line.parts.append(nxt)
+                add_part_to_line(nxt)
 
         if line is not None and (line.parts or line.comment):
             lines.append(line)
@@ -380,7 +391,7 @@ def _format(
         if line.parts and not cur.comments.pre:
             spc, reason = _needs_space_before(parts, idx)
             if spc:
-                line.parts.append(" ")
+                add_part_to_line(SPACE)
 
             if LATFORM_OUTPUT_DEBUG:
                 if spc:
@@ -395,12 +406,12 @@ def _format(
                 indent_level -= 1
 
                 line = newline(lookahead=False, reason="closing multiline block")
-                line.parts.append(cur)
+                add_part_to_line(cur)
                 if nxt in {COMMA}:
                     assert isinstance(nxt, Delimiter)
                     idx += 1
                     if should_include_comma():
-                        line.parts.append(nxt)
+                        add_part_to_line(nxt)
                 if block_has_newlines_stack and block_has_newlines_stack[-1]:
                     nxt = None
                     line = newline(reason="newline stack post multiline close")
@@ -409,7 +420,7 @@ def _format(
                 if line.parts and line.parts[-1] == COMMA:
                     # Never a trailing comma when full sequence is on a single line
                     line.parts.pop()
-                line.parts.append(cur)
+                add_part_to_line(cur)
             idx += 1
             continue
 
@@ -425,7 +436,7 @@ def _format(
                 idx += 1
                 continue
 
-        line.parts.append(cur)
+        add_part_to_line(cur)
 
         if is_opening:
             block_has_newlines_stack.append(would_break_inside)
@@ -438,8 +449,8 @@ def _format(
 
             if delim_state.depth == 0 and nxt not in {EQUALS, COMMA, None}:
                 # No implicit continuation char?
-                line.parts.append(SPACE)
-                line.parts.append(Delimiter("&"))
+                add_part_to_line(SPACE)
+                add_part_to_line(Delimiter("&"))
                 line = newline(reason="inline comment without implicit continuation")
             else:
                 line = newline(reason="inline comment")

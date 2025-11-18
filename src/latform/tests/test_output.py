@@ -2,6 +2,7 @@ import textwrap
 
 import pytest
 import rich
+from typing_extensions import Literal
 
 from ..const import COMMA, OPEN_TO_CLOSE, SPACE
 from ..output import _flatten_output_nodes, format_nodes
@@ -334,6 +335,36 @@ def test_format_element(item, expected):
 def test_format_element_from_source(code: str, expected: str) -> None:
     (stmt,) = parse(code)
     check_format(stmt, expected=expected)
+
+
+@pytest.mark.parametrize(
+    ("code", "expected", "case"),
+    [
+        pytest.param(
+            "O_L: overlay = {p1[L]:(Lcell - 2*Lq)/2}, var = {Lcell}",
+            "o_l: overlay = {p1[L]:(Lcell - 2*Lq)/2}, var={Lcell}",
+            "lower",
+            id="lowercase_name",
+        ),
+        pytest.param(
+            "ele: key, foo = call::/path/to/file",
+            "ELE: KEY, foo = call::/path/to/file",
+            "upper",
+            id="uppercase_name",
+        ),
+        pytest.param(
+            "ElE: line = (a, b, c)",
+            "ElE: line = (a, b, c)",
+            "same",
+            id="same_case_name",
+        ),
+    ],
+)
+def test_format_case_opts(
+    code: str, expected: str, case: Literal["lower", "upper", "same"]
+) -> None:
+    (stmt,) = parse(code)
+    check_format(stmt, expected=expected, options=FormatOptions(name_case=case))
 
 
 @pytest.mark.parametrize(

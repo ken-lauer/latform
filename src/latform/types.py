@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 
 from .const import COMMA, EQUALS, SPACE
 from .exceptions import UnexpectedCallName
-from .token import Comments, Delimiter, Location, Token
+from .token import Comments, Delimiter, Location, Role, Token
 from .util import delimit, flatten, partition_items, split_items
 
 try:
-    from typing import Self
+    from typing import Literal, Self
 except ImportError:
-    from typing_extensions import Self
+    from typing_extensions import Literal, Self
 
 if typing.TYPE_CHECKING:
     from .output import FormatOptions
@@ -234,6 +234,14 @@ class Seq:
             res.extend(flatten(node))
         return res
 
+    def with_(self, role: Role) -> Seq:
+        return type(self)(
+            opener=self.opener,
+            closer=self.closer,
+            items=list(item.with_(role=role) for item in self.items),
+            delimiter=self.delimiter,
+        )
+
 
 def _filter_species_calls(items):
     # A hack: species names have a bunch of delimiters in them.
@@ -285,7 +293,7 @@ def sequence_part_from_text(
 
 @dataclass
 class CallName:
-    name: Token | Seq
+    name: Token
     args: Seq
 
     @property
@@ -309,6 +317,10 @@ class Attribute:
         if self.value is not None:
             return [self.name, EQUALS, self.value]
         return [self.name]
+
+    def with_(self, role: Role):
+        # TODO - anything here?
+        return self
 
 
 @dataclass
@@ -374,6 +386,9 @@ class Block:
         return parse_items(self.items)
 
 
+NameCase = Literal["upper", "lower", "same"]
+
+
 @dataclass()
 class FormatOptions:
     line_length: int = 100
@@ -385,6 +400,7 @@ class FormatOptions:
     trailing_comma: bool = False
     statement_comma_threshold_for_multiline: int = 8
     always_multiline_factor: float = 1.5
+    name_case: NameCase = "same"
 
 
 @dataclass

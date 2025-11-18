@@ -14,7 +14,7 @@ import rich
 from .output import format_statements
 from .parser import parse, parse_file_recursive
 from .tokenizer import Tokenizer
-from .types import FormatOptions
+from .types import FormatOptions, NameCase
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ def main(
     compact: bool = False,
     follow_call: bool = False,
     in_place: bool = False,
+    name_case: NameCase = "same",
     output: pathlib.Path | str | None = None,
 ) -> None:
     if str(filename) == "-":
@@ -45,6 +46,7 @@ def main(
         indent_char=" ",
         comment_col=40,
         newline_before_new_type=not compact,
+        name_case=name_case,
     )
     if follow_call:
         if is_stdin:
@@ -133,6 +135,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         "-o",
         action="store_true",
         help="Write to this filename (or directory, if multiple files)",
+    )
+
+    parser.add_argument(
+        "--name-case",
+        choices=("upper", "lower", "same"),
+        default="same",
+        help="Case for element names, kinds, and functions",
     )
 
     parser.add_argument(

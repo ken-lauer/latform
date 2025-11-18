@@ -20,7 +20,7 @@ from .statements import (
     Statement,
     get_call_filename,
 )
-from .token import Comments
+from .token import Comments, Role, Token
 from .tokenizer import tokenize
 from .types import (
     COMMA,
@@ -30,7 +30,6 @@ from .types import (
     Delimiter,
     FormatOptions,
     Seq,
-    Token,
     TokenizerItem,
 )
 from .util import partition_items
@@ -172,7 +171,12 @@ def parse_items(items: list[TokenizerItem]):
                 raise UnexpectedAssignment(
                     f"Unexpected named attribute assignment: {value} at {value.loc}"
                 )
-            return Constant(comments=comments, name=name, value=value, redef=True)
+            return Constant(
+                comments=comments,
+                name=name.with_(role=Role.name_),
+                value=value,
+                redef=True,
+            )
 
         case [Token() as name, "=", *rest]:
             value = Seq.from_items(rest)
@@ -180,19 +184,19 @@ def parse_items(items: list[TokenizerItem]):
                 raise UnexpectedAssignment(
                     f"Unexpected named attribute assignment: {value} at {value.loc}"
                 )
-            return Constant(comments=comments, name=name, value=value)
+            return Constant(comments=comments, name=name.with_(role=Role.name_), value=value)
 
         case [Token() as name, ":", Token("list"), "=", Block(opener="(") as elements_block]:
             return ElementList(
                 comments=comments,
-                name=name,
+                name=name.with_(role=Role.name_),
                 elements=_line_elements_from_block(elements_block),
             )
 
         case [Token() as name, ":", Token("line"), "=", Block(opener="(") as elements_block]:
             return Line(
                 comments=comments,
-                name=name,
+                name=name.with_(role=Role.name_),
                 elements=_line_elements_from_block(elements_block),
             )
 
@@ -206,7 +210,7 @@ def parse_items(items: list[TokenizerItem]):
         ] if _is_multipass_marker(multipass):
             return Line(
                 comments=comments,
-                name=name,
+                name=name.with_(role=Role.name_),
                 elements=_line_elements_from_block(elements_block),
                 multipass=True,
             )
@@ -219,10 +223,11 @@ def parse_items(items: list[TokenizerItem]):
             "=",
             Block(opener="(") as elements_block,
         ]:
+            assert isinstance(name, Token)
             return Line(
                 comments=comments,
                 name=CallName(
-                    name=Seq.from_item(name),
+                    name=name.with_(role=Role.name_),
                     args=Seq.from_item(line_args),
                 ),
                 elements=_line_elements_from_block(elements_block),
@@ -235,7 +240,7 @@ def parse_items(items: list[TokenizerItem]):
                         after = after[1:]
                     return Element(
                         comments=comments,
-                        name=name,
+                        name=name.with_(role=Role.name_),
                         keyword=element_type,
                         ele_list=Seq.from_delimited_block(ele_list, delimiter=COMMA),
                         attributes=_make_attribute_list(after),
@@ -244,7 +249,7 @@ def parse_items(items: list[TokenizerItem]):
                 case [",", *after]:
                     return Element(
                         comments=comments,
-                        name=name,
+                        name=name.with_(role=Role.name_),
                         keyword=element_type,
                         attributes=_make_attribute_list(after),
                     )
@@ -252,7 +257,7 @@ def parse_items(items: list[TokenizerItem]):
                 case []:
                     return Element(
                         comments=comments,
-                        name=name,
+                        name=name.with_(role=Role.name_),
                         keyword=element_type,
                         attributes=[],
                     )
@@ -327,7 +332,7 @@ def parse_items(items: list[TokenizerItem]):
                 return cls(
                     comments=comments,
                     target=target,
-                    name=name,
+                    name=name.with_(role=Role.name_),
                     value=value,
                 )
             # Generic assignment: name = value
@@ -336,7 +341,7 @@ def parse_items(items: list[TokenizerItem]):
                 # This couldn't be an attribute as there's no '=' in there
                 assert not isinstance(name, Attribute)
                 return Assignment(
-                    name=name,
+                    name=name.with_(role=Role.name_),
                     value=value,
                     comments=comments,
                 )
