@@ -174,7 +174,7 @@ def main(
     if dest_fn:
         pathlib.Path(dest_fn).write_text(to_write)
     else:
-        print(formatted)
+        print(to_write)
 
 
 def _build_argparser() -> argparse.ArgumentParser:
