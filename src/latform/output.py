@@ -533,8 +533,18 @@ def format_statements(statements: Sequence[Statement] | Statement, options: Form
         lower_renames = {from_.lower(): to for from_, to in options.renames.items()}
 
         def apply_rename(item: Token | str):
+            if not isinstance(item, Token):
+                return item
+
             if item.lower() in lower_renames:
                 return lower_renames[item.lower()]
+
+            # if item.role == Role.name_:
+            # % single char, * 0+
+            if "%" in item or "*" in item:
+                print("Saw match", item, item.role)
+            else:
+                print("saw", repr(item))
 
             return item
 

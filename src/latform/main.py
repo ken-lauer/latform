@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import logging
 import pathlib
 import sys
@@ -46,6 +47,18 @@ def load_renames(
     return res
 
 
+def get_diff(
+    original: str, formatted: str, fromfile: pathlib.Path | str, tofile: pathlib.Path | str
+):
+    udiff = difflib.unified_diff(
+        original.splitlines(keepends=True),
+        formatted.splitlines(keepends=True),
+        fromfile=str(fromfile),
+        tofile=str(tofile),
+    )
+    return "".join(udiff)
+
+
 def main(
     filename: str | pathlib.Path,
     verbose: int = 0,
@@ -55,6 +68,7 @@ def main(
     in_place: bool = False,
     name_case: NameCase = "same",
     output: pathlib.Path | str | None = None,
+    diff: bool = False,
     rename_file: pathlib.Path | str | None = None,
     raw_renames: list[str] | None = None,
     renames: dict[str, str] | None = None,
@@ -90,7 +104,18 @@ def main(
         if verbose > 1:
             rich.print(files.by_filename)
         if in_place:
+            if diff:
+                raise NotImplementedError("In-place diff is not supported (or sensible?)")
             files.reformat(options)
+        elif diff:
+            for fn, statements in files.by_filename.items():
+                formatted = format_statements(statements, options)
+                original = fn.read_text()
+                print(get_diff(original, formatted, fromfile=fn, tofile=fn))
+        else:
+            for fn, statements in files.by_filename.items():
+                print(f"! {fn}")
+                print(format_statements(statements, options))
         return
 
     if verbose > 0:
@@ -126,6 +151,9 @@ def main(
 
     if dest_fn:
         pathlib.Path(dest_fn).write_text(formatted)
+    elif diff:
+        formatted = format_statements(statements, options)
+        print(get_diff(contents, formatted, fromfile=filename, tofile=filename))
     else:
         print(formatted)
 
@@ -162,6 +190,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--rename-file",
         type=str,
         help="Load renames from a file. Each line should be comma-delimited in the form of `--rename`.",
+    )
+
+    parser.add_argument(
+        "--diff",
+        action="store_true",
+        default=False,
+        help="Show diff instead of formatted output",
     )
 
     parser.add_argument(
