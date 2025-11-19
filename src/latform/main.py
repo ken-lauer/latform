@@ -20,6 +20,32 @@ DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
 
 
+def load_renames(
+    rename_file: pathlib.Path | str | None,
+    raw_renames: list[str] | None,
+    renames: dict[str, str] | None,
+):
+    res = {}
+
+    lines = []
+    if rename_file:
+        # todo: csv reader, maybe
+        lines.extend(
+            [line.split(",") for line in pathlib.Path(rename_file).read_text().splitlines()]
+        )
+
+    if raw_renames:
+        lines.extend([line.split(",") for line in raw_renames])
+
+    for from_, to in lines:
+        res[from_.strip()] = to.strip()
+
+    if renames:
+        res.update(renames)
+
+    return res
+
+
 def main(
     filename: str | pathlib.Path,
     verbose: int = 0,
@@ -29,6 +55,9 @@ def main(
     in_place: bool = False,
     name_case: NameCase = "same",
     output: pathlib.Path | str | None = None,
+    rename_file: pathlib.Path | str | None = None,
+    raw_renames: list[str] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> None:
     if str(filename) == "-":
         contents = sys.stdin.read()
@@ -39,6 +68,8 @@ def main(
         contents = filename.read_text()
         is_stdin = False
 
+    renames = load_renames(rename_file, raw_renames, renames)
+
     options = FormatOptions(
         line_length=line_length,
         compact=compact,
@@ -47,6 +78,7 @@ def main(
         comment_col=40,
         newline_before_new_type=not compact,
         name_case=name_case,
+        renames=renames,
     )
     if follow_call:
         if is_stdin:
@@ -115,6 +147,21 @@ def _build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "filename",
         help="Filename to parse (use '-' for stdin/standard input)",
+    )
+
+    parser.add_argument(
+        "--rename",
+        "-r",
+        type=str,
+        action="append",
+        dest="raw_renames",
+        help="Rename an element. In the form: 'old,new' (comma-delimited)",
+    )
+
+    parser.add_argument(
+        "--rename-file",
+        type=str,
+        help="Load renames from a file. Each line should be comma-delimited in the form of `--rename`.",
     )
 
     parser.add_argument(

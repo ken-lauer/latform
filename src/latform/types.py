@@ -417,6 +417,7 @@ class FormatOptions:
     statement_comma_threshold_for_multiline: int = 8
     always_multiline_factor: float = 1.5
     name_case: NameCase = "same"
+    renames: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

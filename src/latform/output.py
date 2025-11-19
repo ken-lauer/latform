@@ -518,7 +518,7 @@ def format_statements(statements: Sequence[Statement] | Statement, options: Form
     if isinstance(statements, Statement):
         statements = [statements]
 
-    res = []
+    res: list[OutputLine] = []
 
     last_statement = None
     for statement in statements:
@@ -528,6 +528,18 @@ def format_statements(statements: Sequence[Statement] | Statement, options: Form
         res.extend(format_nodes(statement, options=options))
 
         last_statement = statement
+
+    if options.renames:
+        lower_renames = {from_.lower(): to for from_, to in options.renames.items()}
+
+        def apply_rename(item: Token | str):
+            if item.lower() in lower_renames:
+                return lower_renames[item.lower()]
+
+            return item
+
+        for line in res:
+            line.parts = [apply_rename(part) for part in line.parts]
 
     return "\n".join(line.render(options) for line in res)
 
