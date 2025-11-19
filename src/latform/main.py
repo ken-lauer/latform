@@ -97,7 +97,7 @@ def main(
     verbose: int = 0,
     line_length: int = 100,
     compact: bool = False,
-    follow_call: bool = False,
+    recursive: bool = False,
     in_place: bool = False,
     name_case: NameCase = "same",
     output: pathlib.Path | str | None = None,
@@ -127,7 +127,7 @@ def main(
         name_case=name_case,
         renames=renames,
     )
-    if follow_call:
+    if recursive:
         if is_stdin:
             raise NotImplementedError(
                 "Recursive parsing using a lattice from stdin is not yet supported"
@@ -198,7 +198,7 @@ def _build_argparser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--rename",
-        "-r",
+        "-R",
         type=str,
         action="append",
         dest="raw_renames",
@@ -270,9 +270,10 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--follow-call",
+        "-r",
+        "--recursive",
         action="store_true",
-        help="Recursively parse lattice files, following call statements",
+        help="Recursively (-r) parse lattice files, following call statements",
     )
 
     parser.add_argument(
