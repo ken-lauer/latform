@@ -14,6 +14,7 @@ import rich
 
 from .output import format_statements
 from .parser import parse, parse_file_recursive
+from .statements import Statement
 from .tokenizer import Tokenizer
 from .types import FormatOptions, NameCase
 
@@ -59,6 +60,38 @@ def get_diff(
     return "".join(udiff)
 
 
+def process_file(
+    contents: str,
+    filename: str | pathlib.Path,
+    verbose: int = 0,
+) -> list[Statement]:
+    if verbose <= 0:
+        return list(parse(contents, filename))
+
+    tok = Tokenizer(contents, filename=filename)
+    blocks = tok.split_blocks()
+    stacked = [block.stack() for block in blocks]
+    statements = []
+    for idx, block in enumerate(stacked):
+        # Level 1: show block header, print statement
+        # Level 2: show block header, block, print statement
+        # Level 3: show block header, original source, block, print statement
+        if idx > 0:
+            rich.print()
+        rich.print(f"-- Block {idx} ({block.loc})", file=sys.stderr)
+        if verbose >= 3:
+            rich.print("Original source:", file=sys.stderr)
+            rich.print("```", file=sys.stderr)
+            rich.print(block.loc.get_string(contents), file=sys.stderr)
+            rich.print("```", file=sys.stderr)
+        if verbose >= 2:
+            rich.print(block, file=sys.stderr)
+        statement = block.parse()
+        statements.append(statement)
+        rich.print(statement, file=sys.stderr)
+    return statements
+
+
 def main(
     filename: str | pathlib.Path,
     verbose: int = 0,
@@ -102,44 +135,28 @@ def main(
 
         files = parse_file_recursive(filename)
         if verbose > 1:
-            rich.print(files.by_filename)
+            # NOTE: double-parsing, erroneously
+            for fn in files.by_filename:
+                process_file(contents=fn.read_text(), filename=fn, verbose=verbose)
+
         if in_place:
             if diff:
                 raise NotImplementedError("In-place diff is not supported (or sensible?)")
             files.reformat(options)
-        elif diff:
-            for fn, statements in files.by_filename.items():
-                formatted = format_statements(statements, options)
-                original = fn.read_text()
-                print(get_diff(original, formatted, fromfile=fn, tofile=fn))
         else:
             for fn, statements in files.by_filename.items():
-                print(f"! {fn}")
-                print(format_statements(statements, options))
+                formatted = format_statements(statements, options)
+                if diff:
+                    original = fn.read_text()
+                    to_write = get_diff(original, formatted, fromfile=fn, tofile=fn)
+                else:
+                    print(f"! {fn}")
+                    to_write = formatted
+
+                print(to_write)
         return
 
-    if verbose > 0:
-        tok = Tokenizer(contents, filename=filename)
-        blocks = tok.split_blocks()
-        stacked = [block.stack() for block in blocks]
-        statements = []
-        for idx, block in enumerate(stacked):
-            if idx > 0:
-                rich.print()
-            rich.print(f"-- Block {idx} ({block.loc})", file=sys.stderr)
-            if verbose > 2:
-                rich.print("Original source:", file=sys.stderr)
-                rich.print("```", file=sys.stderr)
-                rich.print(block.loc.get_string(contents), file=sys.stderr)
-                rich.print("```", file=sys.stderr)
-            if verbose > 1:
-                rich.print(block, file=sys.stderr)
-            statement = block.parse()
-            statements.append(statement)
-            rich.print(statement, file=sys.stderr)
-
-    else:
-        statements = parse(contents=contents, filename=filename)
+    statements = process_file(contents=contents, filename=filename, verbose=verbose)
 
     formatted = format_statements(statements, options=options)
     if output:
@@ -149,11 +166,13 @@ def main(
     else:
         dest_fn = None
 
+    if diff:
+        to_write = get_diff(contents, formatted, fromfile=filename, tofile=filename)
+    else:
+        to_write = format_statements(statements, options)
+
     if dest_fn:
-        pathlib.Path(dest_fn).write_text(formatted)
-    elif diff:
-        formatted = format_statements(statements, options)
-        print(get_diff(contents, formatted, fromfile=filename, tofile=filename))
+        pathlib.Path(dest_fn).write_text(to_write)
     else:
         print(formatted)
 

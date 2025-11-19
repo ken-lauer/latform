@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pathlib
-import sys
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -385,12 +384,12 @@ class Files:
 
         parent_fn = self.main
 
-        total_lines = 0
+        # total_lines = 0
         while self.stack:
             filename = self.stack.pop()
-            num_lines = len(filename.read_text().splitlines())
-            total_lines += num_lines
-            print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)", file=sys.stderr)
+            # num_lines = len(filename.read_text().splitlines())
+            # total_lines += num_lines
+            # print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)", file=sys.stderr)
 
             statements = list(parse_file(parent_fn))
             self.by_filename[parent_fn] = statements
