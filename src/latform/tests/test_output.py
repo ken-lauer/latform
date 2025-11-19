@@ -342,7 +342,7 @@ def test_format_element_from_source(code: str, expected: str) -> None:
     [
         pytest.param(
             "O_L: overlay = {p1[L]:(Lcell - 2*Lq)/2}, var = {Lcell}",
-            "o_l: overlay = {p1[L]:(Lcell - 2*Lq)/2}, var={Lcell}",
+            "o_l: overlay = {p1[l]:(Lcell - 2*Lq)/2}, var={Lcell}",
             "lower",
             id="lowercase_name",
         ),
