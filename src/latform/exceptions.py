@@ -32,6 +32,14 @@ class MismatchedDelimiter(ParsingError):
         self.close = close
 
 
+class UnterminatedString(ParsingError):
+    delim: Delimiter
+
+    def __init__(self, msg: str, delim: Delimiter) -> None:
+        super().__init__(msg)
+        self.delim = delim
+
+
 class ExtraCloseDelimiter(ParsingError):
     delim: Delimiter
 

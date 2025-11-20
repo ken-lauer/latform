@@ -4,7 +4,7 @@ import pathlib
 from dataclasses import dataclass, field
 
 from .const import DELIMITERS, LBRACE, LBRACK, LPAREN
-from .exceptions import EndOfLine, MissingCloseDelimiter
+from .exceptions import EndOfLine, MissingCloseDelimiter, UnterminatedString
 from .funcs import ALL_BUILTIN
 from .token import Comments, Delimiter, Location, Role, Token
 from .types import Block
@@ -178,7 +178,7 @@ class Tokenizer:
                 block = _StatementTokenBlock(lineno=self.lineno)
                 blocks.append(block)
 
-            line_start_pos = len(block.items)
+            line_start_idx = len(block.items)
             while True:
                 try:
                     token, delim = self.get_next_word()
@@ -217,7 +217,7 @@ class Tokenizer:
                 continue
 
             is_multiline = block.items[0].loc.line != block.items[-1].loc.line
-            first_item = block.items[line_start_pos]
+            first_item = block.items[line_start_idx]
             last_item = (
                 _get_first_token_or_block(
                     reversed(block.items[block.items.index(first_item) + 1 :])
@@ -232,6 +232,13 @@ class Tokenizer:
             if block.items[0].lower() in ("return", "end_file"):
                 # TODO: need to include whatever comes after these lines verbatim
                 break
+
+            if (
+                block.items[0].lower() in ("print",)
+                and len(block.items) > 1
+                and not block.items[1].is_quoted_string
+            ):
+                block.items = [block.items[0], Token.join(block.items[1:])]
 
         if pending_comments:
             loc = sum((comment.loc for comment in pending_comments), pending_comments[0].loc)
@@ -258,22 +265,29 @@ class Tokenizer:
 
     def _scan_word(self, delimiters: frozenset[str]) -> tuple[str, int]:
         start = self.pos
-        in_quotes = False
+        quote_pos = None
         quote_char = None
         while self.pos < len(self.line):
             ch = self.line[self.pos]
             if ch in ("'", '"'):
-                if not in_quotes:
-                    in_quotes = True
+                if quote_pos is None:
+                    quote_pos = self.pos
                     quote_char = ch
                 elif ch == quote_char:
-                    in_quotes = False
+                    quote_pos = None
                     quote_char = None
                 self.pos += 1
                 continue
-            if not in_quotes and (ch in delimiters or ch.isspace()):
+            if quote_pos is None and (ch in delimiters or ch.isspace()):
                 break
             self.pos += 1
+
+        if quote_pos is not None:
+            loc = Location(self.filename, self.lineno, quote_pos, self.lineno, quote_pos)
+            raise UnterminatedString(
+                f"Unterminated quote character: {quote_char!r}",
+                delim=Delimiter(quote_char, loc=loc),
+            )
 
         word = self.line[start : self.pos]
         if (

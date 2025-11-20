@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import typing
-from typing import Any, Sequence
+from typing import Any, Sequence, SupportsIndex
 
 try:
     from typing import Self
@@ -150,7 +150,36 @@ class Token(str):
             comments=str0.comments,
         )
 
-    def replace(self, old, new, count=-1) -> Self:
+    def quoted(self) -> Self:
+        if self.is_quoted_string:
+            return self
+
+        value = str(self).strip()
+        if '"' in value:
+            quote_char = "'"
+        else:
+            quote_char = '"'
+        if quote_char in value:
+            # Sorry, but why use both quote types and not quote your string to begin with?
+            # I don't think there's an escape character we can use
+            value = value.replace(quote_char, " ")
+
+        return type(self)(
+            f"{quote_char}{value}{quote_char}",
+            loc=self.loc,
+            comments=self.comments,
+            role=self.role,
+        )
+
+    def strip(self, chars: str | None = None) -> Self:
+        return type(self)(
+            str(self).strip(chars),
+            loc=self.loc,
+            comments=self.comments,
+            role=self.role,
+        )
+
+    def replace(self, old, new, count: SupportsIndex = -1) -> Self:
         return type(self)(
             str(self).replace(old, new, count),
             loc=self.loc,

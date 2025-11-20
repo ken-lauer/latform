@@ -20,7 +20,7 @@ from ..const import (
     SPACE,
     STAR,
 )
-from ..exceptions import ExtraCloseDelimiter, MissingCloseDelimiter
+from ..exceptions import ExtraCloseDelimiter, MissingCloseDelimiter, UnterminatedString
 from ..output import format_statements
 from ..parser import (
     Assignment,
@@ -2617,22 +2617,6 @@ parser_debug var lat ele 34 78
         ),
         pytest.param(
             """
-print Remember Q01 quad strength of `q01[k1]` not yet optimized
-""",
-            [
-                Simple(
-                    statement=T("print"),
-                    arguments=[
-                        T(word)
-                        for word in "Remember Q01 quad strength of `q01[k1]` not yet optimized".split()
-                    ],
-                )
-            ],
-            marks=pytest.mark.xfail,
-            id="print_unquoted",
-        ),
-        pytest.param(
-            """
 print "Remember Q01 quad strength of `q01[k1]` not yet optimized"
 """,
             [
@@ -2856,3 +2840,107 @@ foo = bar = baz
 """
     with pytest.raises(UnexpectedAssignment):
         parse_verbose(code)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param(
+            """
+            foo = '
+            '
+            """,
+            id="line-break-squote",
+        ),
+        pytest.param(
+            """
+            foo = "
+            "
+            """,
+            id="line-break-dquote",
+        ),
+        pytest.param(
+            "'",
+            id="single-line-squote",
+        ),
+        pytest.param(
+            '"',
+            id="single-line-dquote",
+        ),
+        pytest.param(
+            "'foo",
+            id="single-line-squote",
+        ),
+        pytest.param(
+            '"foo',
+            id="single-line-dquote",
+        ),
+        pytest.param(
+            "foo'",
+            id="single-line-squote",
+        ),
+        pytest.param(
+            'foo"',
+            id="single-line-dquote",
+        ),
+    ],
+)
+def test_unterminated_string(code: str) -> None:
+    with pytest.raises(UnterminatedString):
+        parse_verbose(code)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param(
+            """
+            "'''"
+            """,
+            id="squote-in-dquote",
+        ),
+        pytest.param(
+            """
+            '""'
+            """,
+            id="dquote-in-squote",
+        ),
+    ],
+)
+def test_string_quote_nesting(code: str) -> None:
+    parse_verbose(code)
+
+
+@pytest.mark.parametrize(
+    "string_",
+    [
+        pytest.param(
+            "Remember Q01 quad strength of `q01[k1]` not yet optimized",
+            id="remember",
+        ),
+        pytest.param(
+            "Single quote 'string'",
+            id="squote",
+        ),
+        pytest.param(
+            'Double quote "string"',
+            id="squote",
+        ),
+    ],
+)
+def test_print_unquoted(string_: str) -> None:
+    code = f"""
+print {string_}
+"""
+    expected = Simple(
+        statement=T("print"),
+        arguments=[T(string_)],
+    )
+    (res,) = parse_verbose(code)
+    assert res == expected
+
+    options = FormatOptions()
+    roundtrip_code = format_statements(res, options)
+
+    quoted = Token(string_).quoted()
+    assert roundtrip_code == f"print {quoted}"

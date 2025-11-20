@@ -12,6 +12,7 @@ import sys
 
 import rich
 
+from .lint import lint_statement
 from .output import format_statements
 from .parser import parse, parse_file_recursive
 from .statements import Statement
@@ -134,6 +135,14 @@ def main(
             )
 
         files = parse_file_recursive(filename)
+
+        # TODO this should be separate from format, I think
+        # Either that or lint can be treated as an error to not reformat?
+        for fn, statements in files.by_filename.items():
+            for st in statements:
+                for lint in lint_statement(st):
+                    logger.warning(lint.to_user_message())
+
         if verbose > 1:
             # NOTE: double-parsing, erroneously
             for fn in files.by_filename:
@@ -157,6 +166,10 @@ def main(
         return
 
     statements = process_file(contents=contents, filename=filename, verbose=verbose)
+
+    for st in statements:
+        for lint in lint_statement(st):
+            logger.warning(lint.to_user_message())
 
     formatted = format_statements(statements, options=options)
     if output:

@@ -45,6 +45,7 @@ class Simple(Statement):
             "calc_reference_orbit",
             "combine_consecutive_elements",
             "debug_marker",
+            "expand_lattice",
             "end_file",
             "merge_elements",
             "no_digested",
@@ -79,8 +80,14 @@ class Simple(Statement):
         return name.lower() in Simple.known_statements
 
     def to_output_nodes(self):
+        if self.statement.lower() in {"print"}:
+            print_str = Token.join(
+                [arg for arg in self.arguments if isinstance(arg, Token)]
+            ).strip()
+            return [self.statement, print_str.quoted()]
+
         nodes = [self.statement, *self.arguments]
-        if self.statement.lower() in {"print", "parser_debug"}:
+        if self.statement.lower() in {"parser_debug"}:
             return nodes
         for idx in range(len(nodes) - 1, 0, -1):
             nodes.insert(idx, COMMA)
