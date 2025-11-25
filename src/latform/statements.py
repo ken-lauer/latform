@@ -313,7 +313,7 @@ class Element(Statement):
 def get_call_filename(
     st: Simple,
     *,
-    caller_filename: pathlib.Path | None + None,
+    caller_directory: pathlib.Path | None + None,
     expand_vars: bool = True,
 ) -> tuple[str, pathlib.Path]:
     if not isinstance(st, Simple):
@@ -329,6 +329,6 @@ def get_call_filename(
     ).remove_quotes()
     expanded = os.path.expandvars(sub_filename) if expand_vars else sub_filename
 
-    if not caller_filename:
+    if not caller_directory:
         return sub_filename, pathlib.Path(expanded)
-    return sub_filename, caller_filename.parent / expanded
+    return sub_filename, caller_directory / expanded

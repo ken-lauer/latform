@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import pathlib
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -32,6 +33,8 @@ from .types import (
     TokenizerItem,
 )
 from .util import partition_items
+
+logger = logging.getLogger(__name__)
 
 
 def _make_attribute(item: Attribute | Token | Seq) -> Attribute:
@@ -397,33 +400,37 @@ def parse_file_recursive(filename: pathlib.Path | str, annotate: bool = True) ->
 @dataclass
 class Files:
     main: pathlib.Path
-    stack: list[pathlib.Path] = field(default_factory=list)
+    stack: list[tuple[pathlib.Path, pathlib.Path]] = field(default_factory=list)
     by_filename: dict[pathlib.Path, list[Statement]] = field(default_factory=dict)
     local_file_to_source_filename: dict[pathlib.Path, str] = field(default_factory=dict)
 
     def parse(self):
-        if not self.stack:
-            self.stack = [self.main]
+        main = self.main.resolve()
 
-        parent_fn = self.main
+        if not self.stack:
+            self.stack = [(main, main.parent)]
 
         # total_lines = 0
         while self.stack:
-            filename = self.stack.pop()
+            filename, parent_dir = self.stack.pop()
             # num_lines = len(filename.read_text().splitlines())
             # total_lines += num_lines
             # print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)", file=sys.stderr)
 
-            statements = list(parse_file(parent_fn, annotate=False))
-            self.by_filename[parent_fn] = statements
+            filename = parent_dir / filename
+
+            statements = list(parse_file(filename, annotate=False))
+            self.by_filename[filename] = statements
             for st in statements:
                 if isinstance(st, Simple) and st.statement == "call":
                     sub_filename, fn = get_call_filename(
-                        st, caller_filename=parent_fn, expand_vars=True
+                        st, caller_directory=filename.parent, expand_vars=True
                     )
                     self.local_file_to_source_filename[fn] = sub_filename
-                    self.stack.append(fn)
-            parent_fn = pathlib.Path(filename)
+                    logger.debug(
+                        f"Adding {sub_filename} relative to {filename.parent} which is {fn}"
+                    )
+                    self.stack.append((fn, filename.parent))
 
         return self.by_filename
 
