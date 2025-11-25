@@ -101,6 +101,7 @@ def main(
     recursive: bool = False,
     in_place: bool = False,
     name_case: NameCase = "same",
+    attribute_case: NameCase = "same",
     output: pathlib.Path | str | None = None,
     diff: bool = False,
     rename_file: pathlib.Path | str | None = None,
@@ -126,6 +127,7 @@ def main(
         comment_col=40,
         newline_before_new_type=not compact,
         name_case=name_case,
+        attribute_case=attribute_case,
         renames=renames,
     )
     if recursive:
@@ -253,9 +255,17 @@ def _build_argparser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--name-case",
+        "--name",
         choices=("upper", "lower", "same"),
         default="same",
         help="Case for element names, kinds, and functions",
+    )
+    parser.add_argument(
+        "--attribute-case",
+        "--attr",
+        choices=("upper", "lower", "same"),
+        default="same",
+        help="Case for attributes",
     )
 
     parser.add_argument(

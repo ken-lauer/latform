@@ -255,7 +255,7 @@ def _annotate_names(items):
                 and nxt.opener == "["
                 and all(isinstance(inner, Token) for inner in nxt.items)
             ):
-                item.role = Role.name_
+                item.role = Role.attribute_name
                 nxt.items = nxt.with_(role=Role.attribute_name).items
 
 
@@ -319,6 +319,9 @@ class CallName:
     def to_output_nodes(self):
         return [self.name, self.args]
 
+    def with_(self, role: Role):
+        return type(self)(name=self.name.with_(role=role), args=self.args)
+
 
 @dataclass
 class Attribute:
@@ -335,8 +338,29 @@ class Attribute:
         return [self.name]
 
     def with_(self, role: Role):
-        # TODO - anything here?
-        return self
+        return Attribute(
+            name=self.name.with_(role=role),
+            value=self.value,
+        )
+
+    def annotate(self, ele_keyword: str):
+        # try:
+        #     _ = self.get_info(ele_keyword)
+        # except KeyError:
+        #     return self
+        return self.with_(role=Role.attribute_name)
+
+    def get_info(self, ele_keyword: str):
+        from .attrs import get_attribute
+
+        if isinstance(self.name, Token):
+            name = self.name
+        elif isinstance(self.name, CallName):
+            name = self.name.name
+        else:
+            return
+        attr = get_attribute(ele_keyword, name)
+        return attr
 
 
 @dataclass
@@ -417,6 +441,7 @@ class FormatOptions:
     statement_comma_threshold_for_multiline: int = 8
     always_multiline_factor: float = 1.5
     name_case: NameCase = "same"
+    attribute_case: NameCase = "same"
     renames: dict[str, str] = field(default_factory=dict)
 
 

@@ -181,7 +181,7 @@ class Parameter(Statement):
         return [
             self.target.with_(role=Role.name_),
             Delimiter("["),
-            self.name.with_(role=Role.name_),
+            self.name.with_(role=Role.attribute_name),
             Delimiter("]"),
             STATEMENT_NAME_EQUALS,
             self.value,
@@ -235,6 +235,7 @@ class Element(Statement):
     attributes: list[Attribute] = field(default_factory=list)
 
     def to_output_nodes(self):
+        attribs = [attrib.annotate(self.keyword) for attrib in self.attributes]
         if self.ele_list is not None:
             return [
                 self.name.with_(role=Role.name_),
@@ -243,12 +244,12 @@ class Element(Statement):
                 STATEMENT_NAME_EQUALS,
                 self.ele_list,
                 COMMA,
-                *comma_delimit(self.attributes),
+                *comma_delimit(attribs),
             ]
         return [
             self.name.with_(role=Role.name_),
             STATEMENT_NAME_COLON,
-            *comma_delimit([self.keyword.with_(role=Role.kind), *self.attributes]),
+            *comma_delimit([self.keyword.with_(role=Role.kind), *attribs]),
         ]
 
 

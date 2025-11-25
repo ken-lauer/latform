@@ -22,6 +22,7 @@ from .types import (
     CallName,
     Delimiter,
     FormatOptions,
+    NameCase,
     OutputLine,
     Seq,
 )
@@ -308,13 +309,20 @@ def _format(
     line = OutputLine(indent=indent_level, parts=[])
 
     def add_part_to_line(part: Token):
+        def apply_case(case: NameCase):
+            if case == "upper" or part == "l":  # special case
+                val = part.upper()
+            elif case == "lower":
+                val = part.lower()
+            else:
+                val = part
+
+            line.parts.append(val)
+
+        if part.role in {Role.attribute_name}:
+            return apply_case(options.attribute_case)
         if part.role in {Role.name_, Role.kind, Role.builtin, Role.attribute_name}:
-            if options.name_case == "upper":
-                line.parts.append(part.upper())
-                return
-            elif options.name_case == "lower":
-                line.parts.append(part.lower())
-                return
+            return apply_case(options.name_case)
 
         line.parts.append(part)
 
