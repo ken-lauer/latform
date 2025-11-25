@@ -203,7 +203,7 @@ class Line(Statement):
         if self.multipass:
             key = Token("line[multipass]", role=Role.kind)
         else:
-            key = Token("line", role=Role.name_)
+            key = Token("line", role=Role.kind)
 
         if isinstance(self.name, Token):
             name = self.name.with_(role=Role.name_)
@@ -236,6 +236,7 @@ class Element(Statement):
 
     def to_output_nodes(self):
         attribs = [attrib.annotate(self.keyword) for attrib in self.attributes]
+
         if self.ele_list is not None:
             return [
                 self.name.with_(role=Role.name_),

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from ._attrs import by_element
+from ._attrs import by_element as element_key_to_attrs
 
 
 def get_attributes_for_ele(ele_keyword: str):
     try:
-        return by_element[ele_keyword.upper()]
+        return element_key_to_attrs[ele_keyword.upper()]
     except KeyError:
         pass
 
-    for key in by_element:
+    for key in element_key_to_attrs:
         if key.startswith(ele_keyword.upper()):
-            return by_element[key]
+            return element_key_to_attrs[key]
     raise KeyError(f"Element keyword not found: {ele_keyword.upper()}")
 
 

@@ -442,6 +442,8 @@ class FormatOptions:
     always_multiline_factor: float = 1.5
     name_case: NameCase = "same"
     attribute_case: NameCase = "same"
+    kind_case: NameCase = "same"
+    builtin_case: NameCase = "same"
     renames: dict[str, str] = field(default_factory=dict)
 
 

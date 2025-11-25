@@ -352,7 +352,7 @@ def test_format_element_from_source(code: str, expected: str) -> None:
         ),
         pytest.param(
             "ele: key, foo = call::/path/to/file",
-            "ELE: KEY, foo = CALL::/path/to/file",
+            "ELE: key, foo = call::/path/to/file",
             "upper",
             id="uppercase_name",
         ),
@@ -364,19 +364,19 @@ def test_format_element_from_source(code: str, expected: str) -> None:
         ),
         pytest.param(
             "ElE: line = (a, b, c)",
-            "ELE: LINE = (A, B, C)",
+            "ELE: line = (A, B, C)",
             "upper",
             id="uppercase_line_elements",
         ),
         pytest.param(
             "ElE: line = (a, --b, c)",
-            "ELE: LINE = (A, --B, C)",
+            "ELE: line = (A, --B, C)",
             "upper",
             id="uppercase_line_elements",
         ),
         pytest.param(
             "line2: line = (d, -2*(a, b, c), e)",
-            "LINE2: LINE = (D, -2*(A, B, C), E)",
+            "LINE2: line = (D, -2*(A, B, C), E)",
             "upper",
             id="uppercase_line_elements_nested",
         ),

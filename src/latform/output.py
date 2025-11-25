@@ -5,6 +5,7 @@ import os
 import pathlib
 from typing import Sequence
 
+from .attrs import element_key_to_attrs
 from .const import (
     CLOSE_TO_OPEN,
     COMMA,
@@ -15,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Statement
+from .statements import Element, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -273,12 +274,35 @@ def _should_break_for_length(
     )
 
 
+def _is_element_name(elements: dict[str, Element], name: str) -> bool:
+    # elements is assumed to be upper-cased already
+    name = name.upper()
+
+    # Inheritance requires *full* names for a match
+    if name in elements:
+        if name in element_key_to_attrs:
+            logger.warning("Element inheritance using full element name? %r", name)
+            return False
+
+        return True
+
+    if name in element_key_to_attrs:
+        # It's the full name of an element kind
+        return False
+    # for key in element_key_to_attrs:
+    #     if key.startswith(name):
+    #         return False
+
+    return False
+
+
 def _format(
     parts: list[Token],
     options: FormatOptions,
     *,
     indent_level: int = 0,
     outer_comments: Comments | None = None,
+    elements: dict[str, Element],
 ) -> list[OutputLine]:
     top_level_indent = indent_level
     lines: list[OutputLine] = []
@@ -321,8 +345,17 @@ def _format(
 
         if part.role in {Role.attribute_name}:
             return apply_case(options.attribute_case)
-        if part.role in {Role.name_, Role.kind, Role.builtin, Role.attribute_name}:
+        if part.role in {Role.name_}:
             return apply_case(options.name_case)
+        if part.role in {Role.kind}:
+            # Kind may be misidentified as the upper layer doesn't have this
+            # context. Check against known names.
+            if _is_element_name(elements, part):
+                return apply_case(options.name_case)
+            else:
+                return apply_case(options.kind_case)
+        if part.role in {Role.builtin}:
+            return apply_case(options.builtin_case)
 
         line.parts.append(part)
 
@@ -512,13 +545,14 @@ default_options = FormatOptions()
 def format_nodes(
     nodes: list[OutputNodeType] | Statement,
     options: FormatOptions = default_options,
+    elements: dict[str, Element] | None = None,
 ) -> list[OutputLine]:
     parts = _flatten_output_nodes(nodes)
     if isinstance(nodes, Statement):
         outer_comments = nodes.comments
     else:
         outer_comments = None
-    return _format(parts, options, outer_comments=outer_comments)
+    return _format(parts, options, outer_comments=outer_comments, elements=elements or {})
 
 
 def format_statements(statements: Sequence[Statement] | Statement, options: FormatOptions) -> str:
@@ -528,12 +562,15 @@ def format_statements(statements: Sequence[Statement] | Statement, options: Form
 
     res: list[OutputLine] = []
 
+    elements = {}
     last_statement = None
     for statement in statements:
         if options.newline_before_new_type:
             if last_statement is not None and not isinstance(statement, type(last_statement)):
                 res.append(OutputLine())
-        res.extend(format_nodes(statement, options=options))
+        if isinstance(statement, Element):
+            elements[statement.name.upper()] = statement
+        res.extend(format_nodes(statement, options=options, elements=elements))
 
         last_statement = statement
 
