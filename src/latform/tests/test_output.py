@@ -39,9 +39,17 @@ def render(lines: list[OutputLine], options: FormatOptions) -> str:
     return "\n".join(line.render(options) for line in lines)
 
 
+same_case_options = FormatOptions(
+    name_case="same",
+    attribute_case="same",
+    kind_case="same",
+    builtin_case="same",
+)
+
+
 def check_format(item, expected: str, options: FormatOptions | None = None) -> None:
     if options is None:
-        options = FormatOptions()
+        options = same_case_options
     options.comment_col = 0
     rich.print(item)
 
@@ -472,7 +480,7 @@ def test_format_case_opts(
 def test_format_expression(expression: str, expected: str) -> None:
     prefix = "ele: name, foo = "
     (stmt,) = parse(f"{prefix}{expression}")
-    check_format(stmt, expected=f"{prefix}{expected}")
+    check_format(stmt, expected=f"{prefix}{expected}", options=same_case_options)
 
 
 @pytest.mark.parametrize(
@@ -516,5 +524,7 @@ def test_format_trailing_comma(expression: str, expected: str, trailing_comma: b
     prefix = "ele: name, foo="
     (stmt,) = parse(f"{prefix}{expression}")
     check_format(
-        stmt, expected=f"{prefix}{expected}", options=FormatOptions(trailing_comma=trailing_comma)
+        stmt,
+        expected=f"{prefix}{expected}",
+        options=FormatOptions(trailing_comma=trailing_comma, name_case="same"),
     )
