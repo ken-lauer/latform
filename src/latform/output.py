@@ -16,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Element, Statement
+from .statements import Element, Simple, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -591,8 +591,12 @@ def format_statements(
     last_statement = None
     for statement in statements:
         if options.newline_before_new_type:
-            if last_statement is not None and not isinstance(statement, type(last_statement)):
-                res.append(OutputLine())
+            if last_statement is not None:
+                if not isinstance(statement, type(last_statement)):
+                    res.append(OutputLine())
+                elif isinstance(statement, Simple):
+                    if statement.statement != last_statement.statement:
+                        res.append(OutputLine())
         res.extend(format_nodes(statement, options=options))
 
         last_statement = statement

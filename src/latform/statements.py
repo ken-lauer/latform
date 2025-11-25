@@ -211,7 +211,16 @@ class Parameter(Statement):
     ]
 
     def annotate(self, named: dict[Token, Statement]):
-        self.target = self.target.with_(role=Role.name_)
+        if isinstance(self.target, Token) and self.target.lower() in {
+            "beginning",
+            "bmad_com",
+            "beam_init",
+            "parameter",
+            "particle_start",  # others?
+        }:
+            self.target = self.target.with_(role=Role.builtin)
+        else:
+            self.target = self.target.with_(role=Role.name_)
         self.name.role = Role.attribute_name
         self.value.annotate(named=named)
 
