@@ -302,14 +302,16 @@ def _is_user_defined_name(names: dict[Token, Element], name: str) -> bool:
 def looks_like_section_break(comment: Token):
     contents = comment.lstrip("!").strip()
     # !
+    # !!!!!!
     if not contents:
         return True
 
     # !******
     # !------
     # !======
-    chars = set(contents)
-    if len(chars) == 1 and contents[0] in {"*", "-", "="}:
+    # !******
+    # !######
+    if contents[0] in {"*", "-", "=", "#"}:
         return True
     return False
 
