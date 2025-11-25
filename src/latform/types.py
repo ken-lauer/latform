@@ -440,10 +440,10 @@ class FormatOptions:
     trailing_comma: bool = False
     statement_comma_threshold_for_multiline: int = 8
     always_multiline_factor: float = 1.5
-    name_case: NameCase = "same"
-    attribute_case: NameCase = "same"
-    kind_case: NameCase = "same"
-    builtin_case: NameCase = "same"
+    name_case: NameCase = "upper"
+    attribute_case: NameCase = "lower"
+    kind_case: NameCase = "lower"
+    builtin_case: NameCase = "lower"
     renames: dict[str, str] = field(default_factory=dict)
 
 
