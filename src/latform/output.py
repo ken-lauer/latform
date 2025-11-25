@@ -274,12 +274,15 @@ def _should_break_for_length(
     )
 
 
-def _is_element_name(elements: dict[str, Element], name: str) -> bool:
-    # elements is assumed to be upper-cased already
+def _is_user_defined_name(names: dict[Token, Element], name: str) -> bool:
+    # In its current form, this could be reduced to `name.upper() in names`
+    # but leaving the logic as a placeholder for futher customization for now
+    #
+    # `names` is assumed to be upper-cased already
     name = name.upper()
 
     # Inheritance requires *full* names for a match
-    if name in elements:
+    if name in names:
         if name in element_key_to_attrs:
             logger.warning("Element inheritance using full element name? %r", name)
             return False
@@ -317,7 +320,7 @@ def _format(
     *,
     indent_level: int = 0,
     outer_comments: Comments | None = None,
-    named_items: dict[str, Element],
+    named_items: dict[Token, Element],
 ) -> list[OutputLine]:
     top_level_indent = indent_level
     lines: list[OutputLine] = []
@@ -370,7 +373,7 @@ def _format(
         if part.role in {Role.kind}:
             # Kind may be misidentified as the upper layer doesn't have this
             # context. Check against known names.
-            if _is_element_name(named_items, part):
+            if _is_user_defined_name(named_items, part):
                 return apply_case(options.name_case)
             else:
                 return apply_case(options.kind_case)
@@ -596,7 +599,7 @@ def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
 def format_statements(
     statements: Sequence[Statement] | Statement,
     options: FormatOptions,
-    named_items: dict[str, Statement] | None = None,
+    named_items: dict[Token, Statement] | None = None,
 ) -> str:
     """Format a statement and return the code string"""
     if isinstance(statements, Statement):
