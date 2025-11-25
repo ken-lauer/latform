@@ -403,9 +403,20 @@ class Files:
             parent_fn = pathlib.Path(filename)
         return self.by_filename
 
+    def get_named_items(self) -> dict[Token, Statement]:
+        from .output import get_named_items
+
+        named_items = {}
+        for statements in self.by_filename.values():
+            new_items = get_named_items(statements)
+            # TODO: potential for linting with redef
+            named_items.update(new_items)
+        return named_items
+
     def reformat(self, options: FormatOptions, *, dest: pathlib.Path | None = None) -> None:
         from .output import format_statements
 
+        named_items = self.get_named_items()
         for fn, statements in self.by_filename.items():
-            formatted = format_statements(statements, options)
+            formatted = format_statements(statements, options, named_items=named_items)
             fn.write_text(formatted)

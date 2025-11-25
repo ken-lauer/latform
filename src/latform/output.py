@@ -16,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Element, Statement
+from .statements import Constant, Element, Line, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -296,13 +296,28 @@ def _is_element_name(elements: dict[str, Element], name: str) -> bool:
     return False
 
 
+def looks_like_section_break(comment: Token):
+    contents = comment.lstrip("!").strip()
+    # !
+    if not contents:
+        return True
+
+    # !******
+    # !------
+    # !======
+    chars = set(contents)
+    if len(chars) == 1 and contents[0] in {"*", "-", "="}:
+        return True
+    return False
+
+
 def _format(
     parts: list[Token],
     options: FormatOptions,
     *,
     indent_level: int = 0,
     outer_comments: Comments | None = None,
-    elements: dict[str, Element],
+    named_items: dict[str, Element],
 ) -> list[OutputLine]:
     top_level_indent = indent_level
     lines: list[OutputLine] = []
@@ -343,6 +358,11 @@ def _format(
 
             line.parts.append(val)
 
+        if part.upper() in named_items:
+            # if part.role != Role.name_:
+            # TODO missing name tag
+            return apply_case(options.name_case)
+
         if part.role in {Role.attribute_name}:
             return apply_case(options.attribute_case)
         if part.role in {Role.name_}:
@@ -350,7 +370,7 @@ def _format(
         if part.role in {Role.kind}:
             # Kind may be misidentified as the upper layer doesn't have this
             # context. Check against known names.
-            if _is_element_name(elements, part):
+            if _is_element_name(named_items, part):
                 return apply_case(options.name_case)
             else:
                 return apply_case(options.kind_case)
@@ -406,6 +426,9 @@ def _format(
         nxt = parts[idx + 1] if idx < len(parts) - 1 else None
 
         if cur.comments.pre:
+            if lines:
+                if looks_like_section_break(cur.comments.pre[0]):
+                    lines.append(OutputLine(parts=[], comment=None))
             for pre_comment in cur.comments.pre:
                 lines.append(
                     OutputLine(indent=indent_level, parts=[f"!{pre_comment}"], comment=None)
@@ -535,6 +558,8 @@ def _format(
         if outer_comments.pre:
             for comment in reversed(outer_comments.pre):
                 lines.insert(0, OutputLine(indent=top_level_indent, parts=[f"!{comment}"]))
+            if looks_like_section_break(outer_comments.pre[0]):
+                lines.insert(0, OutputLine(parts=[], comment=None))
 
     return lines
 
@@ -545,32 +570,47 @@ default_options = FormatOptions()
 def format_nodes(
     nodes: list[OutputNodeType] | Statement,
     options: FormatOptions = default_options,
-    elements: dict[str, Element] | None = None,
+    named_items: dict[Token, Statement] | None = None,
 ) -> list[OutputLine]:
     parts = _flatten_output_nodes(nodes)
     if isinstance(nodes, Statement):
         outer_comments = nodes.comments
     else:
         outer_comments = None
-    return _format(parts, options, outer_comments=outer_comments, elements=elements or {})
+    return _format(parts, options, outer_comments=outer_comments, named_items=named_items or {})
 
 
-def format_statements(statements: Sequence[Statement] | Statement, options: FormatOptions) -> str:
+def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
+    named_items = {}
+    for statement in statements:
+        if isinstance(statement, (Element, Constant)):
+            named_items[statement.name.upper()] = statement
+        elif isinstance(statement, Line):
+            if isinstance(statement.name, CallName):
+                named_items[statement.name.name.upper()] = statement
+            else:
+                named_items[statement.name.upper()] = statement
+    return named_items
+
+
+def format_statements(
+    statements: Sequence[Statement] | Statement,
+    options: FormatOptions,
+    named_items: dict[str, Statement] | None = None,
+) -> str:
     """Format a statement and return the code string"""
     if isinstance(statements, Statement):
         statements = [statements]
 
     res: list[OutputLine] = []
 
-    elements = {}
+    named_items = named_items or get_named_items(statements)
     last_statement = None
     for statement in statements:
         if options.newline_before_new_type:
             if last_statement is not None and not isinstance(statement, type(last_statement)):
                 res.append(OutputLine())
-        if isinstance(statement, Element):
-            elements[statement.name.upper()] = statement
-        res.extend(format_nodes(statement, options=options, elements=elements))
+        res.extend(format_nodes(statement, options=options, named_items=named_items))
 
         last_statement = statement
 
@@ -586,10 +626,10 @@ def format_statements(statements: Sequence[Statement] | Statement, options: Form
 
             # if item.role == Role.name_:
             # % single char, * 0+
-            if "%" in item or "*" in item:
-                print("Saw match", item, item.role)
-            else:
-                print("saw", repr(item))
+            # if "%" in item or "*" in item:
+            #     print("Saw match", item, item.role)
+            # else:
+            #     print("saw", repr(item))
 
             return item
 
