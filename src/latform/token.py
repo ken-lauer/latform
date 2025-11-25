@@ -22,6 +22,7 @@ class Role(str, enum.Enum):
     kind = "kind"
     attribute_name = "attribute_name"
     statement_definition = "statement_definition"
+    filename = "filename"
 
 
 class Token(str):
@@ -97,20 +98,29 @@ class Token(str):
         desc = ", ".join(str(part) for part in parts if part)
         return f"{type(self).__name__}({desc})"
 
+    def annotate(self, named: dict[Token, Any]):
+        if self.upper() in named:
+            self.role = Role.name_
+
     @classmethod
-    def join(cls: type[Token], args: Sequence[Token | Block], delim: Delimiter | None = None):
+    def join(
+        cls: type[Token],
+        args: Sequence[Token | Block],
+        delim: Delimiter | None = None,
+        role: Role | None = None,
+    ):
         if not args:
-            return cls("")
+            return cls("", role=role)
 
         from .types import _flatten_blocks
 
         strs = _flatten_blocks(list(args))
         if not strs:
-            return cls("")
+            return cls("", role=role)
 
         str0, *_ = strs
         if not str0.loc:
-            return cls("".join(str(s) for s in strs))
+            return cls("".join(str(s) for s in strs), role=role)
 
         result_parts = [str(str0)]
 
@@ -148,6 +158,7 @@ class Token(str):
             "".join(result_parts),
             loc=Location.from_items(strs),
             comments=str0.comments,
+            role=role,
         )
 
     def quoted(self) -> Self:

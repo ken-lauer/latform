@@ -21,6 +21,9 @@ from .util import comma_delimit
 class Statement:
     comments: Comments = field(default_factory=Comments)
 
+    def annotate(self, named: dict[Token, Statement]):
+        raise NotImplementedError()
+
     def to_output_nodes(self):
         raise NotImplementedError()
 
@@ -32,6 +35,9 @@ class Statement:
 
 @dataclass
 class Empty(Statement):
+    def annotate(self, named: dict[Token, Statement]):
+        pass
+
     def to_output_nodes(self):
         return []
 
@@ -64,6 +70,25 @@ class Simple(Statement):
     )
     statement: Token
     arguments: list[Attribute | Token]
+
+    def annotate(self, named: dict[Token, Statement]):
+        self.statement = self.statement.with_(role=Role.builtin)
+        if self.statement.lower() == "call":
+            try:
+                filename = self.get_named_attribute("filename", partial_match=True)
+            except KeyError:
+                pass
+            else:
+                if filename.value is None:
+                    # Empty filename?
+                    pass
+                elif isinstance(filename.value, Token):
+                    filename.value.role = Role.filename
+                elif all(isinstance(arg, Token) for arg in filename.value.items):
+                    filename.value = Token.join(filename.value.items, role=Role.filename)
+        else:
+            for arg in self.arguments:
+                arg.annotate(named=named)
 
     def get_named_attribute(self, name: Token | str, *, partial_match: bool = True) -> Attribute:
         for arg in self.arguments:
@@ -102,6 +127,10 @@ class Constant(Statement):
     value: Seq | Token
     redef: bool = False
 
+    def annotate(self, named: dict[Token, Statement]):
+        self.name = self.name.with_(role=Role.name_)
+        self.value.annotate(named=named)
+
     def to_output_nodes(self):
         nodes = [self.name.with_(role=Role.name_), STATEMENT_NAME_EQUALS, self.value]
         if self.redef:
@@ -113,6 +142,10 @@ class Constant(Statement):
 class Assignment(Statement):
     name: Seq | Token
     value: Seq | Token
+
+    def annotate(self, named: dict[Token, Statement]):
+        self.name = self.name.with_(role=Role.name_)
+        self.value.annotate(named=named)
 
     def to_output_nodes(self):
         return [self.name.with_(role=Role.name_), STATEMENT_NAME_EQUALS, self.value]
@@ -177,11 +210,16 @@ class Parameter(Statement):
         BmadParameter("parameter", "taylor_order", type=int, comment="Default: 3"),
     ]
 
+    def annotate(self, named: dict[Token, Statement]):
+        self.target = self.target.with_(role=Role.name_)
+        self.name.role = Role.attribute_name
+        self.value.annotate(named=named)
+
     def to_output_nodes(self):
         return [
-            self.target.with_(role=Role.name_),
+            self.target,
             Delimiter("["),
-            self.name.with_(role=Role.attribute_name),
+            self.name,
             Delimiter("]"),
             STATEMENT_NAME_EQUALS,
             self.value,
@@ -198,6 +236,10 @@ class Line(Statement):
     name: Token | CallName
     elements: Seq
     multipass: bool = False
+
+    def annotate(self, named: dict[Token, Statement]):
+        self.name = self.name.with_(role=Role.name_)
+        self.elements.annotate(named=named)
 
     def to_output_nodes(self):
         if self.multipass:
@@ -217,9 +259,12 @@ class ElementList(Statement):
     name: Token
     elements: Seq
 
+    def annotate(self, named: dict[Token, Statement]):
+        self.name = self.name.with_(role=Role.name_)
+
     def to_output_nodes(self):
         return [
-            self.name.with_(role=Role.name_),
+            self.name,
             STATEMENT_NAME_COLON,
             Token("list", role=Role.kind),
             STATEMENT_NAME_EQUALS,
@@ -234,23 +279,34 @@ class Element(Statement):
     ele_list: Seq | None = None  # ele_name: keyword = { ele_list }
     attributes: list[Attribute] = field(default_factory=list)
 
-    def to_output_nodes(self):
-        attribs = [attrib.annotate(self.keyword) for attrib in self.attributes]
+    def annotate(self, named: dict[Token, Statement]):
+        self.name.role = Role.name_
 
+        if self.keyword.upper() in named:
+            self.keyword.role = Role.name_
+        else:
+            self.keyword.role = Role.kind
+
+        if self.ele_list:
+            self.ele_list.annotate(named=named)
+        for attr in self.attributes:
+            attr.annotate(named=named)
+
+    def to_output_nodes(self):
         if self.ele_list is not None:
             return [
-                self.name.with_(role=Role.name_),
+                self.name,
                 STATEMENT_NAME_COLON,
-                self.keyword.with_(role=Role.kind),
+                self.keyword,
                 STATEMENT_NAME_EQUALS,
                 self.ele_list,
                 COMMA,
-                *comma_delimit(attribs),
+                *comma_delimit(self.attributes),
             ]
         return [
-            self.name.with_(role=Role.name_),
+            self.name,
             STATEMENT_NAME_COLON,
-            *comma_delimit([self.keyword.with_(role=Role.kind), *attribs]),
+            *comma_delimit([self.keyword, *self.attributes]),
         ]
 
 

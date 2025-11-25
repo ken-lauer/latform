@@ -16,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Constant, Element, Line, Statement
+from .statements import Element, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -322,7 +322,6 @@ def _format(
     *,
     indent_level: int = 0,
     outer_comments: Comments | None = None,
-    named_items: dict[Token, Element],
 ) -> list[OutputLine]:
     top_level_indent = indent_level
     lines: list[OutputLine] = []
@@ -363,26 +362,21 @@ def _format(
 
             line.parts.append(val)
 
-        if part.upper() in named_items:
-            # if part.role != Role.name_:
-            # TODO missing name tag
-            return apply_case(options.name_case)
+        if part.role in {Role.filename}:
+            # Always keep the same case
+            line.parts.append(part)
+            return
 
-        if part.role in {Role.attribute_name}:
-            return apply_case(options.attribute_case)
-        if part.role in {Role.name_}:
-            return apply_case(options.name_case)
-        if part.role in {Role.kind}:
-            # Kind may be misidentified as the upper layer doesn't have this
-            # context. Check against known names.
-            if _is_user_defined_name(named_items, part):
-                return apply_case(options.name_case)
-            else:
-                return apply_case(options.kind_case)
-        if part.role in {Role.builtin}:
-            return apply_case(options.builtin_case)
+        same: NameCase = "same"
+        case = {
+            Role.attribute_name: options.attribute_case,
+            Role.name_: options.name_case,
+            Role.kind: options.kind_case,
+            Role.builtin: options.builtin_case,
+            None: same,
+        }.get(part.role, same)
 
-        line.parts.append(part)
+        apply_case(case)
 
     def newline(lookahead: bool = True, reason: str = ""):
         nonlocal idx
@@ -575,33 +569,18 @@ default_options = FormatOptions()
 def format_nodes(
     nodes: list[OutputNodeType] | Statement,
     options: FormatOptions = default_options,
-    named_items: dict[Token, Statement] | None = None,
 ) -> list[OutputLine]:
     parts = _flatten_output_nodes(nodes)
     if isinstance(nodes, Statement):
         outer_comments = nodes.comments
     else:
         outer_comments = None
-    return _format(parts, options, outer_comments=outer_comments, named_items=named_items or {})
-
-
-def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
-    named_items = {}
-    for statement in statements:
-        if isinstance(statement, (Element, Constant)):
-            named_items[statement.name.upper()] = statement
-        elif isinstance(statement, Line):
-            if isinstance(statement.name, CallName):
-                named_items[statement.name.name.upper()] = statement
-            else:
-                named_items[statement.name.upper()] = statement
-    return named_items
+    return _format(parts, options, outer_comments=outer_comments)
 
 
 def format_statements(
     statements: Sequence[Statement] | Statement,
     options: FormatOptions,
-    named_items: dict[Token, Statement] | None = None,
 ) -> str:
     """Format a statement and return the code string"""
     if isinstance(statements, Statement):
@@ -609,13 +588,12 @@ def format_statements(
 
     res: list[OutputLine] = []
 
-    named_items = named_items or get_named_items(statements)
     last_statement = None
     for statement in statements:
         if options.newline_before_new_type:
             if last_statement is not None and not isinstance(statement, type(last_statement)):
                 res.append(OutputLine())
-        res.extend(format_nodes(statement, options=options, named_items=named_items))
+        res.extend(format_nodes(statement, options=options))
 
         last_statement = statement
 

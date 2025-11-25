@@ -16,6 +16,7 @@ except ImportError:
 
 if typing.TYPE_CHECKING:
     from .output import FormatOptions
+    from .statements import Statement
 
 
 def _flatten_blocks(
@@ -75,6 +76,10 @@ class Seq:
             items=list(items),
             delimiter=expected_delimiter,
         )
+
+    def annotate(self, named: dict[Token, typing.Any]):
+        for item in self.items:
+            item.annotate(named=named)
 
     @classmethod
     def from_item(cls: type[Self], item: TokenizerItem) -> Self | Seq | Token:
@@ -343,12 +348,14 @@ class Attribute:
             value=self.value,
         )
 
-    def annotate(self, ele_keyword: str):
-        # try:
-        #     _ = self.get_info(ele_keyword)
-        # except KeyError:
-        #     return self
-        return self.with_(role=Role.attribute_name)
+    def annotate(self, named: dict[Token, Statement]):
+        match self.name:
+            case Token():
+                self.name.role = Role.attribute_name
+            case CallName():
+                self.name.name.role = Role.attribute_name
+        if self.value:
+            self.value.annotate(named=named)
 
     def get_info(self, ele_keyword: str):
         from .attrs import get_attribute

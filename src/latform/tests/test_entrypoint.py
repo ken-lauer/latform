@@ -52,9 +52,22 @@ def test_formatting_output_file(input_filename: pathlib.Path, tmp_path: pathlib.
 
 @lattice_file
 def test_in_place_modification(input_filename: pathlib.Path):
-    input_filename = pathlib.Path(input_filename)
     original_content = input_filename.read_text()
     main(filename=input_filename, in_place=True)
+
+    assert input_filename.exists()
+    new_content = input_filename.read_text()
+    assert len(new_content) > 0
+    assert new_content != original_content
+
+
+@lattice_file
+def test_in_place_modification_recursive(lattice_file: pathlib.Path, tmp_path: pathlib.Path):
+    shutil.copytree(lattice_file.parent, tmp_path, dirs_exist_ok=True)
+
+    input_filename = tmp_path / lattice_file.name
+    original_content = input_filename.read_text()
+    main(filename=input_filename, in_place=True, recursive=True)
 
     assert input_filename.exists()
     new_content = input_filename.read_text()

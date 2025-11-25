@@ -355,19 +355,42 @@ def parse_items(items: list[TokenizerItem]):
     raise ValueError("Unhandled - unknown")
 
 
-def parse(contents: str, filename: pathlib.Path | str = "unset") -> Sequence[Statement]:
+def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
+    named_items = {}
+    for statement in statements:
+        if isinstance(statement, (Element, Constant)):
+            named_items[statement.name.upper()] = statement
+        elif isinstance(statement, Line):
+            if isinstance(statement.name, CallName):
+                named_items[statement.name.name.upper()] = statement
+            else:
+                named_items[statement.name.upper()] = statement
+    return named_items
+
+
+def parse(
+    contents: str, filename: pathlib.Path | str = "unset", annotate: bool = True
+) -> Sequence[Statement]:
     blocks = tokenize(contents, filename)
-    return [block.parse() for block in blocks]
+    res = [block.parse() for block in blocks]
+    if annotate:
+        named = get_named_items(res)
+        for st in res:
+            st.annotate(named=named)
+
+    return res
 
 
-def parse_file(filename: pathlib.Path | str) -> Sequence[Statement]:
+def parse_file(filename: pathlib.Path | str, annotate: bool = True) -> Sequence[Statement]:
     contents = pathlib.Path(filename).read_text()
-    return parse(contents=contents, filename=filename)
+    return parse(contents=contents, filename=filename, annotate=annotate)
 
 
-def parse_file_recursive(filename: pathlib.Path | str) -> Files:
+def parse_file_recursive(filename: pathlib.Path | str, annotate: bool = True) -> Files:
     files = Files(main=pathlib.Path(filename))
     files.parse()
+    if annotate:
+        files.annotate()
     return files
 
 
@@ -391,7 +414,7 @@ class Files:
             # total_lines += num_lines
             # print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)", file=sys.stderr)
 
-            statements = list(parse_file(parent_fn))
+            statements = list(parse_file(parent_fn, annotate=False))
             self.by_filename[parent_fn] = statements
             for st in statements:
                 if isinstance(st, Simple) and st.statement == "call":
@@ -401,11 +424,16 @@ class Files:
                     self.local_file_to_source_filename[fn] = sub_filename
                     self.stack.append(fn)
             parent_fn = pathlib.Path(filename)
+
         return self.by_filename
 
-    def get_named_items(self) -> dict[Token, Statement]:
-        from .output import get_named_items
+    def annotate(self):
+        named = self.get_named_items()
+        for statements in self.by_filename.values():
+            for st in statements:
+                st.annotate(named=named)
 
+    def get_named_items(self) -> dict[Token, Statement]:
         named_items = {}
         for statements in self.by_filename.values():
             new_items = get_named_items(statements)
@@ -416,7 +444,6 @@ class Files:
     def reformat(self, options: FormatOptions, *, dest: pathlib.Path | None = None) -> None:
         from .output import format_statements
 
-        named_items = self.get_named_items()
         for fn, statements in self.by_filename.items():
-            formatted = format_statements(statements, options, named_items=named_items)
+            formatted = format_statements(statements, options)
             fn.write_text(formatted)
