@@ -299,11 +299,11 @@ def _is_user_defined_name(names: dict[Token, Element], name: str) -> bool:
     return False
 
 
-def looks_like_section_break(comment: Token):
+def looks_like_section_break(comment: Token, empty_line_is_break: bool = False):
     contents = comment.removeprefix("!").strip()
     # !
     if not contents:
-        return True
+        return empty_line_is_break
 
     # 3 or more characters in a row all of the same type make for a section break:
     # !******
@@ -436,12 +436,12 @@ def _format(
         if lines and lines[-1].parts:
             if looks_like_section_break(pre[0]):
                 res.append(OutputLine(parts=[], comment=None))
-            while pre and looks_like_section_break(pre[0]):
-                res.append(OutputLine(indent=indent_level, parts=[section_break], comment=None))
-                pre = pre[1:]
 
-        for comment in pre:
-            res.append(OutputLine(indent=indent_level, parts=[f"!{comment}"], comment=None))
+        for idx, comment in enumerate(pre):
+            if looks_like_section_break(comment, empty_line_is_break=idx == 0):
+                res.append(OutputLine(indent=indent_level, parts=[section_break], comment=None))
+            else:
+                res.append(OutputLine(indent=indent_level, parts=[f"!{comment}"], comment=None))
         return res
 
     while idx < len(parts):
