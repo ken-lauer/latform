@@ -451,6 +451,8 @@ class FormatOptions:
     attribute_case: NameCase = "lower"
     kind_case: NameCase = "lower"
     builtin_case: NameCase = "lower"
+    section_break_character: str = "*"
+    section_break_width: int | None = None
     renames: dict[str, str] = field(default_factory=dict)
 
 

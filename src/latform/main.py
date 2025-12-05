@@ -104,6 +104,8 @@ def main(
     attribute_case: NameCase = "same",
     kind_case: NameCase = "same",
     builtin_case: NameCase = "same",
+    section_break_character: str = "*",
+    section_break_width: int = 0,
     output: pathlib.Path | str | None = None,
     diff: bool = False,
     rename_file: pathlib.Path | str | None = None,
@@ -132,6 +134,8 @@ def main(
         attribute_case=attribute_case,
         kind_case=kind_case,
         builtin_case=builtin_case,
+        section_break_character=section_break_character,
+        section_break_width=section_break_width,
         renames=renames,
     )
     if recursive:
@@ -312,11 +316,25 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--section-break-character",
+        type=str,
+        default="*",
+        help="Section break character.  By default --line-length characters, unless overridden by --section-break-width",
+    )
+
+    parser.add_argument(
+        "--section-break-width",
+        type=int,
+        default=None,
+        help="Section break line width.  By default --line-length characters",
+    )
+
+    parser.add_argument(
         "--log",
         "-L",
         dest="log_level",
         default="INFO",
-        type=str,
+        choices=("DEBUG", "INFO", "WARNING", "CRITICAL"),
         help="Python logging level (e.g. DEBUG, INFO, WARNING)",
     )
 

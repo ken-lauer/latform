@@ -300,20 +300,26 @@ def _is_user_defined_name(names: dict[Token, Element], name: str) -> bool:
 
 
 def looks_like_section_break(comment: Token):
-    contents = comment.lstrip("!").strip()
+    contents = comment.removeprefix("!").strip()
     # !
-    # !!!!!!
     if not contents:
         return True
 
+    # 3 or more characters in a row all of the same type make for a section break:
     # !******
     # !------
+    # !______
     # !======
     # !******
     # !######
-    if contents[0] in {"*", "-", "=", "#"}:
-        return True
-    return False
+    # !!!!!!!
+
+    chars = set(contents)
+    if len(chars) > 1 or len(contents) < 3:
+        return False
+
+    char = list(chars)[0]
+    return char in {"*", "-", "_", "=", "#", "!"}
 
 
 def _format(
@@ -419,19 +425,33 @@ def _format(
             return False
         return True
 
+    section_break_width = options.section_break_width or options.line_length
+    section_break = "!" + options.section_break_character * section_break_width
+
+    def pre_comment_rewrite_section_break(pre: list[Token], indent_level: int) -> list[OutputLine]:
+        if not pre:
+            return []
+
+        res = []
+        if lines and lines[-1].parts:
+            if looks_like_section_break(pre[0]):
+                res.append(OutputLine(parts=[], comment=None))
+            while pre and looks_like_section_break(pre[0]):
+                res.append(OutputLine(indent=indent_level, parts=[section_break], comment=None))
+                pre = pre[1:]
+
+        for comment in pre:
+            res.append(OutputLine(indent=indent_level, parts=[f"!{comment}"], comment=None))
+        return res
+
     while idx < len(parts):
         cur = parts[idx]
         prev = parts[idx - 1] if idx > 0 else None
         nxt = parts[idx + 1] if idx < len(parts) - 1 else None
 
         if cur.comments.pre:
-            if lines:
-                if looks_like_section_break(cur.comments.pre[0]):
-                    lines.append(OutputLine(parts=[], comment=None))
-            for pre_comment in cur.comments.pre:
-                lines.append(
-                    OutputLine(indent=indent_level, parts=[f"!{pre_comment}"], comment=None)
-                )
+            pre_comments = list(cur.comments.pre)
+            lines.extend(pre_comment_rewrite_section_break(pre_comments, indent_level=indent_level))
 
         is_opening = False
         is_closing = False
@@ -555,10 +575,10 @@ def _format(
                 lines[0].comment = f"!{outer_comments.inline}"
 
         if outer_comments.pre:
-            for comment in reversed(outer_comments.pre):
-                lines.insert(0, OutputLine(indent=top_level_indent, parts=[f"!{comment}"]))
-            if looks_like_section_break(outer_comments.pre[0]):
-                lines.insert(0, OutputLine(parts=[], comment=None))
+            for line in reversed(
+                pre_comment_rewrite_section_break(outer_comments.pre, indent_level=top_level_indent)
+            ):
+                lines.insert(0, line)
 
     return lines
 
@@ -588,16 +608,28 @@ def format_statements(
 
     res: list[OutputLine] = []
 
+    def maybe_add_blank_line():
+        if res and not res[-1].parts:
+            return
+        res.append(OutputLine())
+
     last_statement = None
     for statement in statements:
         if options.newline_before_new_type:
             if last_statement is not None:
                 if not isinstance(statement, type(last_statement)):
-                    res.append(OutputLine())
-                elif isinstance(statement, Simple):
-                    if statement.statement != last_statement.statement:
-                        res.append(OutputLine())
-        res.extend(format_nodes(statement, options=options))
+                    maybe_add_blank_line()
+                elif (
+                    isinstance(statement, Simple)
+                    and statement.statement != last_statement.statement
+                ):
+                    maybe_add_blank_line()
+
+        for line in format_nodes(statement, options=options):
+            if not line.parts and not line.comment:
+                maybe_add_blank_line()
+            else:
+                res.append(line)
 
         last_statement = statement
 
@@ -622,6 +654,9 @@ def format_statements(
 
         for line in res:
             line.parts = [apply_rename(part) for part in line.parts]
+
+    while res and not res[0].parts and not res[0].comment:
+        res = res[1:]
 
     return "\n".join(line.render(options) for line in res)
 
