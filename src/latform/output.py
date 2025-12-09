@@ -63,12 +63,11 @@ def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
         # Found in foo()%bar parameter names
         return False, "token starts with % (parameter name)"
 
-    # No space around = with opening brackets
-    if (prev == "=" and cur in open_brackets) or (cur == "=" and nxt in open_brackets):
-        return False, "no space around = with opening brackets"
+    if prev == "=" or cur == "=":
+        return False, "no space around ="
 
     # No space after opening brackets (except before =)
-    if prev in no_space_after and cur != "=":
+    if prev in no_space_after:
         return False, f"no space after opening bracket '{prev}'"
 
     # No space before closing brackets, commas, colons, semicolons
@@ -83,16 +82,8 @@ def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
     if cur == "=" and nxt in open_brackets:
         return True, "space before = when next is opening bracket"
 
-    # Space around = in other cases
-    if prev == "=":
-        return True, "space after ="
-    if cur == "=":
-        return True, "space before ="
-
     # Separate addition/subtraction from rest of expressions
-    if prev == "+" or cur == "+":
-        return True, "space around +"
-    if prev == "-":
+    if prev in {"-", "+"}:
         prev_prev = parts[idx - 2] if idx >= 2 else None
         if prev_prev in open_brackets or prev_prev in {"=", ":"}:
             return False, "no space when minus looks like unary negation"
@@ -105,7 +96,7 @@ def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
         return False, "no space around *"
     if cur == "^":
         return False, "no space around caret"
-    if cur == "-":
+    if cur in {"-", "+"}:
         if prev in close_brackets:
             return True, "space before minus:- after closing bracket"
         if prev in open_brackets or prev in {"=", ":"}:
