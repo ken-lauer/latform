@@ -192,7 +192,7 @@ def main(
     if diff:
         to_write = get_diff(contents, formatted, fromfile=filename, tofile=filename)
     else:
-        to_write = format_statements(statements, options)
+        to_write = formatted
 
     if dest_fn:
         pathlib.Path(dest_fn).write_text(to_write)
@@ -201,11 +201,6 @@ def main(
 
 
 def _build_argparser() -> argparse.ArgumentParser:
-    """
-    This function builds an argument parser for your command-line application.
-
-    For help, see the :mod:`argparse` documentation.
-    """
     parser = argparse.ArgumentParser(
         prog="latform",
         description=DESCRIPTION,

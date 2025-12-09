@@ -403,34 +403,45 @@ class Files:
     stack: list[tuple[pathlib.Path, pathlib.Path]] = field(default_factory=list)
     by_filename: dict[pathlib.Path, list[Statement]] = field(default_factory=dict)
     local_file_to_source_filename: dict[pathlib.Path, str] = field(default_factory=dict)
+    filename_calls: dict[pathlib.Path, list[pathlib.Path]] = field(default_factory=dict)
+
+    def _add_file_by_statement(self, statement_filename: pathlib.Path, st: Simple):
+        assert isinstance(st, Simple) and st.statement == "call"
+        sub_filename, fn = get_call_filename(
+            st, caller_directory=statement_filename.parent, expand_vars=True
+        )
+        self.local_file_to_source_filename[fn] = sub_filename
+        logger.debug(f"Adding {sub_filename} relative to {statement_filename.parent} which is {fn}")
+        self.stack.append((fn, statement_filename.parent))
+        self.filename_calls.setdefault(statement_filename, [])
+        self.filename_calls[statement_filename].append(fn)
+
+    @property
+    def call_graph_edges(self):
+        graph = []
+        for path_fn, calls in self.filename_calls.items():
+            fn = self.local_file_to_source_filename[path_fn]
+            for call_path in calls:
+                call_fn = self.local_file_to_source_filename[call_path]
+                graph.append((fn, call_fn))
+        return graph
 
     def parse(self):
         main = self.main.resolve()
 
         if not self.stack:
             self.stack = [(main, main.parent)]
+            self.local_file_to_source_filename[main] = main.name
 
-        # total_lines = 0
         while self.stack:
             filename, parent_dir = self.stack.pop()
-            # num_lines = len(filename.read_text().splitlines())
-            # total_lines += num_lines
-            # print(f"Parsing {filename} ({num_lines} / {total_lines} total lines)", file=sys.stderr)
 
             filename = parent_dir / filename
-
             statements = list(parse_file(filename, annotate=False))
             self.by_filename[filename] = statements
             for st in statements:
                 if isinstance(st, Simple) and st.statement == "call":
-                    sub_filename, fn = get_call_filename(
-                        st, caller_directory=filename.parent, expand_vars=True
-                    )
-                    self.local_file_to_source_filename[fn] = sub_filename
-                    logger.debug(
-                        f"Adding {sub_filename} relative to {filename.parent} which is {fn}"
-                    )
-                    self.stack.append((fn, filename.parent))
+                    self._add_file_by_statement(statement_filename=filename, st=st)
 
         return self.by_filename
 

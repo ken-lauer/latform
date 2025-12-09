@@ -38,6 +38,7 @@ file = "LICENSE"
 
 [project.scripts]
 "latform" = "latform.main:cli_main"
+"latform-graph" = "latform.graph:cli_main"
 
 [tool.ruff]
 # Reference and defaults: https://docs.astral.sh/ruff/configuration/
@@ -63,8 +64,8 @@ ignore = [
 
 [tool.pytest]
 addopts = ["--cov=src/"]
-log_cli_level = "info"
-log_level = "debug"
+log_cli_level = "INFO"
+log_level = "DEBUG"
 testpaths = ["src/latform/tests"]
 
 [tool.setuptools_scm]
