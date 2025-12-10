@@ -356,7 +356,7 @@ def _format(
     top_level_length = _length_top_level(parts)
 
     if commas > options.statement_comma_threshold_for_multiline or top_level_length > (
-        options.line_length * options.always_multiline_factor
+        options.max_line_length
     ):
         block_has_newlines_stack.append(True)
     else:
@@ -367,7 +367,7 @@ def _format(
         logger.debug(
             f"{top_level_multiline=}:"
             f"\n* {commas=} vs {options.statement_comma_threshold_for_multiline=}, "
-            f"\n* {top_level_length=} vs {options.line_length=} * {options.always_multiline_factor=}"
+            f"\n* {top_level_length=} vs {options.line_length=} * {options.max_line_length=}"
         )
 
     line = OutputLine(indent=indent_level, parts=[])
@@ -417,7 +417,7 @@ def _format(
             indent_level += 1
 
         if reason and LATFORM_OUTPUT_DEBUG:
-            logger.debug(f"{idx}: {prev}, {cur}, {nxt}: break {reason}")
+            logger.debug(f"Line break at {idx}: {prev}, {cur}, {nxt}: {reason}")
 
         return OutputLine(indent=indent_level, parts=[])
 
@@ -478,6 +478,13 @@ def _format(
             elif level_change > 0:
                 is_opening = True
 
+        if cur in {"[", "]"}:
+            # Special case for square brackets: []
+            # * They are technically nesting with how latform tokens work
+            # * But we never want to break inside these brackets, so leave them alone
+            is_opening = False
+            is_closing = False
+
         has_comments = is_opening and _output_node_block_contains_comments(parts, idx)
         would_break_inside = has_comments or (
             is_opening
@@ -492,10 +499,7 @@ def _format(
                 add_part_to_line(SPACE)
 
             if LATFORM_OUTPUT_DEBUG:
-                if spc:
-                    logger.debug("Adding %d spaces before %r: %s", spc, cur, reason)
-                else:
-                    logger.debug("No space before %r: %s", cur, reason)
+                logger.debug("Adding %d space(s) before %r: %s", spc, cur, reason)
 
         if is_closing:
             had_newlines = block_has_newlines_stack.pop() if block_has_newlines_stack else False

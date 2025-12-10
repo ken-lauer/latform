@@ -439,6 +439,7 @@ NameCase = Literal["upper", "lower", "same"]
 @dataclass()
 class FormatOptions:
     line_length: int = 100
+    max_line_length: int = 130
     compact: bool = False
     indent_size: int = 2
     indent_char: str = " "
@@ -446,7 +447,6 @@ class FormatOptions:
     newline_before_new_type: bool = False
     trailing_comma: bool = False
     statement_comma_threshold_for_multiline: int = 8
-    always_multiline_factor: float = 1.5
     name_case: NameCase = "upper"
     attribute_case: NameCase = "lower"
     kind_case: NameCase = "lower"

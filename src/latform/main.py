@@ -12,6 +12,7 @@ import sys
 
 import rich
 
+from . import output as output_mod
 from .lint import lint_statement
 from .output import format_statements
 from .parser import parse, parse_file_recursive
@@ -97,6 +98,7 @@ def main(
     filename: str | pathlib.Path,
     verbose: int = 0,
     line_length: int = 100,
+    max_line_length: int | None = 0,
     compact: bool = False,
     recursive: bool = False,
     in_place: bool = False,
@@ -121,10 +123,16 @@ def main(
         contents = filename.read_text()
         is_stdin = False
 
+    if verbose >= 4:
+        output_mod.LATFORM_OUTPUT_DEBUG = True
+        logger = logging.getLogger("latform")
+        logger.setLevel("DEBUG")
+
     renames = load_renames(rename_file, raw_renames, renames)
 
     options = FormatOptions(
         line_length=line_length,
+        max_line_length=max_line_length or int(line_length * 1.3),
         compact=compact,
         indent_size=2,
         indent_char=" ",
@@ -284,7 +292,15 @@ def _build_argparser() -> argparse.ArgumentParser:
         "-l",
         type=int,
         default=100,
-        help="Approximate max line length",
+        help="Desired line length. Some lines may exceed this (see also --max-line-length).",
+    )
+
+    parser.add_argument(
+        "--max-line-length",
+        "-m",
+        type=int,
+        default=None,
+        help="Force lines over this length to be multilined. Defaults to 130% of line_length.",
     )
 
     parser.add_argument(
