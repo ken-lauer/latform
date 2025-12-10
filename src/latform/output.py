@@ -6,7 +6,6 @@ import pathlib
 import re
 from typing import Sequence
 
-from .attrs import element_key_to_attrs
 from .const import (
     CLOSE_TO_OPEN,
     COMMA,
@@ -17,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Element, Simple, Statement
+from .statements import Line, Simple, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -289,31 +288,6 @@ def _should_break_for_length(
     )
 
 
-def _is_user_defined_name(names: dict[Token, Element], name: str) -> bool:
-    # In its current form, this could be reduced to `name.upper() in names`
-    # but leaving the logic as a placeholder for futher customization for now
-    #
-    # `names` is assumed to be upper-cased already
-    name = name.upper()
-
-    # Inheritance requires *full* names for a match
-    if name in names:
-        if name in element_key_to_attrs:
-            logger.warning("Element inheritance using full element name? %r", name)
-            return False
-
-        return True
-
-    if name in element_key_to_attrs:
-        # It's the full name of an element kind
-        return False
-    # for key in element_key_to_attrs:
-    #     if key.startswith(name):
-    #         return False
-
-    return False
-
-
 def looks_like_section_break(comment: Token, empty_line_is_break: bool = False):
     contents = comment.removeprefix("!").strip()
     # !
@@ -338,7 +312,7 @@ def looks_like_section_break(comment: Token, empty_line_is_break: bool = False):
 
 
 def pre_comment_rewrite_section_break(
-    pre: list[Token], indent_level: int, lines: list[OutputLine], section_break: Token
+    pre: list[Token], indent_level: int, lines: list[OutputLine], section_break: str
 ) -> list[OutputLine]:
     if not pre:
         return []
@@ -657,7 +631,14 @@ def format_statements(
     for statement in statements:
         if options.newline_before_new_type:
             if last_statement is not None:
-                if not isinstance(statement, type(last_statement)):
+                if (
+                    options.newline_between_lines
+                    and isinstance(statement, Line)
+                    and isinstance(last_statement, Line)
+                ):
+                    maybe_add_blank_line()
+
+                elif not isinstance(statement, type(last_statement)):
                     maybe_add_blank_line()
                 elif (
                     isinstance(statement, Simple)
