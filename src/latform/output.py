@@ -337,6 +337,31 @@ def looks_like_section_break(comment: Token, empty_line_is_break: bool = False):
     return char in {"*", "-", "_", "=", "#", "!"}
 
 
+def pre_comment_rewrite_section_break(
+    pre: list[Token], indent_level: int, lines: list[OutputLine], section_break: Token
+) -> list[OutputLine]:
+    if not pre:
+        return []
+
+    res = []
+    if lines and lines[-1].parts:
+        if looks_like_section_break(pre[0]):
+            res.append(OutputLine(parts=[], comment=None))
+
+    have_section_break = False
+    for idx, comment in enumerate(pre):
+        if looks_like_section_break(comment, empty_line_is_break=idx == 0):
+            res.append(OutputLine(indent=indent_level, parts=[section_break], comment=None))
+            have_section_break = True
+        else:
+            res.append(OutputLine(indent=indent_level, parts=[f"!{comment}"], comment=None))
+
+    if have_section_break and len(pre) > 1:
+        res.append(OutputLine(parts=[], comment=None))
+
+    return res
+
+
 def _format(
     parts: list[Token],
     options: FormatOptions,
@@ -443,22 +468,6 @@ def _format(
     section_break_width = options.section_break_width or options.line_length
     section_break = "!" + options.section_break_character * section_break_width
 
-    def pre_comment_rewrite_section_break(pre: list[Token], indent_level: int) -> list[OutputLine]:
-        if not pre:
-            return []
-
-        res = []
-        if lines and lines[-1].parts:
-            if looks_like_section_break(pre[0]):
-                res.append(OutputLine(parts=[], comment=None))
-
-        for idx, comment in enumerate(pre):
-            if looks_like_section_break(comment, empty_line_is_break=idx == 0):
-                res.append(OutputLine(indent=indent_level, parts=[section_break], comment=None))
-            else:
-                res.append(OutputLine(indent=indent_level, parts=[f"!{comment}"], comment=None))
-        return res
-
     while idx < len(parts):
         cur = parts[idx]
         prev = parts[idx - 1] if idx > 0 else None
@@ -466,7 +475,14 @@ def _format(
 
         if cur.comments.pre:
             pre_comments = list(cur.comments.pre)
-            lines.extend(pre_comment_rewrite_section_break(pre_comments, indent_level=indent_level))
+            lines.extend(
+                pre_comment_rewrite_section_break(
+                    pre_comments,
+                    indent_level=indent_level,
+                    lines=lines,
+                    section_break=section_break,
+                )
+            )
 
         is_opening = False
         is_closing = False
@@ -595,7 +611,12 @@ def _format(
 
         if outer_comments.pre:
             for line in reversed(
-                pre_comment_rewrite_section_break(outer_comments.pre, indent_level=top_level_indent)
+                pre_comment_rewrite_section_break(
+                    outer_comments.pre,
+                    indent_level=top_level_indent,
+                    lines=lines,
+                    section_break=section_break,
+                )
             ):
                 lines.insert(0, line)
 
