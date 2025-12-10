@@ -70,3 +70,5 @@ testpaths = ["src/latform/tests"]
 
 [tool.setuptools_scm]
 version_file = "src/latform/_version.py"
+# For publishing to testpypi (no funny local dev+hash suffix)
+local_scheme = "no-local-version"
