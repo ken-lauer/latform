@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import re
 from typing import Sequence
 
 from .attrs import element_key_to_attrs
@@ -41,81 +42,104 @@ no_space_after = open_brackets | frozenset(":")
 LATFORM_OUTPUT_DEBUG = os.environ.get("LATFORM_OUTPUT_DEBUG", "") == "1"
 
 
-def _needs_space_before(parts: list[Token], idx: int) -> tuple[bool, str]:
+RE_ES25_17E3 = re.compile(r"^[+-]?\d\.\d{17}E[+-]\d{3}$")
+
+
+def _is_es25_17e3(tok: Token) -> bool:
+    """Check if a token matches the Fortran format ES25.17E3."""
+
+    # Example: 4.24223267191081721E+000
+    # *Does not* include leading +-, as that's a separate token.
+    #
+    # Regex breakdown:
+    # ^            Start of string
+    # \d           Exactly one digit before the dot
+    # \.           Decimal point
+    # \d{17}       Exactly 17 digits after the dot
+    # E            Exponent indicator (capital E)
+    # [+-]         Sign of the exponent (required by format)
+    # \d{3}        Exactly 3 digits for the exponent
+    # $            End of string
+    return bool(RE_ES25_17E3.match(tok))
+
+
+def _num_spaces_before(parts: list[Token], idx: int) -> tuple[int, str]:
     cur = parts[idx]
     prev = parts[idx - 1] if idx > 0 else None
     nxt = parts[idx + 1] if idx < len(parts) - 1 else None
 
     if not prev:
-        return False, "no previous token"
+        return 0, "no previous token"
 
     if cur == ":" and cur.role == Role.statement_definition:
-        return False, "colon in statement definition"
+        return 0, "colon in statement definition"
     if prev == ":" and prev.role == Role.statement_definition:
-        return True, "after colon in statement definition"
+        return 1, "after colon in statement definition"
 
     if cur == "=" and cur.role == Role.statement_definition:
-        return True, "before equals in statement definition"
+        return 1, "before equals in statement definition"
     if prev == "=" and prev.role == Role.statement_definition:
-        return True, "after equals in statement definition"
+        if not cur.startswith(("+", "-")) and _is_es25_17e3(cur):
+            return 2, "ES25.17E3 alignment after ="
+        return 1, "after equals in statement definition"
 
     if cur.startswith("%"):
         # Found in foo()%bar parameter names
-        return False, "token starts with % (parameter name)"
+        return 0, "token starts with % (parameter name)"
 
     if prev == "=" or cur == "=":
-        return False, "no space around ="
+        return 0, "no space around ="
 
     # No space after opening brackets (except before =)
     if prev in no_space_after:
-        return False, f"no space after opening bracket '{prev}'"
+        return 0, f"no space after opening bracket '{prev}'"
 
     # No space before closing brackets, commas, colons, semicolons
     if cur in frozenset(")}],:;"):
-        return False, f"no space before '{cur}'"
+        return 0, f"no space before '{cur}'"
 
     # Space after commas, colons, semicolons
     if prev in frozenset(",:;"):
-        return True, f"space after '{prev}'"
+        return 1, f"space after '{prev}'"
 
     # Space before = when next is opening bracket
     if cur == "=" and nxt in open_brackets:
-        return True, "space before = when next is opening bracket"
+        return 1, "space before = when next is opening bracket"
 
     # Separate addition/subtraction from rest of expressions
     if prev in {"-", "+"}:
         prev_prev = parts[idx - 2] if idx >= 2 else None
         if prev_prev in open_brackets or prev_prev in {"=", ":"}:
-            return False, "no space when minus looks like unary negation"
+            return 0, "no space when minus looks like unary negation"
         if prev_prev in {"-"}:
-            return False, "double minus sign means second is negation"
-        return True, "space after minus"
+            return 0, "double minus sign means second is negation"
+        return 1, "space after minus"
     if prev == "/" or cur == "/":
-        return False, "no space around /"
+        return 0, "no space around /"
     if prev == "*" or cur == "*":
-        return False, "no space around *"
+        return 0, "no space around *"
     if cur == "^":
-        return False, "no space around caret"
+        return 0, "no space around caret"
     if cur in {"-", "+"}:
         if prev in close_brackets:
-            return True, "space before minus:- after closing bracket"
+            return 1, "space before minus:- after closing bracket"
         if prev in open_brackets or prev in {"=", ":"}:
-            return False, "no space before minus after opening bracket or =/:"
-        return True, "space before minus (default case)"
+            return 0, "no space before minus after opening bracket or =/:"
+        return 1, "space before minus (default case)"
 
     # Space after closing brackets
     if prev in close_brackets:
-        return True, f"space after closing bracket '{prev}'"
+        return 1, f"space after closing bracket '{prev}'"
 
     # Space between alphanumeric tokens
     if prev and cur and prev[-1].isalnum() and cur[0].isalnum():
-        return True, "space between alphanumeric tokens"
+        return 1, "space between alphanumeric tokens"
     if cur and cur.is_quoted_string:
         if prev in no_space_after:
-            return False, f"quoted string, prev '{prev}' in {no_space_after}"
-        return True, f"quoted string, prev '{prev}' not in {no_space_after}"
+            return 0, f"quoted string, prev '{prev}' in {no_space_after}"
+        return 1, f"quoted string, prev '{prev}' not in {no_space_after}"
 
-    return False, "default: no space"
+    return 0, "default: no space"
 
 
 def _get_output_block(parts: list[Token], start_idx: int) -> list[Token]:
@@ -194,9 +218,9 @@ def _output_range_would_break(
     prev = parts[start_idx - 1] if start_idx > 0 else None
 
     for idx, token in enumerate(parts[start_idx:end_idx], start=start_idx):
-        spc, _ = _needs_space_before(parts, idx)
+        spc, _ = _num_spaces_before(parts, idx)
         if prev and spc:
-            test_length += 1
+            test_length += spc
 
         test_length += len(token)
         if test_length > max_length:
@@ -463,13 +487,13 @@ def _format(
         )
 
         if line.parts and not cur.comments.pre:
-            spc, reason = _needs_space_before(parts, idx)
-            if spc:
+            spc, reason = _num_spaces_before(parts, idx)
+            for _ in range(spc):
                 add_part_to_line(SPACE)
 
             if LATFORM_OUTPUT_DEBUG:
                 if spc:
-                    logger.debug("Adding space before %r: %s", cur, reason)
+                    logger.debug("Adding %d spaces before %r: %s", spc, cur, reason)
                 else:
                     logger.debug("No space before %r: %s", cur, reason)
 
