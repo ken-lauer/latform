@@ -106,7 +106,7 @@ def main(
     attribute_case: NameCase = "same",
     kind_case: NameCase = "same",
     builtin_case: NameCase = "same",
-    section_break_character: str = "*",
+    section_break_character: str = "-",
     section_break_width: int = 0,
     output: pathlib.Path | str | None = None,
     diff: bool = False,
@@ -329,7 +329,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--section-break-character",
         type=str,
-        default="*",
+        default="-",
         help="Section break character.  By default --line-length characters, unless overridden by --section-break-width",
     )
 
