@@ -284,7 +284,7 @@ def test_format_token_single_line(item, expected):
                     ),
                 ],
             ),
-            "qq: quadrupole, r_custom(-2, 1, 5) = 34.5, r_custom(-3) = 77.9",
+            "qq: quadrupole, r_custom(-2, 1, 5)=34.5, r_custom(-3)=77.9",
             id="qq-no-comment",
         ),
         pytest.param(
@@ -310,7 +310,7 @@ def test_format_token_single_line(item, expected):
                     ),
                 ],
             ),
-            "!pre\nqq: quadrupole, r_custom(-2, 1, 5) = 34.5, r_custom(-3) = 77.9  !inline",
+            "!pre\nqq: quadrupole, r_custom(-2, 1, 5)=34.5, r_custom(-3)=77.9  !inline",
             id="qq-comment",
         ),
     ],
@@ -329,7 +329,7 @@ def test_format_element(item, expected):
         ),
         pytest.param(
             "ele: key, foo = call::/path/to/file",
-            "ele: key, foo = call::/path/to/file",
+            "ele: key, foo=call::/path/to/file",
             id="call_expr",
         ),
         pytest.param(
@@ -360,7 +360,7 @@ def test_format_element_from_source(code: str, expected: str) -> None:
         ),
         pytest.param(
             "ele: key, foo = call::/path/to/file",
-            "ELE: key, foo = call::/path/to/file",
+            "ELE: key, foo=call::/path/to/file",
             "upper",
             id="uppercase_name",
         ),
@@ -478,7 +478,7 @@ def test_format_case_opts(
     ],
 )
 def test_format_expression(expression: str, expected: str) -> None:
-    prefix = "ele: name, foo = "
+    prefix = "ele: name, foo="
     (stmt,) = parse(f"{prefix}{expression}")
     check_format(stmt, expected=f"{prefix}{expected}", options=same_case_options)
 
