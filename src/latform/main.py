@@ -300,7 +300,7 @@ def _build_argparser() -> argparse.ArgumentParser:
         "-m",
         type=int,
         default=None,
-        help="Force lines over this length to be multilined. Defaults to 130% of line_length.",
+        help="Force lines over this length to be multilined. Defaults to 130%% of line_length.",
     )
 
     parser.add_argument(
