@@ -182,6 +182,14 @@ class Token(str):
             role=self.role,
         )
 
+    def lstrip(self, chars: str | None = None) -> Self:
+        return type(self)(
+            str(self).lstrip(chars),
+            loc=self.loc,
+            comments=self.comments,
+            role=self.role,
+        )
+
     def strip(self, chars: str | None = None) -> Self:
         return type(self)(
             str(self).strip(chars),

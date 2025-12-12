@@ -2617,6 +2617,18 @@ parser_debug var lat ele 34 78
         ),
         pytest.param(
             """
+print, "Remember Q01 quad strength of `q01[k1]` not yet optimized"
+""",
+            [
+                Simple(
+                    statement=T("print"),
+                    arguments=[T('"Remember Q01 quad strength of `q01[k1]` not yet optimized"')],
+                )
+            ],
+            id="print_with_comma",
+        ),
+        pytest.param(
+            """
 print "Remember Q01 quad strength of `q01[k1]` not yet optimized"
 """,
             [

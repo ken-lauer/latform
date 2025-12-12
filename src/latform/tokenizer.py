@@ -238,7 +238,7 @@ class Tokenizer:
                 and len(block.items) > 1
                 and not block.items[1].is_quoted_string
             ):
-                block.items = [block.items[0], Token.join(block.items[1:])]
+                block.items = [block.items[0], Token.join(block.items[1:]).lstrip(", ")]
 
         if pending_comments:
             loc = sum((comment.loc for comment in pending_comments), pending_comments[0].loc)
