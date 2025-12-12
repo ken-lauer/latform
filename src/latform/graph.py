@@ -103,8 +103,6 @@ def main(
         to_write = "\n".join(graph_lines)
 
     if dest_fn:
-        # If output is a directory, append default filename?
-        # For simplicity adhering to prompt logic: treat as filepath
         pathlib.Path(dest_fn).write_text(to_write)
     else:
         print(to_write)

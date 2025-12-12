@@ -516,6 +516,13 @@ class Files:
             new_items = get_named_items(statements)
             # TODO: potential for linting with redef
             named_items.update(new_items)
+
+        if "BEGINNING" not in named_items:
+            named_items["BEGINNING"] = Element(
+                name=Token("BEGINNING"), keyword=Token("BEGINNING_ELE")
+            )
+        if "END" not in named_items:
+            named_items["END"] = Element(name=Token("END"), keyword=Token("MARKER"))
         return named_items
 
     def _write_reformatted(self, path: pathlib.Path, formatted: str) -> None:

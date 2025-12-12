@@ -16,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Line, Simple, Statement
+from .statements import Line, Parameter, Simple, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -627,6 +627,8 @@ def format_statements(
             return
         res.append(OutputLine())
 
+    lower_renames = {from_.lower(): to for from_, to in options.renames.items()}
+
     last_statement = None
     for statement in statements:
         if options.newline_before_new_type:
@@ -646,6 +648,12 @@ def format_statements(
                 ):
                     maybe_add_blank_line()
 
+        if isinstance(statement, Parameter):
+            name = format_nodes([statement.target])[0].render(options)
+            if name.lower() in lower_renames:
+                new_name = lower_renames[name.lower()]
+                statement.target = Token(new_name)
+
         for line in format_nodes(statement, options=options):
             if not line.parts and not line.comment:
                 maybe_add_blank_line()
@@ -655,7 +663,6 @@ def format_statements(
         last_statement = statement
 
     if options.renames:
-        lower_renames = {from_.lower(): to for from_, to in options.renames.items()}
 
         def apply_rename(item: Token | str):
             if not isinstance(item, Token):
@@ -663,13 +670,6 @@ def format_statements(
 
             if item.lower() in lower_renames:
                 return lower_renames[item.lower()]
-
-            # if item.role == Role.name_:
-            # % single char, * 0+
-            # if "%" in item or "*" in item:
-            #     print("Saw match", item, item.role)
-            # else:
-            #     print("saw", repr(item))
 
             return item
 
