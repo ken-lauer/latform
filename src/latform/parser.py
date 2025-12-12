@@ -426,7 +426,7 @@ class Files:
                 graph.append((fn, call_fn))
         return graph
 
-    def parse(self):
+    def parse(self, recurse: bool = True):
         main = self.main.resolve()
 
         if not self.stack:
@@ -442,6 +442,9 @@ class Files:
             for st in statements:
                 if isinstance(st, Simple) and st.statement == "call":
                     self._add_file_by_statement(statement_filename=filename, st=st)
+
+            if not recurse:
+                break
 
         return self.by_filename
 

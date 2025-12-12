@@ -455,6 +455,8 @@ class FormatOptions:
     section_break_character: str = "-"
     section_break_width: int | None = None
     renames: dict[str, str] = field(default_factory=dict)
+    flatten_call: bool = False
+    flatten_inline: bool = False
 
 
 @dataclass

@@ -113,6 +113,9 @@ def main(
     rename_file: pathlib.Path | str | None = None,
     raw_renames: list[str] | None = None,
     renames: dict[str, str] | None = None,
+    flatten: bool = False,
+    flatten_call: bool = False,
+    flatten_inline: bool = False,
 ) -> None:
     if str(filename) == "-":
         contents = sys.stdin.read()
@@ -144,7 +147,10 @@ def main(
         section_break_character=section_break_character,
         section_break_width=section_break_width,
         renames=renames,
+        flatten_call=flatten or flatten_call,
+        flatten_inline=flatten or flatten_inline,
     )
+
     if recursive:
         if is_stdin:
             raise NotImplementedError(
@@ -168,6 +174,7 @@ def main(
         if in_place:
             if diff:
                 raise NotImplementedError("In-place diff is not supported (or sensible?)")
+
             files.reformat(options)
         else:
             for fn, statements in files.by_filename.items():
@@ -338,6 +345,22 @@ def _build_argparser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Section break line width.  By default --line-length characters",
+    )
+
+    parser.add_argument(
+        "--flatten",
+        action="store_true",
+        help="Inlining all call statements and call:: arguments into a single output lattice (implies --flatten-call, --flatten-inline)",
+    )
+    parser.add_argument(
+        "--flatten-call",
+        action="store_true",
+        help="Inlining all call statements into a single output lattice",
+    )
+    parser.add_argument(
+        "--flatten-inline",
+        action="store_true",
+        help="Inline all call:: arguments",
     )
 
     parser.add_argument(
