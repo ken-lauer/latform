@@ -99,7 +99,7 @@ def test_rename_functionality(capsys: pytest.CaptureFixture, tmp_path):
     main(filename=f, raw_renames=["OLD_NAME, NEW_NAME"])
 
     captured = capsys.readouterr()
-    assert "NEW_NAME: DRIFT, L=1" in captured.out
+    assert "NEW_NAME: drift, L=1" in captured.out
 
 
 @lattice_file
