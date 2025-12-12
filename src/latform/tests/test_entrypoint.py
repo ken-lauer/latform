@@ -28,7 +28,7 @@ def test_stdin_processing(capsys: pytest.CaptureFixture, mocker: MockerFixture):
     main(filename="-")
 
     captured = capsys.readouterr()
-    assert "d1: drift, L=1.0" in captured.out.splitlines()
+    assert "D1: drift, L=1.0" in captured.out.splitlines()
 
 
 @lattice_file

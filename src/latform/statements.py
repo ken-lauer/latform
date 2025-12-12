@@ -86,6 +86,9 @@ class Simple(Statement):
                     filename.value.role = Role.filename
                 elif all(isinstance(arg, Token) for arg in filename.value.items):
                     filename.value = Token.join(filename.value.items, role=Role.filename)
+        elif self.statement.lower() == "use":
+            for arg in self.arguments:
+                arg.annotate(named=named)
         else:
             for arg in self.arguments:
                 arg.annotate(named=named)

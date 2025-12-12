@@ -349,6 +349,12 @@ class Attribute:
         )
 
     def annotate(self, named: dict[Token, Statement]):
+        if self.value is None:
+            # use, xyz -> 'xyz' is an Attribute without a value, just a name (? TODO)
+            if isinstance(self.name, Token):
+                self.name.annotate(named=named)
+            return
+
         match self.name:
             case Token():
                 self.name.role = Role.attribute_name

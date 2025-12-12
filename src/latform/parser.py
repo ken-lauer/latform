@@ -399,13 +399,21 @@ def parse_file_recursive(filename: pathlib.Path | str, annotate: bool = True) ->
 
 @dataclass
 class Files:
+    """
+    Represents a collection of parsed files starting from a main entry point.
+    """
+
     main: pathlib.Path
+    # Stack stores: (relative_filename_to_parse, parent_directory_of_caller)
     stack: list[tuple[pathlib.Path, pathlib.Path]] = field(default_factory=list)
     by_filename: dict[pathlib.Path, list[Statement]] = field(default_factory=dict)
     local_file_to_source_filename: dict[pathlib.Path, str] = field(default_factory=dict)
     filename_calls: dict[pathlib.Path, list[pathlib.Path]] = field(default_factory=dict)
 
     def _add_file_by_statement(self, statement_filename: pathlib.Path, st: Simple):
+        """
+        Identify a 'call' statement and add the target file to the stack to be parsed.
+        """
         assert isinstance(st, Simple) and st.statement == "call"
         sub_filename, fn = get_call_filename(
             st, caller_directory=statement_filename.parent, expand_vars=True
@@ -417,31 +425,67 @@ class Files:
         self.filename_calls[statement_filename].append(fn)
 
     @property
-    def call_graph_edges(self):
+    def call_graph_edges(self) -> list[tuple[str, str]]:
+        """
+        Return a list of (caller, callee) string edges for visualization.
+        """
         graph = []
         for path_fn, calls in self.filename_calls.items():
-            fn = self.local_file_to_source_filename[path_fn]
+            # If path_fn is not in local_file_to_source_filename, it is likely the root
+            # loaded differently (or absolute), fall back to name or string rep.
+            fn = self.local_file_to_source_filename.get(path_fn, str(path_fn))
             for call_path in calls:
-                call_fn = self.local_file_to_source_filename[call_path]
+                call_fn = self.local_file_to_source_filename.get(call_path, str(call_path))
                 graph.append((fn, call_fn))
         return graph
 
+    def _get_file_contents(self, filepath: pathlib.Path) -> str:
+        """Hook to read file contents. default: read from disk."""
+        return filepath.read_text()
+
     def parse(self, recurse: bool = True):
+        """
+        Parse the main file and optionally its dependencies recursively.
+        """
         main = self.main.resolve()
 
         if not self.stack:
+            # We treat the main file as relative to its own parent for consistency
             self.stack = [(main, main.parent)]
             self.local_file_to_source_filename[main] = main.name
 
-        while self.stack:
-            filename, parent_dir = self.stack.pop()
+        # We need to track processed files to avoid infinite loops in circular refs
+        processed = set(self.by_filename.keys())
 
-            filename = parent_dir / filename
-            statements = list(parse_file(filename, annotate=False))
-            self.by_filename[filename] = statements
+        while self.stack:
+            filename_part, parent_dir = self.stack.pop()
+
+            # Resolve the full path based on the parent context
+            # (Note: filename_part might already be absolute if it's the main entry from disk)
+            if filename_part.is_absolute():
+                full_path = filename_part
+            else:
+                full_path = parent_dir / filename_part
+
+            # Optimization: skip if already parsed
+            if full_path in processed:
+                continue
+
+            processed.add(full_path)
+
+            try:
+                contents = self._get_file_contents(full_path)
+            except FileNotFoundError:
+                logger.error(f"Could not find file: {full_path}")
+                continue
+
+            # We don't annotate individually here, we do it in bulk later or let caller decide
+            statements = list(parse(contents=contents, filename=full_path, annotate=False))
+            self.by_filename[full_path] = statements
+
             for st in statements:
                 if isinstance(st, Simple) and st.statement == "call":
-                    self._add_file_by_statement(statement_filename=filename, st=st)
+                    self._add_file_by_statement(statement_filename=full_path, st=st)
 
             if not recurse:
                 break
@@ -449,12 +493,18 @@ class Files:
         return self.by_filename
 
     def annotate(self):
+        """
+        Resolve named items across all parsed files.
+        """
         named = self.get_named_items()
         for statements in self.by_filename.values():
             for st in statements:
                 st.annotate(named=named)
 
     def get_named_items(self) -> dict[Token, Statement]:
+        """
+        Aggregate named items from all files.
+        """
         named_items = {}
         for statements in self.by_filename.values():
             new_items = get_named_items(statements)
@@ -463,8 +513,74 @@ class Files:
         return named_items
 
     def reformat(self, options: FormatOptions, *, dest: pathlib.Path | None = None) -> None:
+        """
+        Reformat all files in the collection.
+        """
         from .output import format_statements
 
         for fn, statements in self.by_filename.items():
             formatted = format_statements(statements, options)
             fn.write_text(formatted)
+
+
+@dataclass
+class MemoryFiles(Files):
+    """
+    A subclass of Files that starts parsing from a string in memory rather
+    than a file on disk. Recursion will look to the filesystem relative
+    to `root_path`.
+    """
+
+    initial_contents: str = ""
+    _formatted_contents: str | None = None
+
+    @classmethod
+    def from_contents(cls, contents: str, root_path: pathlib.Path | str) -> "MemoryFiles":
+        """
+        Create a MemoryFiles instance from a string.
+
+        Parameters
+        ----------
+        contents : str
+            The source code content.
+        root_path : pathlib.Path | str
+            A "virtual" path where this file supposedly lives, used for resolving
+            relative calls to other files.
+
+        Returns
+        -------
+        MemoryFiles
+            The initialized object (call .parse() on it next).
+        """
+        # We pass the root_path as 'main'. It won't be read from disk
+        # because we override _get_file_contents for this specific path.
+        return cls(main=pathlib.Path(root_path).resolve(), initial_contents=contents)
+
+    def _get_file_contents(self, filepath: pathlib.Path) -> str:
+        if filepath == self.main:
+            return self.initial_contents
+        return super()._get_file_contents(filepath)
+
+    def reformat(self, options: FormatOptions, *, dest: pathlib.Path | None = None) -> None:
+        """
+        Reformat files. For the entry point 'memory' file, the result is stored
+        in `.formatted_contents` instead of written to disk.
+
+        Called lattices are written to disk as normal.
+        """
+        from .output import format_statements
+
+        for fn, statements in self.by_filename.items():
+            formatted = format_statements(statements, options)
+
+            if fn == self.main:
+                self._formatted_contents = formatted
+            else:
+                fn.write_text(formatted)
+
+    @property
+    def formatted_contents(self) -> str:
+        """Get the formatted result of the initial memory contents."""
+        if self._formatted_contents is None:
+            raise RuntimeError("Contents have not been reformatted yet. Call .reformat() first.")
+        return self._formatted_contents

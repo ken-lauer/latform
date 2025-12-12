@@ -15,7 +15,7 @@ import rich
 from . import output as output_mod
 from .lint import lint_statement
 from .output import format_statements
-from .parser import parse, parse_file_recursive
+from .parser import Files, MemoryFiles, parse
 from .statements import Statement
 from .tokenizer import Tokenizer
 from .types import FormatOptions, NameCase
@@ -53,9 +53,16 @@ def load_renames(
 def get_diff(
     original: str, formatted: str, fromfile: pathlib.Path | str, tofile: pathlib.Path | str
 ):
+    original_lines = original.splitlines(keepends=True)
+    formatted_lines = formatted.splitlines(keepends=True)
+
+    if original_lines and not original_lines[-1].endswith("\n"):
+        original_lines[-1] += "\n"
+    if formatted_lines and not formatted_lines[-1].endswith("\n"):
+        formatted_lines[-1] += "\n"
     udiff = difflib.unified_diff(
-        original.splitlines(keepends=True),
-        formatted.splitlines(keepends=True),
+        original_lines,
+        formatted_lines,
         fromfile=str(fromfile),
         tofile=str(tofile),
     )
@@ -102,10 +109,10 @@ def main(
     compact: bool = False,
     recursive: bool = False,
     in_place: bool = False,
-    name_case: NameCase = "same",
-    attribute_case: NameCase = "same",
-    kind_case: NameCase = "same",
-    builtin_case: NameCase = "same",
+    name_case: NameCase = "upper",
+    attribute_case: NameCase = "lower",
+    kind_case: NameCase = "lower",
+    builtin_case: NameCase = "lower",
     section_break_character: str = "-",
     section_break_width: int = 0,
     output: pathlib.Path | str | None = None,
@@ -117,26 +124,28 @@ def main(
     flatten_call: bool = False,
     flatten_inline: bool = False,
 ) -> None:
-    if str(filename) == "-":
-        contents = sys.stdin.read()
-        filename = "<stdin>"
-        is_stdin = True
-    else:
-        filename = pathlib.Path(filename)
-        contents = filename.read_text()
-        is_stdin = False
-
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
-        logging.getLogger("latform").setLevel("DEBUG")
+        logger.setLevel("DEBUG")
 
-    renames = load_renames(rename_file, raw_renames, renames)
+    is_stdin = str(filename) == "-"
+
+    files_obj: Files
+    if is_stdin:
+        contents = sys.stdin.read()
+        files_obj = MemoryFiles.from_contents(contents, root_path=pathlib.Path.cwd() / "stdin.lat")
+        files_obj.local_file_to_source_filename[files_obj.main] = "<stdin>"
+    else:
+        fpath = pathlib.Path(filename)
+        files_obj = Files(main=fpath)
+
+    loaded_renames = load_renames(rename_file, raw_renames, renames)
 
     options = FormatOptions(
         line_length=line_length,
         max_line_length=max_line_length or int(line_length * 1.3),
         compact=compact,
-        indent_size=2,
+        indent_size=2,  # Default hardcoded in original
         indent_char=" ",
         comment_col=40,
         newline_before_new_type=not compact,
@@ -146,72 +155,74 @@ def main(
         builtin_case=builtin_case,
         section_break_character=section_break_character,
         section_break_width=section_break_width,
-        renames=renames,
+        renames=loaded_renames,
         flatten_call=flatten or flatten_call,
         flatten_inline=flatten or flatten_inline,
     )
 
-    if recursive:
-        if is_stdin:
-            raise NotImplementedError(
-                "Recursive parsing using a lattice from stdin is not yet supported"
-            )
+    files_obj.parse(recurse=recursive)
+    files_obj.annotate()
 
-        files = parse_file_recursive(filename)
+    if verbose > 0:
+        for fn in files_obj.by_filename:
+            content = files_obj._get_file_contents(fn)
+            name = files_obj.local_file_to_source_filename.get(fn, str(fn))
 
-        # TODO this should be separate from format, I think
-        # Either that or lint can be treated as an error to not reformat?
-        for fn, statements in files.by_filename.items():
-            for st in statements:
-                for lint in lint_statement(st):
-                    logger.warning(lint.to_user_message())
+            if recursive and len(files_obj.by_filename) > 1:
+                rich.print(f"[bold]Debug processing: {name}[/bold]", file=sys.stderr)
 
-        if verbose > 1:
-            # NOTE: double-parsing, erroneously
-            for fn in files.by_filename:
-                process_file(contents=fn.read_text(), filename=fn, verbose=verbose)
+            process_file(contents=content, filename=fn, verbose=verbose)
+
+    for fn, statements in files_obj.by_filename.items():
+        for st in statements:
+            for lint in lint_statement(st):
+                msg = lint.to_user_message()
+                if recursive:
+                    name = files_obj.local_file_to_source_filename.get(fn, fn.name)
+                    logger.warning(f"[{name}] {msg}")
+                else:
+                    logger.warning(msg)
+
+    results: dict[pathlib.Path, tuple[str, str]] = {}
+
+    assert options.attribute_case == "lower"
+    for fn, statements in files_obj.by_filename.items():
+        formatted_text = format_statements(statements, options)
+        original_text = files_obj._get_file_contents(fn)
+        results[fn] = (original_text, formatted_text)
+
+    for fn, (original, formatted) in results.items():
+        is_main_entry = fn == files_obj.main
+
+        display_name = files_obj.local_file_to_source_filename.get(fn, str(fn))
+
+        if diff:
+            if in_place:
+                raise NotImplementedError("In-place diff is not supported.")
+
+            diff_output = get_diff(original, formatted, fromfile=display_name, tofile=display_name)
+            if diff_output:
+                print(diff_output)
+            continue
+
+        if output and is_main_entry:
+            pathlib.Path(output).write_text(formatted)
+            continue
+        elif output and not is_main_entry:
+            if not in_place:
+                continue
 
         if in_place:
-            if diff:
-                raise NotImplementedError("In-place diff is not supported (or sensible?)")
+            if is_stdin and is_main_entry:
+                print(formatted)
+            else:
+                fn.write_text(formatted)
 
-            files.reformat(options)
         else:
-            for fn, statements in files.by_filename.items():
-                formatted = format_statements(statements, options)
-                if diff:
-                    original = fn.read_text()
-                    to_write = get_diff(original, formatted, fromfile=fn, tofile=fn)
-                else:
-                    print(f"! {fn}")
-                    to_write = formatted
+            if recursive and not is_stdin:
+                print(f"! {display_name}")
 
-                print(to_write)
-        return
-
-    statements = process_file(contents=contents, filename=filename, verbose=verbose)
-
-    for st in statements:
-        for lint in lint_statement(st):
-            logger.warning(lint.to_user_message())
-
-    formatted = format_statements(statements, options=options)
-    if output:
-        dest_fn = output
-    elif in_place and not is_stdin:
-        dest_fn = filename
-    else:
-        dest_fn = None
-
-    if diff:
-        to_write = get_diff(contents, formatted, fromfile=filename, tofile=filename)
-    else:
-        to_write = formatted
-
-    if dest_fn:
-        pathlib.Path(dest_fn).write_text(to_write)
-    else:
-        print(to_write)
+            print(formatted)
 
 
 def _build_argparser() -> argparse.ArgumentParser:
