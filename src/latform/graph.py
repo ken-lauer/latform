@@ -7,50 +7,104 @@ from __future__ import annotations
 import argparse
 import logging
 import pathlib
+import sys
 
-from .parser import parse_file_recursive
+from .parser import Files, MemoryFiles, is_call_statement
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
+
+
+def _generate_tree_text(files: Files) -> str:
+    """
+    Generates a tree-like string representation of the parsed file hierarchy.
+    """
+    lines = []
+
+    def _walk(fn: pathlib.Path, prefix: str, visited_stack: set[pathlib.Path]):
+        """
+        Recursive walker.
+        visited_stack prevents infinite recursion in case of circular calls.
+        """
+        statements = files.by_filename[fn]
+
+        children: list[pathlib.Path] = []
+        for st in statements:
+            if is_call_statement(st):
+                child_path = st.metadata.get("local_path")
+                if child_path:
+                    children.append(child_path)
+
+        count = len(children)
+        for i, child_path in enumerate(children):
+            is_last = i == count - 1
+            marker = "└── " if is_last else "├── "
+
+            display = files.local_file_to_source_filename.get(child_path, child_path.name)
+
+            lines.append(f"{prefix}{marker}{display}")
+
+            extension = "    " if is_last else "│   "
+
+            if child_path not in visited_stack:
+                _walk(child_path, prefix + extension, visited_stack | {child_path})
+            else:
+                lines.append(f"{prefix}{extension}└── [Recursive: {display}]")
+
+    lines.append(files.main.name)
+
+    _walk(files.main, "", {files.main})
+
+    return "\n".join(lines)
 
 
 def main(
     filename: str | pathlib.Path,
     verbose: int = 0,
     output: pathlib.Path | str | None = None,
+    format: str = "text",
 ) -> None:
-    if str(filename) == "-":
-        # contents = sys.stdin.read()
-        # filename = "<stdin>"
-        # is_stdin = True
-        raise NotImplementedError("stdin support")
-    else:
-        filename = pathlib.Path(filename)
-        # contents = filename.read_text()
-        # is_stdin = False
+    is_stdin = str(filename) == "-"
 
-    files = parse_file_recursive(filename)
+    files: Files
+    if is_stdin:
+        contents = sys.stdin.read()
+        files = MemoryFiles.from_contents(contents, root_path=pathlib.Path.cwd() / "stdin.lat")
+        files.local_file_to_source_filename[files.main] = "<stdin>"
+    else:
+        files = Files(main=pathlib.Path(filename))
+
+    files.parse(recurse=True)
+    files.annotate()
 
     if output:
         dest_fn = output
     else:
         dest_fn = None
 
-    graph_lines = ["graph LR"]
+    to_write = ""
 
-    def make_id(fn: str):
-        return fn.replace("/", "_").replace(".", "_").replace("-", "_")
+    if format == "text":
+        to_write = _generate_tree_text(files)
+    else:
+        # Generate Mermaid Graph View (Default)
+        graph_lines = ["graph LR"]
 
-    for fn1, fn2 in files.call_graph_edges:
-        id1 = make_id(fn1)
-        id2 = make_id(fn2)
+        def make_id(fn: str):
+            return fn.replace("/", "_").replace(".", "_").replace("-", "_")
 
-        # id["label"] --> id2["label2"]
-        graph_lines.append(f'    {id1}["{fn1}"] --> {id2}["{fn2}"]')
+        for fn1, fn2 in files.call_graph_edges:
+            id1 = make_id(fn1)
+            id2 = make_id(fn2)
 
-    to_write = "\n".join(graph_lines)
+            # id["label"] --> id2["label2"]
+            graph_lines.append(f'    {id1}["{fn1}"] --> {id2}["{fn2}"]')
+
+        to_write = "\n".join(graph_lines)
 
     if dest_fn:
+        # If output is a directory, append default filename?
+        # For simplicity adhering to prompt logic: treat as filepath
         pathlib.Path(dest_fn).write_text(to_write)
     else:
         print(to_write)
@@ -69,11 +123,20 @@ def _build_argparser() -> argparse.ArgumentParser:
         "filename",
         help="Filename to parse (use '-' for stdin/standard input)",
     )
+
     parser.add_argument(
         "--output",
         "-o",
-        action="store_true",
-        help="Write to this filename (or directory, if multiple files)",
+        action="store",
+        help="Write to this filename",
+    )
+
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=["text", "mermaid"],
+        default="text",
+        help="Output format",
     )
 
     parser.add_argument(
@@ -106,7 +169,7 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 def cli_main(args: list[str] | None = None) -> None:
     """
-    CLI entrypoint main.
+    CLI entrypoint for latform-graph.
 
     Parameters
     ----------
