@@ -3,7 +3,7 @@ from __future__ import annotations
 import os.path
 import pathlib
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from .comments import Comments
 from .const import COMMA, STATEMENT_NAME_COLON, STATEMENT_NAME_EQUALS
@@ -20,6 +20,7 @@ from .util import comma_delimit
 @dataclass(kw_only=True)
 class Statement:
     comments: Comments = field(default_factory=Comments)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def annotate(self, named: dict[Token, Statement]):
         raise NotImplementedError()

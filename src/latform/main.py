@@ -159,6 +159,7 @@ def main(
         flatten_call=flatten or flatten_call,
         flatten_inline=flatten or flatten_inline,
     )
+    recursive = recursive or options.flatten_call  # implied
 
     files_obj.parse(recurse=recursive)
     files_obj.annotate()
@@ -185,11 +186,17 @@ def main(
 
     results: dict[pathlib.Path, tuple[str, str]] = {}
 
-    assert options.attribute_case == "lower"
-    for fn, statements in files_obj.by_filename.items():
-        formatted_text = format_statements(statements, options)
-        original_text = files_obj._get_file_contents(fn)
-        results[fn] = (original_text, formatted_text)
+    if options.flatten_call:
+        statements = files_obj.flatten(call=options.flatten_call, inline=options.flatten_inline)
+        formatted = format_statements(statements, options)
+        main = files_obj.main
+        results[main] = (files_obj._get_file_contents(main), formatted)
+
+    else:
+        for fn, statements in files_obj.by_filename.items():
+            formatted_text = format_statements(statements, options)
+            original_text = files_obj._get_file_contents(fn)
+            results[fn] = (original_text, formatted_text)
 
     for fn, (original, formatted) in results.items():
         is_main_entry = fn == files_obj.main
