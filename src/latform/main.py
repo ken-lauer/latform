@@ -95,7 +95,7 @@ def process_file(
 
 
 def main(
-    filename: str | pathlib.Path,
+    filename: pathlib.Path | str,
     verbose: int = 0,
     line_length: int = 100,
     max_line_length: int | None = 0,
@@ -125,8 +125,7 @@ def main(
 
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
-        logger = logging.getLogger("latform")
-        logger.setLevel("DEBUG")
+        logging.getLogger("latform").setLevel("DEBUG")
 
     renames = load_renames(rename_file, raw_renames, renames)
 
@@ -220,6 +219,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "filename",
         help="Filename to parse (use '-' for stdin/standard input)",
+        nargs="+",
     )
 
     parser.add_argument(
@@ -366,10 +366,15 @@ def cli_main(args: list[str] | None = None) -> None:
     log_level = kwargs.pop("log_level")
 
     # Adjust the package-level logger level as requested:
-    logger = logging.getLogger("latform")
-    logger.setLevel(log_level)
+    logging.getLogger("latform").setLevel(log_level)
     logging.basicConfig()
-    return main(**kwargs)
+
+    filenames = kwargs.pop("filename")
+    for filename in filenames:
+        if len(filename) > 1:
+            logger.info("Processing %s", filename)
+        main(filename=filename, **kwargs)
+    return
 
 
 if __name__ == "__main__":
