@@ -652,7 +652,13 @@ def format_statements(
             name = format_nodes([statement.target])[0].render(options)
             if name.lower() in lower_renames:
                 new_name = lower_renames[name.lower()]
-                statement.target = Token(new_name)
+                statement.target = Token(new_name, role=Role.name_)
+
+            # if "::" in name:
+            #     prefix, name = name.split("::", 1)
+            #     if name.lower() in lower_renames:
+            #         new_name = lower_renames[name.lower()]
+            #         statement.target = Token(f"{prefix}::{new_name}", role=Role.name_)
 
         for line in format_nodes(statement, options=options):
             if not line.parts and not line.comment:
@@ -679,7 +685,10 @@ def format_statements(
     while res and not res[0].parts and not res[0].comment:
         res = res[1:]
 
-    return "\n".join(line.render(options) for line in res)
+    text = "\n".join(line.render(options) for line in res)
+    if options.newline_at_eof and text:
+        return text + "\n"
+    return text
 
 
 def format_file(filename: pathlib.Path | str, options: FormatOptions) -> str:

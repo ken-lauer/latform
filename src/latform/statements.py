@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os.path
 import pathlib
+import typing
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -16,6 +17,9 @@ from .types import (
 )
 from .util import comma_delimit
 
+if typing.TYPE_CHECKING:
+    from .output import FormatOptions
+
 
 @dataclass(kw_only=True)
 class Statement:
@@ -27,6 +31,12 @@ class Statement:
 
     def to_output_nodes(self):
         raise NotImplementedError()
+
+    def to_text(self, opts: FormatOptions | None = None):
+        from .output import default_options, format_statements
+
+        opts = opts or default_options
+        return format_statements(self, options=opts)
 
     # @classmethod
     # def from_text(cls,

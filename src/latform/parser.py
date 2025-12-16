@@ -5,6 +5,8 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Sequence
 
+from latform.location import Location
+
 from .const import EQUALS
 from .exceptions import UnexpectedAssignment
 from .statements import (
@@ -401,6 +403,9 @@ def is_call_statement(st: Statement) -> bool:
     return isinstance(st, Simple) and st.statement == "call"
 
 
+implicit_location = Location(filename=pathlib.Path("<implicit>"))
+
+
 @dataclass
 class Files:
     """
@@ -455,7 +460,7 @@ class Files:
         self.main = self.main.resolve()
         if not self.stack:
             # We treat the main file as relative to its own parent for consistency
-            self.stack = [(self.main, self.main.parent)]
+            self.stack = [(pathlib.Path(self.main.name), self.main.parent)]
             self.local_file_to_source_filename[self.main] = self.main.name
 
         # We need to track processed files to avoid infinite loops in circular refs
@@ -475,12 +480,15 @@ class Files:
             if full_path in processed:
                 continue
 
+            logger.debug("Processing %s", full_path)
             processed.add(full_path)
 
             try:
                 contents = self._get_file_contents(full_path)
             except FileNotFoundError:
-                logger.error(f"Could not find file: {full_path}")
+                logger.error(
+                    f"Could not find file: {full_path} (parent={parent_dir} file={filename_part})"
+                )
                 continue
 
             # We don't annotate individually here, we do it in bulk later or let caller decide
@@ -519,10 +527,17 @@ class Files:
 
         if "BEGINNING" not in named_items:
             named_items["BEGINNING"] = Element(
-                name=Token("BEGINNING"), keyword=Token("BEGINNING_ELE")
+                name=Token("BEGINNING", loc=implicit_location),
+                keyword=Token(
+                    "BEGINNING_ELE",
+                    loc=implicit_location,
+                ),
             )
         if "END" not in named_items:
-            named_items["END"] = Element(name=Token("END"), keyword=Token("MARKER"))
+            named_items["END"] = Element(
+                name=Token("END", loc=implicit_location),
+                keyword=Token("MARKER", loc=implicit_location),
+            )
         return named_items
 
     def _write_reformatted(self, path: pathlib.Path, formatted: str) -> None:

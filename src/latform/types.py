@@ -463,6 +463,7 @@ class FormatOptions:
     renames: dict[str, str] = field(default_factory=dict)
     flatten_call: bool = False
     flatten_inline: bool = False
+    newline_at_eof: bool = True
 
 
 @dataclass

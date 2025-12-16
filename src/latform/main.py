@@ -47,6 +47,11 @@ def load_renames(
     if renames:
         res.update(renames)
 
+    for from_, to in list(res.items()):
+        if not from_ or not to:
+            res.pop(from_)
+            logger.error(f"Unable to use empty rename: {from_!r} -> {to!r}")
+
     return res
 
 
@@ -411,6 +416,7 @@ def cli_main(args: list[str] | None = None) -> None:
     logging.basicConfig()
 
     filenames = kwargs.pop("filename")
+
     for filename in filenames:
         if len(filename) > 1:
             logger.info("Processing %s", filename)
