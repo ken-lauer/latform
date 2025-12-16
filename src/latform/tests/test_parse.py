@@ -2951,7 +2951,7 @@ print {string_}
     (res,) = parse_verbose(code)
     assert res == expected
 
-    options = FormatOptions()
+    options = FormatOptions(newline_at_eof=False)
     roundtrip_code = format_statements(res, options)
 
     quoted = Token(string_).quoted()
