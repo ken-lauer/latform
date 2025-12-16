@@ -18,8 +18,7 @@ from typing import Any, Literal
 from rich.console import Console
 from rich.table import Table
 
-from latform.location import Location
-
+from .location import Location
 from .parser import Files, MemoryFiles
 from .statements import (
     Attribute,
