@@ -5,10 +5,9 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from latform.location import Location
-
 from .const import EQUALS
 from .exceptions import UnexpectedAssignment
+from .location import Location
 from .statements import (
     Assignment,
     Constant,
@@ -527,16 +526,17 @@ class Files:
 
         if "BEGINNING" not in named_items:
             named_items["BEGINNING"] = Element(
-                name=Token("BEGINNING", loc=implicit_location),
+                name=Token("BEGINNING", loc=implicit_location, role=Role.name_),
                 keyword=Token(
                     "BEGINNING_ELE",
                     loc=implicit_location,
+                    role=Role.kind,
                 ),
             )
         if "END" not in named_items:
             named_items["END"] = Element(
-                name=Token("END", loc=implicit_location),
-                keyword=Token("MARKER", loc=implicit_location),
+                name=Token("END", loc=implicit_location, role=Role.name_),
+                keyword=Token("MARKER", loc=implicit_location, role=Role.kind),
             )
         return named_items
 
