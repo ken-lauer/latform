@@ -365,52 +365,47 @@ def main(args: list[str] | None = None) -> None:
         choices=("DEBUG", "INFO", "WARNING", "CRITICAL"),
         help="Python logging level",
     )
-
-    subparsers = parser.add_subparsers(dest="command", help="Information to dump")
-
-    parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument(
+    parser.add_argument(
         "filename",
         help="Filename to parse (use '-' for stdin)",
         nargs="+",
     )
-    parent_parser.add_argument(
+    parser.add_argument(
         "--delimiter",
         "-d",
         help="Use specified delimiter (e.g. ',') instead of formatted table. Useful for machine parsing.",
         default=None,
     )
-    parent_parser.add_argument(
+    parser.add_argument(
         "--match",
         "-m",
         help="Glob pattern to filter names (e.g. 'qf*')",
         default=None,
     )
-    parent_parser.add_argument(
-        "--match-re", "-r", help="Regex pattern to filter names", default=None
-    )
+    parser.add_argument("--match-re", "-r", help="Regex pattern to filter names", default=None)
 
-    sp_params = subparsers.add_parser(
-        "parameters", parents=[parent_parser], help="Dump defined parameters/variables"
+    # Dump options
+    parser.add_argument(
+        "-p",
+        "--parameters",
+        action="store_true",
+        help="Dump defined parameters/variables",
+        dest="dump_parameters",
     )
-    sp_params.set_defaults(func=cmd_parameters)
-
-    sp_used = subparsers.add_parser(
-        "used-elements",
-        parents=[parent_parser],
+    parser.add_argument(
+        "-U",
+        "--used-elements",
+        action="store_true",
         help="Dump defined and used elements (in lines, etc.)",
+        dest="dump_used_elements",
     )
-    sp_used.set_defaults(func=cmd_used_elements)
-
-    sp_unused = subparsers.add_parser(
-        "unused-elements",
-        parents=[parent_parser],
+    parser.add_argument(
+        "-u",
+        "--unused-elements",
+        action="store_true",
         help="Dump defined elements not used",
+        dest="dump_unused_elements",
     )
-    sp_unused.set_defaults(func=cmd_unused_elements)
-
-    sp_all = subparsers.add_parser("all", parents=[parent_parser], help="Dump everything (default)")
-    sp_all.set_defaults(func=cmd_all)
 
     if args is None:
         raw_args = sys.argv[1:]
@@ -421,34 +416,35 @@ def main(args: list[str] | None = None) -> None:
         parser.print_help()
         sys.exit(0)
 
-    known_commands = {
-        "parameters",
-        "used-elements",
-        "unused-elements",
-        "all",
-        "-h",
-        "--help",
-        "--version",
-    }
-    if raw_args and raw_args[0] not in known_commands and not raw_args[0].startswith("-"):
-        parsed_args = parser.parse_args(["all"] + raw_args)
-    else:
-        parsed_args = parser.parse_args(raw_args)
+    parsed_args = parser.parse_args(raw_args)
 
     logging.basicConfig(level=parsed_args.log_level)
     logger_inst = logging.getLogger("latform")
     logger_inst.setLevel(parsed_args.log_level)
 
-    if not hasattr(parsed_args, "func"):
-        parser.print_help()
-        sys.exit(1)
-
     if parsed_args.delimiter:
         parsed_args.delimiter = parsed_args.delimiter.replace("\\t", "\t")
 
+    any_dump_flag = (
+        parsed_args.dump_parameters
+        or parsed_args.dump_used_elements
+        or parsed_args.dump_unused_elements
+    )
+
     for fn in parsed_args.filename:
         files = _load_files_and_parse(fn, pathlib.Path.cwd(), parsed_args.verbose)
-        parsed_args.func(parsed_args, files)
+
+        if not any_dump_flag:
+            cmd_all(parsed_args, files)
+        else:
+            if parsed_args.dump_parameters:
+                cmd_parameters(parsed_args, files)
+
+            if parsed_args.dump_used_elements:
+                cmd_used_elements(parsed_args, files)
+
+            if parsed_args.dump_unused_elements:
+                cmd_unused_elements(parsed_args, files)
 
 
 def cli_main(args: list[str] | None = None) -> None:
