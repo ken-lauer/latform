@@ -153,7 +153,7 @@ def get_parameters(files: Files) -> Iterable[dict[str, Any]]:
         value = _fmt(parm.value)
 
         yield {
-            "name": f"{target}[{name}]",
+            "name": rf"{target}[{name}]",
             "expression": value,
             "filename": parm.target.loc.filename if parm.target.loc else "",
             "line": parm.target.loc.line if parm.target.loc else 0,
@@ -250,7 +250,7 @@ def print_data(
             table.add_column(h)
 
         for d_row in display_rows:
-            table.add_row(*d_row)
+            table.add_row(*[item.replace("[", r"\[") for item in d_row])
 
         console = console or Console()
         console.print(table)
@@ -283,7 +283,7 @@ def _load_files_and_parse(filename: str, root_path: pathlib.Path, verbose: int) 
 
 def cmd_parameters(args: argparse.Namespace, files: Files):
     data = []
-    headers = ["expression", "loc_obj"]
+    headers = ["name", "expression", "loc_obj"]
 
     for item in get_parameters(files):
         if not _passes_filter(item["name"], args.match, args.match_re):

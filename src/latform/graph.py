@@ -120,6 +120,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "filename",
         help="Filename to parse (use '-' for stdin/standard input)",
+        nargs="+",
     )
 
     parser.add_argument(
@@ -182,7 +183,12 @@ def cli_main(args: list[str] | None = None) -> None:
     logger = logging.getLogger("latform")
     logger.setLevel(log_level)
     logging.basicConfig()
-    return main(**kwargs)
+    filenames = kwargs.pop("filename")
+
+    for filename in filenames:
+        if len(filename) > 1:
+            logger.info("Processing %s", filename)
+        main(filename=filename, **kwargs)
 
 
 if __name__ == "__main__":
