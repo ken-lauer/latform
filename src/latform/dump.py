@@ -30,18 +30,62 @@ from .statements import (
     Statement,
 )
 from .token import Token
+from .types import NameCase
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
 
 
-def _fmt(obj):
+def _fmt(
+    obj,
+    line_length: int = 100,
+    max_line_length: int = 130,
+    compact: bool = False,
+    indent_size: int = 2,
+    indent_char: str = " ",
+    comment_col: int = 40,
+    newline_before_new_type: bool = False,
+    newline_between_lines: bool = True,
+    trailing_comma: bool = False,
+    statement_comma_threshold_for_multiline: int = 8,
+    name_case: NameCase = "upper",
+    attribute_case: NameCase = "lower",
+    kind_case: NameCase = "lower",
+    builtin_case: NameCase = "lower",
+    section_break_character: str = "-",
+    section_break_width: int | None = None,
+    flatten_call: bool = False,
+    flatten_inline: bool = False,
+    newline_at_eof: bool = True,
+    strip_comments: bool = False,
+):
     from .output import FormatOptions, format_nodes
 
-    opts = FormatOptions()
+    opts = FormatOptions(
+        line_length=line_length,
+        max_line_length=max_line_length,
+        compact=compact,
+        indent_size=indent_size,
+        indent_char=indent_char,
+        comment_col=comment_col,
+        newline_before_new_type=newline_before_new_type,
+        newline_between_lines=newline_between_lines,
+        trailing_comma=trailing_comma,
+        statement_comma_threshold_for_multiline=statement_comma_threshold_for_multiline,
+        name_case=name_case,
+        attribute_case=attribute_case,
+        kind_case=kind_case,
+        builtin_case=builtin_case,
+        section_break_character=section_break_character,
+        section_break_width=section_break_width,
+        flatten_call=flatten_call,
+        flatten_inline=flatten_inline,
+        newline_at_eof=newline_at_eof,
+        strip_comments=strip_comments,
+    )
     if not isinstance(obj, list):
         obj = [obj]
-    return "\n".join(line.render(opts) for line in format_nodes(obj))
+    return "\n".join(line.render(opts) for line in format_nodes(obj, opts))
 
 
 def _fmt_loc(loc: Location | None, root_path: pathlib.Path | None = None) -> str:

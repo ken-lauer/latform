@@ -128,6 +128,7 @@ def main(
     flatten: bool = False,
     flatten_call: bool = False,
     flatten_inline: bool = False,
+    strip_comments: bool = False,
 ) -> None:
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
@@ -163,6 +164,7 @@ def main(
         renames=loaded_renames,
         flatten_call=flatten or flatten_call,
         flatten_inline=flatten or flatten_inline,
+        strip_comments=strip_comments,
     )
     recursive = recursive or options.flatten_call  # implied
 
@@ -384,6 +386,11 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--flatten-inline",
         action="store_true",
         help="Inline all call:: arguments",
+    )
+    parser.add_argument(
+        "--strip-comments",
+        action="store_true",
+        help="Remove comments from the output",
     )
 
     parser.add_argument(

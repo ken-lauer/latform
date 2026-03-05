@@ -464,6 +464,7 @@ class FormatOptions:
     flatten_call: bool = False
     flatten_inline: bool = False
     newline_at_eof: bool = True
+    strip_comments: bool = False
 
 
 @dataclass

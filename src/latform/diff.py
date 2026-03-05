@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import logging
 import pathlib
 import subprocess
@@ -16,12 +17,15 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from .dump import _fmt, _load_files_and_parse
+from .dump import _fmt as dump_fmt
+from .dump import _load_files_and_parse
 from .parser import Files
 from .statements import Assignment, Constant, Element, Line, Parameter
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
+
+_fmt = functools.partial(dump_fmt, strip_comments=True)
 
 
 @dataclass

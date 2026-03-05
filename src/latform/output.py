@@ -409,7 +409,8 @@ def _format(
             if should_include_comma():
                 add_part_to_line(nxt)
 
-        if line is not None and (line.parts or line.comment):
+        comment = line.comment if line is not None and not options.strip_comments else None
+        if line is not None and (line.parts or comment):
             lines.append(line)
 
         if indent_level == top_level_indent and top_level_multiline and len(lines) == 1:
@@ -447,7 +448,7 @@ def _format(
         prev = parts[idx - 1] if idx > 0 else None
         nxt = parts[idx + 1] if idx < len(parts) - 1 else None
 
-        if cur.comments.pre:
+        if cur.comments.pre and not options.strip_comments:
             pre_comments = list(cur.comments.pre)
             lines.extend(
                 pre_comment_rewrite_section_break(
@@ -475,7 +476,12 @@ def _format(
             is_opening = False
             is_closing = False
 
-        has_comments = is_opening and _output_node_block_contains_comments(parts, idx)
+        has_comments = (
+            not options.strip_comments
+            and is_opening
+            and _output_node_block_contains_comments(parts, idx)
+        )
+
         would_break_inside = has_comments or (
             is_opening
             and _output_block_would_break(
@@ -483,7 +489,7 @@ def _format(
             )
         )
 
-        if line.parts and not cur.comments.pre:
+        if line.parts and (not cur.comments.pre or options.strip_comments):
             spc, reason = _num_spaces_before(parts, idx)
             for _ in range(spc):
                 add_part_to_line(SPACE)
@@ -536,7 +542,7 @@ def _format(
                 indent_level += 1
                 line = newline(reason="opening + would break inside")
 
-        if cur.comments.inline:
+        if cur.comments.inline and not options.strip_comments:
             line.comment = f"!{cur.comments.inline}"
 
             if delim_state.depth == 0 and nxt not in {EQUALS, COMMA, None}:
@@ -569,7 +575,7 @@ def _format(
 
     line = newline()
 
-    if outer_comments:
+    if outer_comments and not options.strip_comments:
         if not lines:
             return [
                 OutputLine(indent=indent_level, parts=[f"!{comment}"])
@@ -605,7 +611,7 @@ def format_nodes(
     options: FormatOptions = default_options,
 ) -> list[OutputLine]:
     parts = _flatten_output_nodes(nodes)
-    if isinstance(nodes, Statement):
+    if isinstance(nodes, Statement) and not options.strip_comments:
         outer_comments = nodes.comments
     else:
         outer_comments = None
