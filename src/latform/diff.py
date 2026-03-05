@@ -141,6 +141,7 @@ class LatticeDiff:
     eles_added: list[str] = field(default_factory=list)
     eles_removed: list[str] = field(default_factory=list)
     eles_changed: dict[str, ElementDiffDetails] = field(default_factory=dict)
+    eles_renamed: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def has_param_diffs(self) -> bool:
@@ -148,7 +149,7 @@ class LatticeDiff:
 
     @property
     def has_ele_diffs(self) -> bool:
-        return bool(self.eles_added or self.eles_removed or self.eles_changed)
+        return bool(self.eles_added or self.eles_removed or self.eles_changed or self.eles_renamed)
 
 
 def _collect_parameters(files: Files) -> dict[tuple[str, str], str]:
@@ -269,6 +270,30 @@ def calculate_diff(files1: Files, files2: Files) -> LatticeDiff:
     diff.eles_removed = sorted(e_keys1 - e_keys2)
     common_eles = e_keys1 & e_keys2
 
+    def is_same_ele(ele1, ele2):
+        e1 = elements1[ele1]
+        e2 = elements2[ele2]
+        return e1["type"] == e2["type"] and e1["attributes"] == e2["attributes"]
+
+    diff.eles_renamed = [
+        (ele1, ele2)
+        for ele1 in diff.eles_removed
+        for ele2 in diff.eles_added
+        if is_same_ele(ele1, ele2)
+    ]
+    # Could detect multiple renames; A -> B1, B2
+    # Not technically valid as far as a rename goes;
+    # Make this instead a remove/add? Hmm
+    for ele1, ele2 in diff.eles_renamed:
+        try:
+            diff.eles_removed.remove(ele1)
+        except ValueError:
+            pass
+        try:
+            diff.eles_added.remove(ele2)
+        except ValueError:
+            pass
+
     for name in common_eles:
         e1 = elements1[name]
         e2 = elements2[name]
@@ -342,6 +367,9 @@ def print_diff(diff: LatticeDiff, console: Console) -> None:
 
         for name in diff.eles_removed:
             table.add_row("Removed", name, "Element", "Exist", "", style="red")
+
+        for from_, to in diff.eles_renamed:
+            table.add_row("Renamed", from_, "Element", from_, to, style="red")
 
         for name in sorted(diff.eles_changed.keys()):
             details = diff.eles_changed[name]
