@@ -4,6 +4,9 @@ repo_name: ken-lauer/latform
 
 nav:
   - Home: index.md
+  - CLI Reference: cli.md
+  - Python API: api.md
+  - Style Guide: style_guide.md
   - Development: development/development_guidelines.md
 
 theme:
