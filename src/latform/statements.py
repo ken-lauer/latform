@@ -77,6 +77,7 @@ class Simple(Statement):
             "use",
             "use_local_lat_file",
             "write_digested",
+            "setenv",
         }
     )
     statement: Token
@@ -97,6 +98,13 @@ class Simple(Statement):
                     filename.value.role = Role.filename
                 elif all(isinstance(arg, Token) for arg in filename.value.items):
                     filename.value = Token.join(filename.value.items, role=Role.filename)
+        elif self.statement.lower() == "setenv":
+            for arg in self.arguments:
+                if isinstance(arg, Attribute):
+                    if isinstance(arg.name, Token):
+                        arg.name.role = Role.env_var
+                    if isinstance(arg.value, Token):
+                        arg.value.role = None
         elif self.statement.lower() == "use":
             for arg in self.arguments:
                 arg.annotate(named=named)

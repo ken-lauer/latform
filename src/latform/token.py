@@ -21,6 +21,7 @@ class Role(str, enum.Enum):
     builtin = "builtin"
     kind = "kind"
     attribute_name = "attribute_name"
+    env_var = "env_var"
     statement_definition = "statement_definition"
     filename = "filename"
 
