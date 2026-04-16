@@ -361,6 +361,12 @@ def cmd_unused_elements(args: argparse.Namespace, files: Files):
     print_data(data, headers, delimiter=args.delimiter, root_path=files.main.parent)
 
 
+def cmd_loaded_files(args: argparse.Namespace, all_files: list[Files]):
+    loaded_files = {fn for files in all_files for fn in files.by_filename}
+    for fn in loaded_files:
+        print(fn)
+
+
 def cmd_all(args: argparse.Namespace, files: Files):
     """Legacy dump behavior."""
     if not args.delimiter:
@@ -450,6 +456,13 @@ def main(args: list[str] | None = None) -> None:
         help="Dump defined elements not used",
         dest="dump_unused_elements",
     )
+    parser.add_argument(
+        "-f",
+        "--files",
+        action="store_true",
+        help="Dump loaded files",
+        dest="dump_loaded_files",
+    )
 
     if args is None:
         raw_args = sys.argv[1:]
@@ -473,10 +486,13 @@ def main(args: list[str] | None = None) -> None:
         parsed_args.dump_parameters
         or parsed_args.dump_used_elements
         or parsed_args.dump_unused_elements
+        or parsed_args.dump_loaded_files
     )
 
+    all_files: list[Files] = []
     for fn in parsed_args.filename:
         files = _load_files_and_parse(fn, pathlib.Path.cwd(), parsed_args.verbose)
+        all_files.append(files)
 
         if not any_dump_flag:
             cmd_all(parsed_args, files)
@@ -489,6 +505,9 @@ def main(args: list[str] | None = None) -> None:
 
             if parsed_args.dump_unused_elements:
                 cmd_unused_elements(parsed_args, files)
+
+    if parsed_args.dump_loaded_files:
+        cmd_loaded_files(parsed_args, all_files)
 
 
 def cli_main(args: list[str] | None = None) -> None:
