@@ -58,12 +58,12 @@ class Simple(Statement):
     known_statements: ClassVar[frozenset] = frozenset(
         {
             "beam",  # from source; what else is in there? (TODO)
-            "call",
             "calc_reference_orbit",
+            "call",
             "combine_consecutive_elements",
             "debug_marker",
-            "expand_lattice",
             "end_file",
+            "expand_lattice",
             "merge_elements",
             "no_digested",
             "no_superimpose",
@@ -71,13 +71,14 @@ class Simple(Statement):
             "print",
             "remove_elements",
             "return",
+            "setenv",
             "slice_lattice",
             "start_branch_at",
             "title",
+            "undefined_vars_evaluate_to_zero",
             "use",
             "use_local_lat_file",
             "write_digested",
-            "setenv",
         }
     )
     statement: Token
