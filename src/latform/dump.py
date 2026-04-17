@@ -334,7 +334,7 @@ def cmd_parameters(args: argparse.Namespace, files: Files):
             continue
         data.append(item)
 
-    print_data(data, headers, delimiter=args.delimiter, root_path=files.main.parent)
+    return data, headers
 
 
 def cmd_used_elements(args: argparse.Namespace, files: Files):
@@ -346,7 +346,7 @@ def cmd_used_elements(args: argparse.Namespace, files: Files):
             continue
         data.append(item)
 
-    print_data(data, headers, delimiter=args.delimiter, root_path=files.main.parent)
+    return data, headers
 
 
 def cmd_unused_elements(args: argparse.Namespace, files: Files):
@@ -358,13 +358,22 @@ def cmd_unused_elements(args: argparse.Namespace, files: Files):
             continue
         data.append(item)
 
-    print_data(data, headers, delimiter=args.delimiter, root_path=files.main.parent)
+    return data, headers
 
 
-def cmd_loaded_files(args: argparse.Namespace, all_files: list[Files]):
-    loaded_files = {fn for files in all_files for fn in files.by_filename}
-    for fn in loaded_files:
-        print(fn)
+def cmd_loaded_files(
+    args: argparse.Namespace,
+    all_files: list[Files],
+    normalize_call: bool = True,
+    # include_hdf5: bool = False,
+):
+    # Not using a set here to retain parsing order
+    res = []
+    for files in all_files:
+        for fn in files.get_all_referenced_files():
+            if fn not in res:
+                res.append(fn)
+    return res
 
 
 def cmd_all(args: argparse.Namespace, files: Files):
@@ -489,25 +498,42 @@ def main(args: list[str] | None = None) -> None:
         or parsed_args.dump_loaded_files
     )
 
+    if not any_dump_flag:
+        parsed_args.dump_parameters = True
+        parsed_args.dump_used_elements = True
+        parsed_args.dump_unused_elements = True
+        parsed_args.dump_loaded_files = True
+
     all_files: list[Files] = []
     for fn in parsed_args.filename:
         files = _load_files_and_parse(fn, pathlib.Path.cwd(), parsed_args.verbose)
         all_files.append(files)
 
-        if not any_dump_flag:
-            cmd_all(parsed_args, files)
-        else:
-            if parsed_args.dump_parameters:
-                cmd_parameters(parsed_args, files)
+        if parsed_args.dump_parameters:
+            if not any_dump_flag and not parsed_args.delimiter:
+                print("--- Parameters ---")
 
-            if parsed_args.dump_used_elements:
-                cmd_used_elements(parsed_args, files)
+            data, headers = cmd_parameters(parsed_args, files)
+            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=files.main.parent)
 
-            if parsed_args.dump_unused_elements:
-                cmd_unused_elements(parsed_args, files)
+        if parsed_args.dump_used_elements:
+            if not any_dump_flag and not parsed_args.delimiter:
+                print("\n--- Used Elements ---")
+            data, headers = cmd_used_elements(parsed_args, files)
+            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=files.main.parent)
 
+        if parsed_args.dump_unused_elements:
+            if not any_dump_flag and not parsed_args.delimiter:
+                print("\n--- Unused Elements ---")
+            data, headers = cmd_unused_elements(parsed_args, files)
+            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=files.main.parent)
+
+    if not any_dump_flag and not parsed_args.delimiter:
+        print("\n--- All loaded files ---")
     if parsed_args.dump_loaded_files:
-        cmd_loaded_files(parsed_args, all_files)
+        res = cmd_loaded_files(parsed_args, all_files)
+        for fn in res:
+            print(fn)
 
 
 def cli_main(args: list[str] | None = None) -> None:

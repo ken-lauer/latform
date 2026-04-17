@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os.path
 import pathlib
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -34,6 +35,7 @@ from .types import (
     TokenizerItem,
 )
 from .util import partition_items
+from .walk import walk
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +573,26 @@ class Files:
         for fn, statements in self.by_filename.items():
             formatted = format_statements(statements, options)
             self._write_reformatted(fn, formatted)
+
+    def get_all_referenced_files(
+        self,
+        normalize_call: bool = True,
+        # include_hdf5: bool = False,
+    ) -> list[pathlib.Path]:
+        loaded_files = list(self.by_filename)
+
+        for statements in self.by_filename.values():
+            for item in walk(statements):
+                match item.node:
+                    case Seq(items=["call", *_rest]):
+                        fn = pathlib.Path(item.node.to_token().split("::", 1)[1])
+                        if normalize_call:
+                            fn = pathlib.Path(os.path.expandvars(fn))
+
+                        if fn not in loaded_files:
+                            loaded_files.append(pathlib.Path(fn))
+
+        return loaded_files
 
 
 @dataclass

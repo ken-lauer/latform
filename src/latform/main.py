@@ -182,6 +182,7 @@ def main(
             process_file(contents=content, filename=fn, verbose=verbose)
 
     for fn, statements in files_obj.by_filename.items():
+        logger.info("Processing %s", fn)
         for st in statements:
             for lint in lint_statement(st):
                 msg = lint.to_user_message()
