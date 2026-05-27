@@ -6,7 +6,7 @@ import shutil
 import pytest
 from pytest_mock import MockerFixture
 
-from ..main import load_renames, main
+from ..main import cli_main, load_renames, main
 from .conftest import LATTICE_FILES
 
 lattice_file = pytest.mark.parametrize(
@@ -107,6 +107,29 @@ def test_verbosity_levels(input_filename: pathlib.Path, capsys: pytest.CaptureFi
     main(filename=input_filename, verbose=2)
     captured = capsys.readouterr()
     assert "-- Block" in captured.err
+
+
+@pytest.fixture
+def missing_call_file(tmp_path: pathlib.Path) -> pathlib.Path:
+    f = tmp_path / "with_missing_call.bmad"
+    f.write_text("d1: drift, L=1.0;\ncall, file=does_not_exist.bmad;\n")
+    return f
+
+
+def test_missing_call_ignored_by_default(missing_call_file: pathlib.Path):
+    # error_if_missing not set - does not raise
+    main(filename=missing_call_file, recursive=True)
+
+
+def test_missing_call_raises_when_requested(missing_call_file: pathlib.Path):
+    with pytest.raises(FileNotFoundError):
+        main(filename=missing_call_file, recursive=True, error_if_missing=True)
+
+
+def test_cli_exits_on_missing_call(missing_call_file: pathlib.Path):
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main([str(missing_call_file), "--recursive", "--error-if-missing"])
+    assert exc_info.value.code == 1
 
 
 def test_load_renames(tmp_path: pathlib.Path):
