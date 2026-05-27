@@ -454,9 +454,19 @@ class Files:
         """Hook to read file contents. default: read from disk."""
         return filepath.read_text()
 
-    def parse(self, recurse: bool = True):
+    def parse(self, recurse: bool = True, raise_if_missing: bool = False):
         """
         Parse the main file and optionally its dependencies recursively.
+
+        Parameters
+        ----------
+        recurse : bool, optional
+            Recurse into called lattice files.  Defaults to True.
+        raise_if_missing : bool, optional
+            For lattice files included by way of ``call`` statements,
+            this flag will control whether `FileNotFoundError` is raised.
+            If the initial file is missing, `FileNotFoundError` will always be
+            raised.
         """
         self.main = self.main.resolve()
         if not self.stack:
@@ -490,6 +500,12 @@ class Files:
                 logger.error(
                     f"Could not find file: {full_path} (parent={parent_dir} file={filename_part})"
                 )
+                if len(processed) == 1 or raise_if_missing:
+                    # If this is our first file, it's an error if the file doesn't exist.
+                    # Otherwise, it's optionally an error.
+                    raise FileNotFoundError(
+                        f"Could not find file: {full_path} (parent={parent_dir} file={filename_part})"
+                    ) from None
                 continue
 
             # We don't annotate individually here, we do it in bulk later or let caller decide

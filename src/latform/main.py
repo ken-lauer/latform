@@ -129,6 +129,7 @@ def main(
     flatten_call: bool = False,
     flatten_inline: bool = False,
     strip_comments: bool = False,
+    error_if_missing: bool = False,
 ) -> None:
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
@@ -168,7 +169,7 @@ def main(
     )
     recursive = recursive or options.flatten_call  # implied
 
-    files_obj.parse(recurse=recursive)
+    files_obj.parse(recurse=recursive, raise_if_missing=error_if_missing)
     files_obj.annotate()
 
     if verbose > 0:
@@ -393,6 +394,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Remove comments from the output",
     )
+    parser.add_argument(
+        "-e",
+        "--error-if-missing",
+        action="store_true",
+        help="If a file is missing during parsing, exit with an error.",
+    )
 
     parser.add_argument(
         "--log",
@@ -428,7 +435,11 @@ def cli_main(args: list[str] | None = None) -> None:
     for filename in filenames:
         if len(filename) > 1:
             logger.info("Processing %s", filename)
-        main(filename=filename, **kwargs)
+        try:
+            main(filename=filename, **kwargs)
+        except FileNotFoundError as ex:
+            logger.error("%s", ex)
+            raise SystemExit(1) from None
     return
 
 
