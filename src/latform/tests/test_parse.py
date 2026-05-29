@@ -41,6 +41,7 @@ from ..parser import (
     UnexpectedAssignment,
     parse,
 )
+from ..token import Role
 from ..tokenizer import tokenize
 from ..types import FormatOptions
 
@@ -2836,6 +2837,66 @@ def test_nonstandard_parameter_syntax(code: str) -> None:
 
     # These aren't in the parametrized list, don't overlook them
     roundtrip_code(code)
+
+
+def test_element_ref_attrib_name_role() -> None:
+    code = """
+K1: quad
+K2: quad
+
+K1[k2] = k1[k2] + 2
+"""
+    (_, _, param) = parse_verbose(code)
+    assert isinstance(param, Parameter)
+    assert param.target.role == Role.name_
+    assert param.name.role == Role.attribute_name
+
+    assert isinstance(param.value, Seq)
+    rhs_ref, rhs_brackets, *_ = param.value.items
+    assert rhs_ref == "k1"
+    assert rhs_ref.role == Role.name_
+    assert isinstance(rhs_brackets, Seq) and rhs_brackets.opener == "["
+    (rhs_attr,) = rhs_brackets.items
+    assert rhs_attr == "k2"
+    assert rhs_attr.role == Role.attribute_name
+
+
+def test_overlay_with_bracketed_attribute_targets_formats() -> None:
+    code = """
+QUA2: quad
+
+XCR_B1 = 0
+B1 = 0
+
+OVERLAY: overlay = {
+  QUA2[hkick]:kick,
+  QUA2[B1]:XCR_B1*multipoles_on*kick,
+  QUA2[A1]:XCR_A1*multipoles_on*kick,
+  QUA2[B2]:XCR_B2*multipoles_on*kick,
+  QUA2[b4]:XCR_B4*multipoles_on*kick,
+  QUA2[a4]:XCR_A4*multipoles_on*kick,
+  QUA2[b5]:XCR_B5*multipoles_on*kick,
+  QUA2[A5]:XCR_A5*multipoles_on*kick
+}, var={kick, multipoles_on}, kick=0, multipoles_on=0, type=OVERLAY_TEST
+"""
+    res = parse_verbose(code)
+    formatted = format_statements(res, FormatOptions(newline_at_eof=False))
+
+    expected = """\
+QUA2: quad
+XCR_B1 = 0
+B1 = 0
+OVERLAY: OVERLAY = {
+  QUA2[hkick]:kick,
+  QUA2[b1]:XCR_B1*multipoles_on*kick,
+  QUA2[a1]:XCR_A1*multipoles_on*kick,
+  QUA2[b2]:XCR_B2*multipoles_on*kick,
+  QUA2[b4]:XCR_B4*multipoles_on*kick,
+  QUA2[a4]:XCR_A4*multipoles_on*kick,
+  QUA2[b5]:XCR_B5*multipoles_on*kick,
+  QUA2[a5]:XCR_A5*multipoles_on*kick
+}, var={kick, multipoles_on}, kick=0, multipoles_on=0, type=OVERLAY_TEST"""
+    assert formatted == expected
 
 
 def test_attribute_in_parameter_assignment() -> None:
