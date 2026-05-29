@@ -238,7 +238,7 @@ class Token(str):
 
     def upper(self):
         return type(self)(
-            super().upper(),
+            self._upper,
             loc=self.loc,
             comments=self.comments,
             role=self.role,

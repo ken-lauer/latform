@@ -171,21 +171,20 @@ def _tokens_at_depth(parts: list[Token], target_depth: int):
             depth -= 1
 
 
-def _count_top_level(parts: list[Token], to_count: Token) -> int:
+def _count_and_length_top_level(parts: list[Token], to_count: Token) -> tuple[int, int]:
     count = 0
-
-    for tok in _tokens_at_depth(parts, target_depth=0):
-        if tok == to_count:
-            count += 1
-    return count
-
-
-def _length_top_level(parts: list[Token]) -> int:
     length = 0
-
-    for tok in _tokens_at_depth(parts, target_depth=0):
-        length += len(tok)
-    return length
+    depth = 0
+    for tok in parts:
+        if depth == 0:
+            length += len(tok)
+            if tok == to_count:
+                count += 1
+        if tok in OPEN_TO_CLOSE:
+            depth += 1
+        elif tok in CLOSE_TO_OPEN:
+            depth -= 1
+    return count, length
 
 
 def _output_node_block_contains_comments(parts: list[Token], start_idx: int) -> bool:
@@ -351,8 +350,7 @@ def _format(
     block_has_newlines_stack: list[bool] = []
     nxt = None
 
-    commas = _count_top_level(parts, COMMA)
-    top_level_length = _length_top_level(parts)
+    commas, top_level_length = _count_and_length_top_level(parts, COMMA)
 
     if commas > options.statement_comma_threshold_for_multiline or top_level_length > (
         options.max_line_length
@@ -371,32 +369,40 @@ def _format(
 
     line = OutputLine(indent=indent_level, parts=[])
 
+    attr_case = options.attribute_case
+    name_case = options.name_case
+    kind_case = options.kind_case
+    builtin_case = options.builtin_case
+
     def add_part_to_line(part: Token):
-        def apply_case(case: NameCase):
-            if case == "upper" or part == "l":  # special case
-                val = part.upper()
-            elif case == "lower":
-                val = part.lower()
-            else:
-                val = part
-
-            line.parts.append(val)
-
-        if part.role in {Role.filename}:
+        role = part.role
+        if role is Role.filename:
             # Always keep the same case
+            # TODO: Hmm, maybe this could be used for on-disk case correction
+            # for MacOS...
             line.parts.append(part)
             return
 
-        same: NameCase = "same"
-        case = {
-            Role.attribute_name: options.attribute_case,
-            Role.name_: options.name_case,
-            Role.kind: options.kind_case,
-            Role.builtin: options.builtin_case,
-            None: same,
-        }.get(part.role, same)
+        match role:
+            case None:
+                case: NameCase = "same"
+            case Role.attribute_name:
+                case = attr_case
+            case Role.name_:
+                case = name_case
+            case Role.kind:
+                case = kind_case
+            case Role.builtin:
+                case = builtin_case
+            case _:
+                case = "same"
 
-        apply_case(case)
+        if case == "upper" or part == "l":  # special case
+            line.parts.append(part.upper())
+        elif case == "lower":
+            line.parts.append(part.lower())
+        else:
+            line.parts.append(part)
 
     def newline(lookahead: bool = True, reason: str = ""):
         nonlocal idx
