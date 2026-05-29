@@ -7,6 +7,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from ..main import cli_main, load_renames, main
+from ..parser import Files, MemoryFiles, build_files
 from .conftest import LATTICE_FILES
 
 lattice_file = pytest.mark.parametrize(
@@ -130,6 +131,54 @@ def test_cli_exits_on_missing_call(missing_call_file: pathlib.Path):
     with pytest.raises(SystemExit) as exc_info:
         cli_main([str(missing_call_file), "--recursive", "--error-if-missing"])
     assert exc_info.value.code == 1
+
+
+def test_build_files_default_is_per_file(tmp_path: pathlib.Path):
+    f1 = tmp_path / "a.bmad"
+    f2 = tmp_path / "b.bmad"
+    f1.write_text("Q1: quad;\n")
+    f2.write_text("Q2: quad;\n")
+
+    result = build_files([f1, f2])
+    assert len(result) == 2
+    assert all(isinstance(f, Files) for f in result)
+    assert [fobj.top_files[0].name for fobj in result] == ["a.bmad", "b.bmad"]
+
+
+def test_build_files_combine_groups_into_one(tmp_path: pathlib.Path):
+    f1 = tmp_path / "a.bmad"
+    f2 = tmp_path / "b.bmad"
+    f1.write_text("Q1: quad;\n")
+    f2.write_text("Q2: quad;\n")
+
+    (combined,) = build_files([f1, f2], combine=True)
+    assert isinstance(combined, Files)
+    assert [p.name for p in combined.top_files] == ["a.bmad", "b.bmad"]
+
+
+def test_build_files_combine_with_stdin_uses_memory_files(
+    tmp_path: pathlib.Path, mocker: MockerFixture
+):
+    mocker.patch("sys.stdin.read", return_value="QS: quad;\n")
+    f1 = tmp_path / "a.bmad"
+    f1.write_text("Q1: quad;\n")
+
+    (combined,) = build_files([f1, "-"], combine=True, root_path=tmp_path)
+    assert isinstance(combined, MemoryFiles)
+    assert len(combined.top_files) == 2
+
+
+def test_cli_combine_outputs_both_files(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture):
+    f1 = tmp_path / "a.bmad"
+    f2 = tmp_path / "b.bmad"
+    f1.write_text("QA: drift, L=1;\n")
+    f2.write_text("QB: drift, L=2;\n")
+
+    cli_main([str(f1), str(f2), "--combine"])
+
+    captured = capsys.readouterr()
+    assert "QA: drift, L=1" in captured.out
+    assert "QB: drift, L=2" in captured.out
 
 
 def test_load_renames(tmp_path: pathlib.Path):
