@@ -340,6 +340,7 @@ def parse_items(items: list[TokenizerItem]):
 
                 if isinstance(target, Token):
                     value = fix_parameter_value(target, name, value, raw_value=after_equals)
+                    target = target.with_(role=Role.name_)
 
                 return cls(
                     comments=comments,
@@ -588,9 +589,6 @@ class Files:
                 keyword=Token("MARKER", loc=implicit_location, role=Role.kind),
             )
 
-        if "B1" in named_items:
-            print(named_items["B1"])
-            raise
         return named_items
 
     def _write_reformatted(self, path: pathlib.Path, formatted: str) -> None:

@@ -260,7 +260,7 @@ def _annotate_names(items):
                 and nxt.opener == "["
                 and all(isinstance(inner, Token) for inner in nxt.items)
             ):
-                item.role = Role.attribute_name
+                # item.role = Role.name_
                 nxt.items = nxt.with_(role=Role.attribute_name).items
 
 

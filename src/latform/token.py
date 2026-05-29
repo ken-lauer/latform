@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import typing
-from typing import Any, Sequence, SupportsIndex
+from typing import Any, ClassVar, Sequence, SupportsIndex
 
 try:
     from typing import Self
@@ -36,6 +36,8 @@ class Token(str):
     loc: Location
     comments: Comments
     role: Role | None = None
+
+    _detailed_repr_: ClassVar[bool] = True
 
     def __new__(
         cls,
@@ -91,16 +93,21 @@ class Token(str):
         return self
 
     def __repr__(self) -> str:
-        # return super().__repr__()
-        # parts = [super().__repr__(), self.loc]
-        parts: list[Any] = [super().__repr__()]
+        if self._detailed_repr_:
+            parts = [super().__repr__(), self.role, self.loc]
+        else:
+            parts = [super().__repr__()]
         if bool(self.comments):
             parts.append(self.comments)
         desc = ", ".join(str(part) for part in parts if part)
         return f"{type(self).__name__}({desc})"
 
     def annotate(self, named: dict[Token, Any]):
-        if self.upper() in named:
+        if self.upper() in named and self.role not in {
+            Role.attribute_name,
+            Role.env_var,
+            Role.filename,
+        }:
             self.role = Role.name_
 
     @classmethod

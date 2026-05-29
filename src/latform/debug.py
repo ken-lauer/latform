@@ -6,6 +6,7 @@ from typing import TextIO
 import rich
 
 from .parser import Files
+from .token import Token
 from .tokenizer import tokenize
 
 
@@ -21,6 +22,9 @@ def print_blocks(files: Files, verbose: int = 1, out: TextIO | None = None) -> N
     """
     if verbose <= 0:
         return
+    if verbose >= 4:
+        Token._detailed_repr_ = True
+
     if out is None:
         # Resolve lazily so e.g. pytest's capsys-patched sys.stderr is honored.
         out = sys.stderr
