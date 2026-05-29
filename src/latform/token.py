@@ -36,6 +36,8 @@ class Token(str):
     loc: Location
     comments: Comments
     role: Role | None = None
+    _upper: str
+    _hash: int
 
     _detailed_repr_: ClassVar[bool] = True
 
@@ -58,6 +60,9 @@ class Token(str):
         self.loc = loc or Location(end_column=len(content))
         self.comments = comments or Comments()
         self.role = role
+        self._upper = str.upper(self)
+        # self._hash = hash(self._upper)
+        self._hash = super().__hash__()
 
         # internal error
         if not isinstance(self.loc, Location):
@@ -68,14 +73,17 @@ class Token(str):
             raise ValueError(type(self.role))
 
     def __hash__(self):
-        return super().__hash__()
+        # pydantic complains about mutable default otherwise
+        return self._hash
 
     def __eq__(self, other) -> bool:
-        case_insensitive_equality = str(other).upper() == str(self).upper()
-        if hasattr(other, "comments"):
-            return case_insensitive_equality and self.comments == other.comments
-
-        return case_insensitive_equality
+        if isinstance(other, Token):
+            return self._upper == other._upper and self.comments == other.comments
+        if self._upper == other:
+            return True
+        if isinstance(other, str):
+            return self._upper == other.upper()
+        return self._upper == str(other).upper()
 
     def __ne__(self, other) -> bool:
         return not (self == other)
