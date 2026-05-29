@@ -67,7 +67,11 @@ def _load_git_files_and_parse(
 ) -> Files:
     main_path = workdir / path
 
-    files = GitFiles(main=main_path, revision=revision, repo_root=find_gitroot(main_path))
+    files = GitFiles(
+        top_files=[main_path],
+        revision=revision,
+        repo_root=find_gitroot(main_path),
+    )
     files.parse()
     files.annotate()
     return files

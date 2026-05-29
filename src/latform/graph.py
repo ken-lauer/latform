@@ -7,9 +7,8 @@ from __future__ import annotations
 import argparse
 import logging
 import pathlib
-import sys
 
-from .parser import Files, MemoryFiles, is_call_statement
+from .parser import Files, build_files, is_call_statement
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
@@ -51,59 +50,53 @@ def _generate_tree_text(files: Files) -> str:
             else:
                 lines.append(f"{prefix}{extension}└── [Recursive: {display}]")
 
-    lines.append(files.main.name)
-
-    _walk(files.main, "", {files.main})
+    for top in files.top_files:
+        display = files.local_file_to_source_filename.get(top, top.name)
+        lines.append(display)
+        _walk(top, "", {top})
 
     return "\n".join(lines)
 
 
+def _generate_mermaid(files: Files) -> str:
+    graph_lines = ["graph LR"]
+
+    def make_id(fn: str):
+        return fn.replace("/", "_").replace(".", "_").replace("-", "_")
+
+    for fn1, fn2 in files.call_graph_edges:
+        id1 = make_id(fn1)
+        id2 = make_id(fn2)
+        graph_lines.append(f'    {id1}["{fn1}"] --> {id2}["{fn2}"]')
+
+    return "\n".join(graph_lines)
+
+
 def main(
-    filename: str | pathlib.Path,
+    filename: str | pathlib.Path | list[str | pathlib.Path],
     verbose: int = 0,
     output: pathlib.Path | str | None = None,
     format: str = "text",
+    combine: bool = False,
 ) -> None:
-    is_stdin = str(filename) == "-"
-
-    files: Files
-    if is_stdin:
-        contents = sys.stdin.read()
-        files = MemoryFiles.from_contents(contents, root_path=pathlib.Path.cwd() / "stdin.lat")
-        files.local_file_to_source_filename[files.main] = "<stdin>"
+    if isinstance(filename, (str, pathlib.Path)):
+        filenames: list[str | pathlib.Path] = [filename]
     else:
-        files = Files(main=pathlib.Path(filename))
+        filenames = list(filename)
 
-    files.parse(recurse=True)
-    files.annotate()
+    outputs: list[str] = []
+    for files in build_files(filenames, combine=combine):
+        files.parse(recurse=True)
+        files.annotate()
+        if format == "text":
+            outputs.append(_generate_tree_text(files))
+        else:
+            outputs.append(_generate_mermaid(files))
+
+    to_write = "\n".join(outputs)
 
     if output:
-        dest_fn = output
-    else:
-        dest_fn = None
-
-    to_write = ""
-
-    if format == "text":
-        to_write = _generate_tree_text(files)
-    else:
-        # Generate Mermaid Graph View (Default)
-        graph_lines = ["graph LR"]
-
-        def make_id(fn: str):
-            return fn.replace("/", "_").replace(".", "_").replace("-", "_")
-
-        for fn1, fn2 in files.call_graph_edges:
-            id1 = make_id(fn1)
-            id2 = make_id(fn2)
-
-            # id["label"] --> id2["label2"]
-            graph_lines.append(f'    {id1}["{fn1}"] --> {id2}["{fn2}"]')
-
-        to_write = "\n".join(graph_lines)
-
-    if dest_fn:
-        pathlib.Path(dest_fn).write_text(to_write)
+        pathlib.Path(output).write_text(to_write)
     else:
         print(to_write)
 
@@ -155,6 +148,15 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--combine",
+        action="store_true",
+        help=(
+            "Process all input files together as a single set, sharing one parse stack. "
+            "The output renders all top-level files in a single tree."
+        ),
+    )
+
+    parser.add_argument(
         "--log",
         "-L",
         dest="log_level",
@@ -180,15 +182,10 @@ def cli_main(args: list[str] | None = None) -> None:
     log_level = kwargs.pop("log_level")
 
     # Adjust the package-level logger level as requested:
-    logger = logging.getLogger("latform")
-    logger.setLevel(log_level)
+    logging.getLogger("latform").setLevel(log_level)
     logging.basicConfig()
     filenames = kwargs.pop("filename")
-
-    for filename in filenames:
-        if len(filename) > 1:
-            logger.info("Processing %s", filename)
-        main(filename=filename, **kwargs)
+    main(filename=filenames, **kwargs)
 
 
 if __name__ == "__main__":

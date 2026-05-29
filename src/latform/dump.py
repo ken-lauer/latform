@@ -19,7 +19,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .location import Location
-from .parser import Files, MemoryFiles
+from .parser import Files, build_files
 from .statements import (
     Attribute,
     Element,
@@ -300,29 +300,25 @@ def print_data(
         console.print(table)
 
 
-def _load_files_and_parse(filename: str, root_path: pathlib.Path, verbose: int) -> Files:
-    """Helper to handle file loading and parsing errors."""
-
-    is_stdin = filename == "-"
-
-    if is_stdin:
-        contents = sys.stdin.read()
-        files = MemoryFiles.from_contents(contents, root_path=root_path / "stdin.lat")
-        files.local_file_to_source_filename[files.main] = "<stdin>"
-    else:
-        files = Files(main=pathlib.Path(filename))
-
+def _load_all_files_and_parse(
+    filenames: list[str | pathlib.Path],
+    root_path: pathlib.Path,
+    verbose: int,
+    combine: bool = False,
+) -> list[Files]:
+    """Build, parse, and annotate one or more :class:`Files` objects."""
+    result = build_files(filenames, combine=combine, root_path=root_path)
     try:
-        files.parse(recurse=True)
-        files.annotate()
+        for files in result:
+            files.parse(recurse=True)
+            files.annotate()
     except Exception as e:
         if verbose > 0:
             logger.exception("Parsing failed")
         else:
             logger.error(f"Parsing failed: {e}")
         sys.exit(1)
-
-    return files
+    return result
 
 
 def cmd_parameters(args: argparse.Namespace, files: Files):
@@ -472,6 +468,14 @@ def main(args: list[str] | None = None) -> None:
         help="Dump loaded files",
         dest="dump_loaded_files",
     )
+    parser.add_argument(
+        "--combine",
+        action="store_true",
+        help=(
+            "Process all input files together as a single set, sharing one parse stack "
+            "and one named-item namespace."
+        ),
+    )
 
     if args is None:
         raw_args = sys.argv[1:]
@@ -504,29 +508,33 @@ def main(args: list[str] | None = None) -> None:
         parsed_args.dump_unused_elements = True
         parsed_args.dump_loaded_files = True
 
-    all_files: list[Files] = []
-    for fn in parsed_args.filename:
-        files = _load_files_and_parse(fn, pathlib.Path.cwd(), parsed_args.verbose)
-        all_files.append(files)
+    all_files = _load_all_files_and_parse(
+        parsed_args.filename,
+        pathlib.Path.cwd(),
+        parsed_args.verbose,
+        combine=parsed_args.combine,
+    )
+    for files in all_files:
+        root_path = files.top_files[0].parent
 
         if parsed_args.dump_parameters:
             if not any_dump_flag and not parsed_args.delimiter:
                 print("--- Parameters ---")
 
             data, headers = cmd_parameters(parsed_args, files)
-            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=files.main.parent)
+            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=root_path)
 
         if parsed_args.dump_used_elements:
             if not any_dump_flag and not parsed_args.delimiter:
                 print("\n--- Used Elements ---")
             data, headers = cmd_used_elements(parsed_args, files)
-            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=files.main.parent)
+            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=root_path)
 
         if parsed_args.dump_unused_elements:
             if not any_dump_flag and not parsed_args.delimiter:
                 print("\n--- Unused Elements ---")
             data, headers = cmd_unused_elements(parsed_args, files)
-            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=files.main.parent)
+            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=root_path)
 
     if not any_dump_flag and not parsed_args.delimiter:
         print("\n--- All loaded files ---")

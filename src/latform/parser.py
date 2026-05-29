@@ -344,7 +344,7 @@ def parse_items(items: list[TokenizerItem]):
                 return cls(
                     comments=comments,
                     target=target,
-                    name=name.with_(role=Role.name_),
+                    name=name.with_(role=Role.attribute_name),
                     value=value,
                 )
             # Generic assignment: name = value
@@ -393,7 +393,7 @@ def parse_file(filename: pathlib.Path | str, annotate: bool = True) -> Sequence[
 
 
 def parse_file_recursive(filename: pathlib.Path | str, annotate: bool = True) -> Files:
-    files = Files(main=pathlib.Path(filename))
+    files = Files(top_files=[pathlib.Path(filename)])
     files.parse()
     if annotate:
         files.annotate()
@@ -410,15 +410,22 @@ implicit_location = Location(filename=pathlib.Path("<implicit>"))
 @dataclass
 class Files:
     """
-    Represents a collection of parsed files starting from a main entry point.
+    Represents a collection of parsed files starting from one or more
+    top-level entry points.
     """
 
-    main: pathlib.Path
+    top_files: list[pathlib.Path] = field(default_factory=list)
     # Stack stores: (relative_filename_to_parse, parent_directory_of_caller)
     stack: list[tuple[pathlib.Path, pathlib.Path]] = field(default_factory=list)
     by_filename: dict[pathlib.Path, list[Statement]] = field(default_factory=dict)
+    blocks_by_filename: dict[pathlib.Path, list[Block]] = field(default_factory=dict)
     local_file_to_source_filename: dict[pathlib.Path, str] = field(default_factory=dict)
     filename_calls: dict[pathlib.Path, list[pathlib.Path]] = field(default_factory=dict)
+
+    @property
+    def main(self) -> pathlib.Path:
+        """The first top-level file; convenient for single-entry cases."""
+        return self.top_files[0]
 
     def _add_file_by_statement(self, statement_filename: pathlib.Path, st: Simple) -> pathlib.Path:
         """
@@ -454,9 +461,14 @@ class Files:
         """Hook to read file contents. default: read from disk."""
         return filepath.read_text()
 
-    def parse(self, recurse: bool = True, raise_if_missing: bool = False):
+    def parse(
+        self,
+        recurse: bool = True,
+        raise_if_missing: bool = False,
+        keep_blocks: bool = False,
+    ):
         """
-        Parse the main file and optionally its dependencies recursively.
+        Parse the top-level file(s) and optionally their dependencies recursively.
 
         Parameters
         ----------
@@ -465,14 +477,23 @@ class Files:
         raise_if_missing : bool, optional
             For lattice files included by way of ``call`` statements,
             this flag will control whether `FileNotFoundError` is raised.
-            If the initial file is missing, `FileNotFoundError` will always be
-            raised.
+            If a top-level file is missing, `FileNotFoundError` is always raised.
+        keep_blocks : bool, optional
+            Store the intermediate `Block` objects in
+            ``self.blocks_by_filename`` so callers (e.g. verbose debug output)
+            don't have to re-tokenize.
         """
-        self.main = self.main.resolve()
+        if not self.top_files:
+            raise ValueError("Files requires at least one top-level file in top_files")
+
+        self.top_files = [p.resolve() for p in self.top_files]
+        top_set = set(self.top_files)
+
         if not self.stack:
-            # We treat the main file as relative to its own parent for consistency
-            self.stack = [(pathlib.Path(self.main.name), self.main.parent)]
-            self.local_file_to_source_filename[self.main] = self.main.name
+            # Seed the stack so the first top file is popped first.
+            for top in reversed(self.top_files):
+                self.stack.append((pathlib.Path(top.name), top.parent))
+                self.local_file_to_source_filename.setdefault(top, top.name)
 
         # We need to track processed files to avoid infinite loops in circular refs
         processed = set(self.by_filename.keys())
@@ -500,26 +521,36 @@ class Files:
                 logger.error(
                     f"Could not find file: {full_path} (parent={parent_dir} file={filename_part})"
                 )
-                if len(processed) == 1 or raise_if_missing:
-                    # If this is our first file, it's an error if the file doesn't exist.
-                    # Otherwise, it's optionally an error.
+                # Top-level files must exist. Otherwise, missing included files
+                # are optionally an error.
+                if full_path in top_set or raise_if_missing:
                     raise FileNotFoundError(
                         f"Could not find file: {full_path} (parent={parent_dir} file={filename_part})"
                     ) from None
                 continue
 
-            # We don't annotate individually here, we do it in bulk later or let caller decide
-            statements = list(parse(contents=contents, filename=full_path, annotate=False))
+            if keep_blocks:
+                blocks = tokenize(contents=contents, filename=full_path)
+                self.blocks_by_filename[full_path] = blocks
+                statements: list[Statement] = [b.parse() for b in blocks]
+            else:
+                # We don't annotate individually here, we do it in bulk later
+                statements = list(parse(contents=contents, filename=full_path, annotate=False))
             self.by_filename[full_path] = statements
 
             for st in statements:
                 if is_call_statement(st):
+                    # assert isinstance(st, Simple)
                     st.metadata["local_path"] = self._add_file_by_statement(
                         statement_filename=full_path, st=st
                     )
 
             if not recurse:
-                break
+                # Without recursion, still process remaining top-level files,
+                # but drop anything pulled in via `call` from this file.
+                self.stack = [item for item in self.stack if (item[1] / item[0]) in top_set]
+                if not self.stack:
+                    break
 
         return self.by_filename
 
@@ -556,12 +587,16 @@ class Files:
                 name=Token("END", loc=implicit_location, role=Role.name_),
                 keyword=Token("MARKER", loc=implicit_location, role=Role.kind),
             )
+
+        if "B1" in named_items:
+            print(named_items["B1"])
+            raise
         return named_items
 
     def _write_reformatted(self, path: pathlib.Path, formatted: str) -> None:
         path.write_text(formatted)
 
-    def flatten(self, call: bool, inline: bool) -> list[Statement]:
+    def flatten(self, call: bool, inline: bool, top: pathlib.Path | None = None) -> list[Statement]:
         # TODO inline handling
         def _flatten(fn):
             res = []
@@ -572,8 +607,11 @@ class Files:
                     res.append(st)
             return res
 
-        statements = _flatten(self.main)
-        return statements
+        return _flatten(top if top is not None else self.main)
+
+    def flatten_all(self, call: bool, inline: bool) -> dict[pathlib.Path, list[Statement]]:
+        """Flatten each top-level file independently, keyed by its path."""
+        return {top: self.flatten(call=call, inline=inline, top=top) for top in self.top_files}
 
     def reformat(self, options: FormatOptions) -> None:
         """
@@ -582,9 +620,12 @@ class Files:
         from .output import format_statements
 
         if options.flatten_call:
-            statements = self.flatten(call=options.flatten_call, inline=options.flatten_inline)
-            formatted = format_statements(statements, options)
-            self._write_reformatted(self.main, formatted)
+            for top, statements in self.flatten_all(
+                call=options.flatten_call, inline=options.flatten_inline
+            ).items():
+                formatted = format_statements(statements, options)
+                self._write_reformatted(top, formatted)
+            return
 
         for fn, statements in self.by_filename.items():
             formatted = format_statements(statements, options)
@@ -619,13 +660,13 @@ class MemoryFiles(Files):
     `root_path`.
     """
 
-    initial_contents: str = ""
-    _formatted_contents: str | None = None
+    initial_contents: dict[pathlib.Path, str] = field(default_factory=dict)
+    _formatted_contents: dict[pathlib.Path, str] = field(default_factory=dict)
 
     @classmethod
-    def from_contents(cls, contents: str, root_path: pathlib.Path | str) -> "MemoryFiles":
+    def from_contents(cls, contents: str, root_path: pathlib.Path | str) -> MemoryFiles:
         """
-        Create a MemoryFiles instance from a string.
+        Create a MemoryFiles instance from a single string.
 
         Parameters
         ----------
@@ -640,22 +681,122 @@ class MemoryFiles(Files):
         MemoryFiles
             The initialized object (call .parse() on it next).
         """
-        return cls(main=pathlib.Path(root_path).resolve(), initial_contents=contents)
+        path = pathlib.Path(root_path).resolve()
+        return cls(top_files=[path], initial_contents={path: contents})
+
+    @classmethod
+    def from_mapping(cls, contents: dict[pathlib.Path | str, str]) -> MemoryFiles:
+        """
+        Create a MemoryFiles instance from multiple in-memory files.
+
+        Keys are treated as top-level files in iteration order.
+        """
+        resolved = {pathlib.Path(path).resolve(): cts for path, cts in contents.items()}
+        return cls(top_files=list(resolved.keys()), initial_contents=resolved)
 
     def _get_file_contents(self, filepath: pathlib.Path) -> str:
-        if filepath == self.main:
-            return self.initial_contents
+        if filepath in self.initial_contents:
+            return self.initial_contents[filepath]
         return super()._get_file_contents(filepath)
 
     def _write_reformatted(self, path: pathlib.Path, formatted: str) -> None:
-        if path == self.main:
-            self._formatted_contents = formatted
+        if path in self.initial_contents:
+            self._formatted_contents[path] = formatted
         else:
             path.write_text(formatted)
 
     @property
     def formatted_contents(self) -> str:
-        """Get the formatted result of the initial memory contents."""
-        if self._formatted_contents is None:
+        """Get the formatted result for a single in-memory top file."""
+        if len(self.initial_contents) != 1:
+            raise RuntimeError(
+                "formatted_contents is only meaningful for single-entry MemoryFiles; "
+                "use formatted_contents_by_path instead."
+            )
+        top = list(self.initial_contents)[0]
+        if top not in self._formatted_contents:
             raise RuntimeError("Contents have not been reformatted yet. Call .reformat() first.")
-        return self._formatted_contents
+        return self._formatted_contents[top]
+
+    @property
+    def formatted_contents_by_path(self) -> dict[pathlib.Path, str]:
+        """All formatted in-memory entries."""
+        return dict(self._formatted_contents)
+
+
+STDIN_TOKEN = "-"
+STDIN_LABEL = "<stdin>"
+STDIN_FAKE_NAME = "stdin.lat"
+
+
+def build_files(
+    filenames: list[str | pathlib.Path],
+    *,
+    combine: bool = False,
+    root_path: pathlib.Path | None = None,
+) -> list[Files]:
+    """
+    Construct one or more `Files` objects from CLI-style filename arguments.
+
+    Parameters
+    ----------
+    filenames : list of str or Path
+        Filenames to load. ``"-"`` reads from stdin.
+    combine : bool, optional
+        If True, all filenames are combined into a single `Files`
+        (or `MemoryFiles` if any entry is stdin). If False (default),
+        each filename becomes its own `Files`, preserving the per-file
+        semantics of the legacy CLI loop.
+    root_path : pathlib.Path, optional
+        Directory used to resolve the synthetic stdin path. Defaults to ``Path.cwd()``.
+
+    Returns
+    -------
+    list of Files
+        One element if ``combine`` is True, otherwise one per input filename.
+    """
+    import sys
+
+    if not filenames:
+        return []
+    if root_path is None:
+        root_path = pathlib.Path.cwd()
+
+    def _is_stdin(fn) -> bool:
+        return str(fn) == STDIN_TOKEN
+
+    def _make_one(fn: str | pathlib.Path) -> Files:
+        if _is_stdin(fn):
+            fake_name = (root_path / STDIN_FAKE_NAME).resolve()
+            files = MemoryFiles(
+                top_files=[fake_name], initial_contents={fake_name: sys.stdin.read()}
+            )
+            files.local_file_to_source_filename[fake_name] = STDIN_LABEL
+            return files
+        return Files(top_files=[pathlib.Path(fn)])
+
+    if not combine:
+        return [_make_one(fn) for fn in filenames]
+
+    # Combined mode: a single Files (or MemoryFiles if any stdin entry).
+    stdin_path: pathlib.Path | None = None
+    top_files: list[pathlib.Path] = []
+    initial_contents: dict[pathlib.Path, str] = {}
+
+    for fn in filenames:
+        if _is_stdin(fn):
+            if stdin_path is not None:
+                raise ValueError("stdin ('-') can only be used once when combining inputs")
+            stdin_path = (root_path / STDIN_FAKE_NAME).resolve()
+            top_files.append(stdin_path)
+            initial_contents[stdin_path] = sys.stdin.read()
+        else:
+            top_files.append(pathlib.Path(fn))
+
+    if initial_contents:
+        files = MemoryFiles(top_files=top_files, initial_contents=initial_contents)
+        if stdin_path is not None:
+            files.local_file_to_source_filename[stdin_path] = STDIN_LABEL
+        return [files]
+
+    return [Files(top_files=top_files)]

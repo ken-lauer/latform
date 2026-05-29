@@ -8,16 +8,12 @@ import argparse
 import difflib
 import logging
 import pathlib
-import sys
-
-import rich
 
 from . import output as output_mod
+from .debug import print_blocks
 from .lint import lint_statement
 from .output import format_statements
-from .parser import Files, MemoryFiles, parse
-from .statements import Statement
-from .tokenizer import Tokenizer
+from .parser import Files, build_files
 from .types import FormatOptions, NameCase
 
 DESCRIPTION = __doc__
@@ -74,40 +70,92 @@ def get_diff(
     return "".join(udiff)
 
 
-def process_file(
-    contents: str,
-    filename: str | pathlib.Path,
-    verbose: int = 0,
-) -> list[Statement]:
-    if verbose <= 0:
-        return list(parse(contents, filename))
+def process_files(
+    files_obj: Files,
+    options: FormatOptions,
+    *,
+    recursive: bool,
+    verbose: int,
+    in_place: bool,
+    diff: bool,
+    output: pathlib.Path | str | None,
+    error_if_missing: bool,
+) -> None:
+    """Parse, annotate, lint, format, and emit one Files set."""
+    files_obj.parse(
+        recurse=recursive,
+        raise_if_missing=error_if_missing,
+        keep_blocks=verbose > 0,
+    )
+    files_obj.annotate()
 
-    tok = Tokenizer(contents, filename=filename)
-    blocks = tok.split_blocks()
-    stacked = [block.stack() for block in blocks]
-    statements = []
-    for idx, block in enumerate(stacked):
-        # Level 1: show block header, print statement
-        # Level 2: show block header, block, print statement
-        # Level 3: show block header, original source, block, print statement
-        if idx > 0:
-            rich.print()
-        rich.print(f"-- Block {idx} ({block.loc})", file=sys.stderr)
-        if verbose >= 3:
-            rich.print("Original source:", file=sys.stderr)
-            rich.print("```", file=sys.stderr)
-            rich.print(block.loc.get_string(contents), file=sys.stderr)
-            rich.print("```", file=sys.stderr)
-        if verbose >= 2:
-            rich.print(block, file=sys.stderr)
-        statement = block.parse()
-        statements.append(statement)
-        rich.print(statement, file=sys.stderr)
-    return statements
+    if verbose > 0:
+        print_blocks(files_obj, verbose=verbose)
+
+    for fn, statements in files_obj.by_filename.items():
+        logger.info("Processing %s", fn)
+        for st in statements:
+            for lint in lint_statement(st):
+                msg = lint.to_user_message()
+                if recursive:
+                    name = files_obj.local_file_to_source_filename.get(fn, fn.name)
+                    logger.warning(f"[{name}] {msg}")
+                else:
+                    logger.warning(msg)
+
+    top_set = set(files_obj.top_files)
+    results: dict[pathlib.Path, tuple[str, str]] = {}
+
+    if options.flatten_call:
+        for top, statements in files_obj.flatten_all(
+            call=options.flatten_call, inline=options.flatten_inline
+        ).items():
+            formatted = format_statements(statements, options)
+            results[top] = (files_obj._get_file_contents(top), formatted)
+    else:
+        for fn, statements in files_obj.by_filename.items():
+            formatted_text = format_statements(statements, options)
+            original_text = files_obj._get_file_contents(fn)
+            results[fn] = (original_text, formatted_text)
+
+    if output and not in_place and len(top_set & set(results)) > 1:
+        raise ValueError(
+            "--output with multiple top-level files is ambiguous; use --in-place instead."
+        )
+
+    for fn, (original, formatted) in results.items():
+        is_top_entry = fn in top_set
+        is_stdin_entry = files_obj.local_file_to_source_filename.get(fn) == "<stdin>"
+        display_name = files_obj.local_file_to_source_filename.get(fn, str(fn))
+
+        if diff:
+            if in_place:
+                raise NotImplementedError("In-place diff is not supported.")
+            diff_output = get_diff(original, formatted, fromfile=display_name, tofile=display_name)
+            if diff_output:
+                print(diff_output)
+            continue
+
+        if output and is_top_entry and not in_place:
+            pathlib.Path(output).write_text(formatted)
+            continue
+        if output and not is_top_entry and not in_place:
+            continue
+
+        if in_place:
+            if is_stdin_entry:
+                print(formatted)
+            else:
+                fn.write_text(formatted)
+            continue
+
+        if recursive and not is_stdin_entry:
+            print(f"! {display_name}")
+        print(formatted)
 
 
 def main(
-    filename: pathlib.Path | str,
+    filename: pathlib.Path | str | list[pathlib.Path | str],
     verbose: int = 0,
     line_length: int = 100,
     max_line_length: int | None = 0,
@@ -130,21 +178,16 @@ def main(
     flatten_inline: bool = False,
     strip_comments: bool = False,
     error_if_missing: bool = False,
+    combine: bool = False,
 ) -> None:
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
         logger.setLevel("DEBUG")
 
-    is_stdin = str(filename) == "-"
-
-    files_obj: Files
-    if is_stdin:
-        contents = sys.stdin.read()
-        files_obj = MemoryFiles.from_contents(contents, root_path=pathlib.Path.cwd() / "stdin.lat")
-        files_obj.local_file_to_source_filename[files_obj.main] = "<stdin>"
+    if isinstance(filename, (str, pathlib.Path)):
+        filenames: list[str | pathlib.Path] = [filename]
     else:
-        fpath = pathlib.Path(filename)
-        files_obj = Files(main=fpath)
+        filenames = list(filename)
 
     loaded_renames = load_renames(rename_file, raw_renames, renames)
 
@@ -169,76 +212,17 @@ def main(
     )
     recursive = recursive or options.flatten_call  # implied
 
-    files_obj.parse(recurse=recursive, raise_if_missing=error_if_missing)
-    files_obj.annotate()
-
-    if verbose > 0:
-        for fn in files_obj.by_filename:
-            content = files_obj._get_file_contents(fn)
-            name = files_obj.local_file_to_source_filename.get(fn, str(fn))
-
-            if recursive and len(files_obj.by_filename) > 1:
-                rich.print(f"[bold]Debug processing: {name}[/bold]", file=sys.stderr)
-
-            process_file(contents=content, filename=fn, verbose=verbose)
-
-    for fn, statements in files_obj.by_filename.items():
-        logger.info("Processing %s", fn)
-        for st in statements:
-            for lint in lint_statement(st):
-                msg = lint.to_user_message()
-                if recursive:
-                    name = files_obj.local_file_to_source_filename.get(fn, fn.name)
-                    logger.warning(f"[{name}] {msg}")
-                else:
-                    logger.warning(msg)
-
-    results: dict[pathlib.Path, tuple[str, str]] = {}
-
-    if options.flatten_call:
-        statements = files_obj.flatten(call=options.flatten_call, inline=options.flatten_inline)
-        formatted = format_statements(statements, options)
-        main = files_obj.main
-        results[main] = (files_obj._get_file_contents(main), formatted)
-
-    else:
-        for fn, statements in files_obj.by_filename.items():
-            formatted_text = format_statements(statements, options)
-            original_text = files_obj._get_file_contents(fn)
-            results[fn] = (original_text, formatted_text)
-
-    for fn, (original, formatted) in results.items():
-        is_main_entry = fn == files_obj.main
-
-        display_name = files_obj.local_file_to_source_filename.get(fn, str(fn))
-
-        if diff:
-            if in_place:
-                raise NotImplementedError("In-place diff is not supported.")
-
-            diff_output = get_diff(original, formatted, fromfile=display_name, tofile=display_name)
-            if diff_output:
-                print(diff_output)
-            continue
-
-        if output and is_main_entry:
-            pathlib.Path(output).write_text(formatted)
-            continue
-        elif output and not is_main_entry:
-            if not in_place:
-                continue
-
-        if in_place:
-            if is_stdin and is_main_entry:
-                print(formatted)
-            else:
-                fn.write_text(formatted)
-
-        else:
-            if recursive and not is_stdin:
-                print(f"! {display_name}")
-
-            print(formatted)
+    for files_obj in build_files(filenames, combine=combine):
+        process_files(
+            files_obj,
+            options,
+            recursive=recursive,
+            verbose=verbose,
+            in_place=in_place,
+            diff=diff,
+            output=output,
+            error_if_missing=error_if_missing,
+        )
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -400,6 +384,14 @@ def _build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="If a file is missing during parsing, exit with an error.",
     )
+    parser.add_argument(
+        "--combine",
+        action="store_true",
+        help=(
+            "Process all input files together as a single set, sharing one parse stack. "
+            "Without this, each file is parsed independently of the others."
+        ),
+    )
 
     parser.add_argument(
         "--log",
@@ -431,16 +423,11 @@ def cli_main(args: list[str] | None = None) -> None:
     logging.basicConfig()
 
     filenames = kwargs.pop("filename")
-
-    for filename in filenames:
-        if len(filename) > 1:
-            logger.info("Processing %s", filename)
-        try:
-            main(filename=filename, **kwargs)
-        except FileNotFoundError as ex:
-            logger.error("%s", ex)
-            raise SystemExit(1) from None
-    return
+    try:
+        main(filename=filenames, **kwargs)
+    except FileNotFoundError as ex:
+        logger.error("%s", ex)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
