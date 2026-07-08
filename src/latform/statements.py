@@ -21,6 +21,17 @@ if typing.TYPE_CHECKING:
     from .output import FormatOptions
 
 
+BUILTIN_TARGETS = frozenset(
+    {
+        "beginning",
+        "bmad_com",
+        "beam_init",
+        "parameter",
+        "particle_start",  # others?
+    }
+)
+
+
 @dataclass(kw_only=True)
 class Statement:
     comments: Comments = field(default_factory=Comments)
@@ -234,13 +245,7 @@ class Parameter(Statement):
     ]
 
     def annotate(self, named: dict[Token, Statement]):
-        if isinstance(self.target, Token) and self.target.lower() in {
-            "beginning",
-            "bmad_com",
-            "beam_init",
-            "parameter",
-            "particle_start",  # others?
-        }:
+        if isinstance(self.target, Token) and self.target.lower() in BUILTIN_TARGETS:
             self.target = self.target.with_(role=Role.builtin)
         else:
             self.target = self.target.with_(role=Role.name_)

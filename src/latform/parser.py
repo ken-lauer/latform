@@ -12,6 +12,7 @@ from .const import EQUALS
 from .exceptions import UnexpectedAssignment
 from .location import Location
 from .statements import (
+    BUILTIN_TARGETS,
     Assignment,
     Constant,
     Element,
@@ -469,15 +470,10 @@ def _iter_element_references(
                 yield item.statement, sub
 
 
-def resolve_references(statements: Sequence[Statement]) -> None:
-    """Annotate ``NAME[attr]`` element references as names.
-
-    The bracketed-attribute suffix is structural proof that ``NAME`` is an
-    element reference, so it is recognized as a name regardless of whether the
-    element was defined in a loaded file (see :func:`_iter_element_references`).
-    """
+def _resolve_references(statements: Sequence[Statement]) -> None:
+    """Annotate ``NAME[attr]`` references as names (or builtins)."""
     for _statement, name in _iter_element_references(statements):
-        name.role = Role.name_
+        name.role = Role.builtin if name.lower() in BUILTIN_TARGETS else Role.name_
 
 
 def parse(
@@ -491,7 +487,7 @@ def parse(
         named = get_named_items(res)
         for st in res:
             st.annotate(named=named)
-        resolve_references(res)
+        _resolve_references(res)
 
     return res
 
@@ -677,7 +673,7 @@ class Files:
         for statements in self.by_filename.values():
             for st in statements:
                 st.annotate(named=named)
-            resolve_references(statements)
+            _resolve_references(statements)
 
     def get_named_items(self) -> dict[Token, Statement]:
         """

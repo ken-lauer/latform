@@ -165,3 +165,10 @@ def test_rename_regex_does_not_touch_bare_tokens():
     # rewrite an unannotated token even when assuming references are defined.
     text = rename("foo = bar + 3", {r"ba.*": "X"})
     assert text.strip() == "FOO = bar + 3"
+
+
+def test_rename_leaves_builtin_bracket_reference_untouched():
+    # `beginning[beta_a]` is a builtin structure, not a user name, so it is not
+    # renamed even though it is written in `NAME[attr]` form.
+    text = rename("foo = beginning[beta_a] + 1", {"beginning": "zzz"})
+    assert text.strip() == "FOO = beginning[beta_a] + 1"
