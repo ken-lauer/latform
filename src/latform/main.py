@@ -89,6 +89,9 @@ def process_files(
     )
     files_obj.annotate()
 
+    if options.renames:
+        files_obj.rename(options.renames)
+
     if verbose > 0:
         print_blocks(files_obj, verbose=verbose)
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import functools
 import logging
 import os.path
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -38,6 +40,62 @@ from .util import partition_items
 from .walk import walk
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(eq=False)
+class _RenameContext:
+    lower_renames: dict[str, str]
+    regex_renames: dict[re.Pattern, str]
+    case_sensitive: bool
+    roles: frozenset[Role] = frozenset({Role.name_})
+
+    @classmethod
+    def from_renames(
+        cls,
+        renames: dict[str, str],
+        case_sensitive: bool = False,
+        roles: set[Role] | None = None,
+    ):
+        if not roles:
+            roles = set({Role.name_})
+
+        flags = 0
+        if not case_sensitive:
+            flags |= re.IGNORECASE
+        return cls(
+            lower_renames={from_.lower(): to for from_, to in renames.items()},
+            regex_renames={
+                re.compile(from_, flags=flags): to
+                for from_, to in renames.items()
+                if "*" in from_ or "+" in from_ or "?" in from_
+            },
+            case_sensitive=case_sensitive,
+            roles=frozenset(roles),
+        )
+
+    @functools.lru_cache(maxsize=None)
+    def apply_rename(self, tok: Token):
+        lower = tok.lower()
+        renamed = None
+        try:
+            renamed = self.lower_renames[lower]
+        except KeyError:
+            for pat, to in self.regex_renames.items():
+                if pat.match(lower):
+                    renamed = pat.sub(to, tok)
+                    break
+
+        if renamed:
+            return Token(renamed, role=tok.role)
+
+        return tok
+
+    def apply(self, statements: list[Statement]):
+        for item in walk(statements):
+            if isinstance(item.node, Token) and item.node.role in self.roles:
+                renamed = self.apply_rename(item.node)
+                if renamed is not item.node:
+                    item.replace(renamed)
 
 
 def _make_attribute(item: Attribute | Token | Seq) -> Attribute:
@@ -610,6 +668,26 @@ class Files:
     def flatten_all(self, call: bool, inline: bool) -> dict[pathlib.Path, list[Statement]]:
         """Flatten each top-level file independently, keyed by its path."""
         return {top: self.flatten(call=call, inline=inline, top=top) for top in self.top_files}
+
+    def rename(
+        self,
+        renames: dict[str, str],
+        case_sensitive: bool = False,
+        only_name_role: bool = True,
+    ):
+        roles = (
+            {Role.name_}
+            if only_name_role
+            else {
+                Role.attribute_name,
+                Role.env_var,
+                Role.kind,
+            }
+        )
+        ctx = _RenameContext.from_renames(renames, case_sensitive=case_sensitive, roles=roles)
+
+        for statements in self.by_filename.values():
+            ctx.apply(statements)
 
     def reformat(self, options: FormatOptions) -> None:
         """
