@@ -588,13 +588,19 @@ class Files:
                     ) from None
                 continue
 
-            if keep_blocks:
-                blocks = tokenize(contents=contents, filename=full_path)
-                self.blocks_by_filename[full_path] = blocks
-                statements: list[Statement] = [b.parse() for b in blocks]
-            else:
-                # We don't annotate individually here, we do it in bulk later
-                statements = list(parse(contents=contents, filename=full_path, annotate=False))
+            try:
+                if keep_blocks:
+                    blocks = tokenize(contents=contents, filename=full_path)
+                    self.blocks_by_filename[full_path] = blocks
+                    statements: list[Statement] = [b.parse() for b in blocks]
+                else:
+                    # We don't annotate individually here, we do it in bulk later
+                    statements = list(parse(contents=contents, filename=full_path, annotate=False))
+            except Exception as ex:
+                if hasattr(ex, "add_note"):  # py 3.11+
+                    ex.add_note(f"Exception ocurred while parsing {full_path}")
+                raise
+
             self.by_filename[full_path] = statements
 
             for st in statements:
