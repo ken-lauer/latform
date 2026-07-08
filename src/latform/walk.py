@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generator
+from typing import Generator, Sequence
 
 from .statements import (
     Assignment,
@@ -62,7 +62,7 @@ class ListItem(WalkItem):
 
 
 def walk(
-    statements: Statement | list[Statement],
+    statements: Statement | Sequence[Statement],
 ) -> Generator[WalkItem, None, None]:
     """
     Walk through statement trees, yielding each node with its context.
