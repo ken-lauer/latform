@@ -626,7 +626,7 @@ def format_nodes(
 
 def format_statements(
     statements: Sequence[Statement] | Statement,
-    options: FormatOptions,
+    options: FormatOptions = default_options,
 ) -> str:
     """Format a statement and return the code string"""
     if isinstance(statements, Statement):

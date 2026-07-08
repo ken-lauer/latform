@@ -128,3 +128,39 @@ def test_replace_reflected_in_output():
     text = format_statements(statements, default_options)
     assert "q1" not in text.lower()
     assert text.lower().count("q2") == 3
+
+
+def test_walk_reaches__attr_reference():
+    # `k1[k2]` is an element attr reference nested inside the parameter value Seq.
+    (param,) = parse("k1: quad\nk1[k2] = k1[k2] + 2")[1:]
+    (k1,) = list(it for it in walk([param]) if isinstance(it, ListItem) and it.node == "k1")
+    assert k1.depth == 1
+
+    k1.replace(Token("replaced_here"))
+    assert str(param.value.items[0]) == "replaced_here"
+    assert format_statements(param).strip() == "K1[k2] = replaced_here[k2] + 2"
+
+
+def test_walk_reaches_bracketed_attribute_names():
+    (param,) = parse("k1: quad\nk1[k2] = k1[k2] + 2")[1:]
+    attr_names = [it for it in walk([param]) if it.node == "k2"]
+    # The target's `[k2]` (depth 0) and the RHS reference's `[k2]` (depth 2).
+    assert sorted(it.depth for it in attr_names) == [0, 2]
+    assert all(it.node.role is Role.attribute_name for it in attr_names)
+
+
+def test_walk_reaches_all_overlay_targets():
+    code = "qua2: quad\nov: overlay = {qua2[hkick]:kick, qua2[b1]:x*kick}, var={kick}, kick=0"
+    statements = parse(code)
+
+    qua2_refs = [it for it in walk(statements) if it.node == "qua2" and it.node.role is Role.name_]
+    # The definition plus the two nested overlay targets.
+    assert len(qua2_refs) == 3
+
+    for item in qua2_refs:
+        item.replace(Token("mag", role=Role.name_))
+    assert not [it for it in walk(statements) if it.node == "qua2"]
+    assert format_statements(statements).splitlines() == [
+        "MAG: quad",
+        "OV: overlay = {MAG[hkick]:kick, MAG[b1]:x*kick}, var={kick}, kick=0",
+    ]

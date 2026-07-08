@@ -86,3 +86,54 @@ def test_rename_no_match_is_noop():
 def test_rename_empty_mapping_is_noop(only_name_role: bool):
     src = "q1: quad\nln: line = (q1)"
     assert rename(src, {}, only_name_role=only_name_role) == rename(src, {})
+
+
+def test_rename_parameter_target_and_expression_reference():
+    # The element name appears as the parameter target and as a reference on the RHS.
+    text = rename("K1: quad\nK2: quad\nK1[k2] = k1[k2] + 2", {"k1": "knew"})
+    assert text.lower().splitlines() == [
+        "knew: quad",
+        "k2: quad",
+        "knew[k2] = knew[k2] + 2",
+    ]
+
+
+def test_rename_leaves_bracketed_attribute_name_untouched():
+    # `k2` is an attribute name -> no replace
+    text = rename("K1: quad\nK1[k2] = k1[k2] + 2", {"k2": "znew"})
+    assert "znew" not in text.lower()
+    assert text.lower().count("k2") == 2
+
+
+def test_rename_overlay_nested_targets():
+    code = "\n".join(
+        [
+            "QUA2: quad",
+            "ov: overlay = {QUA2[hkick]:kick, QUA2[b1]:x*kick}, var={kick}, kick=0",
+        ]
+    )
+    text = rename(code, {"qua2": "magnet"})
+
+    expected = [
+        "MAGNET: quad",
+        "OV: overlay = {MAGNET[hkick]:kick, MAGNET[b1]:x*kick}, var={kick}, kick=0",
+    ]
+    assert text.splitlines() == expected
+
+
+def test_rename_line_with_repetition_and_reversal():
+    code = "\n".join(
+        [
+            "a: quad",
+            "b: quad",
+            "c: quad",
+            "l1: line = (a, 2*b, --c)",
+        ]
+    )
+    text = rename(code, {"b": "bb", "c": "cc"})
+    assert text.splitlines() == [
+        "A: quad",
+        "BB: quad",
+        "CC: quad",
+        "L1: line = (A, 2*BB, --CC)",
+    ]
