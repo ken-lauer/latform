@@ -484,7 +484,7 @@ class OutputLine:
         if self.comment is None:
             return line
         comment_spaces = options.comment_col - len(line)
-        if comment_spaces < 0:
+        if comment_spaces <= 0:
             comment_spaces = 2
 
         return (" " * comment_spaces).join((line, self.comment))
