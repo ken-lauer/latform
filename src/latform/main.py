@@ -11,7 +11,7 @@ import pathlib
 
 from . import output as output_mod
 from .debug import print_blocks
-from .lint import lint_statement
+from .lint import lint_statements
 from .output import format_statements
 from .parser import Files, build_files
 from .types import FormatOptions, NameCase
@@ -80,6 +80,7 @@ def process_files(
     diff: bool,
     output: pathlib.Path | str | None,
     error_if_missing: bool,
+    assume_defined: bool = True,
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
     files_obj.parse(
@@ -90,21 +91,21 @@ def process_files(
     files_obj.annotate()
 
     if options.renames:
-        files_obj.rename(options.renames)
+        files_obj.rename(options.renames, assume_defined=assume_defined)
 
     if verbose > 0:
         print_blocks(files_obj, verbose=verbose)
 
+    named = files_obj.get_named_items()
     for fn, statements in files_obj.by_filename.items():
         logger.info("Processing %s", fn)
-        for st in statements:
-            for lint in lint_statement(st):
-                msg = lint.to_user_message()
-                if recursive:
-                    name = files_obj.local_file_to_source_filename.get(fn, fn.name)
-                    logger.warning(f"[{name}] {msg}")
-                else:
-                    logger.warning(msg)
+        for lint in lint_statements(statements, named=named, assume_defined=assume_defined):
+            msg = lint.to_user_message()
+            if recursive:
+                name = files_obj.local_file_to_source_filename.get(fn, fn.name)
+                logger.warning(f"[{name}] {msg}")
+            else:
+                logger.warning(msg)
 
     top_set = set(files_obj.top_files)
     results: dict[pathlib.Path, tuple[str, str]] = {}
@@ -182,6 +183,7 @@ def main(
     strip_comments: bool = False,
     error_if_missing: bool = False,
     combine: bool = False,
+    assume_defined: bool = True,
 ) -> None:
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
@@ -225,6 +227,7 @@ def main(
             diff=diff,
             output=output,
             error_if_missing=error_if_missing,
+            assume_defined=assume_defined,
         )
 
 
@@ -393,6 +396,17 @@ def _build_argparser() -> argparse.ArgumentParser:
         help=(
             "Process all input files together as a single set, sharing one parse stack. "
             "Without this, each file is parsed independently of the others."
+        ),
+    )
+    parser.add_argument(
+        "--strict-references",
+        dest="assume_defined",
+        action="store_false",
+        default=True,
+        help=(
+            "Only recognize element/constant references defined in the loaded files. "
+            "By default, references to names defined elsewhere are assumed to exist; "
+            "with this flag they are left unresolved and reported as lint warnings."
         ),
     )
 

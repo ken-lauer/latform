@@ -6,7 +6,7 @@ import os.path
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Generator, Sequence
 
 from .const import EQUALS
 from .exceptions import UnexpectedAssignment
@@ -48,6 +48,7 @@ class _RenameContext:
     regex_renames: dict[re.Pattern, str]
     case_sensitive: bool
     roles: frozenset[Role] = frozenset({Role.name_})
+    assume_defined: bool = True
 
     @classmethod
     def from_renames(
@@ -55,6 +56,7 @@ class _RenameContext:
         renames: dict[str, str],
         case_sensitive: bool = False,
         roles: set[Role] | None = None,
+        assume_defined: bool = True,
     ):
         if not roles:
             roles = set({Role.name_})
@@ -71,19 +73,21 @@ class _RenameContext:
             },
             case_sensitive=case_sensitive,
             roles=frozenset(roles),
+            assume_defined=assume_defined,
         )
 
     @functools.lru_cache(maxsize=None)
-    def apply_rename(self, tok: Token):
+    def apply_rename(self, tok: Token, allow_regex: bool = True):
         lower = tok.lower()
         renamed = None
         try:
             renamed = self.lower_renames[lower]
         except KeyError:
-            for pat, to in self.regex_renames.items():
-                if pat.match(lower):
-                    renamed = pat.sub(to, tok)
-                    break
+            if allow_regex:
+                for pat, to in self.regex_renames.items():
+                    if pat.match(lower):
+                        renamed = pat.sub(to, tok)
+                        break
 
         if renamed:
             return Token(renamed, role=tok.role)
@@ -92,10 +96,22 @@ class _RenameContext:
 
     def apply(self, statements: list[Statement]):
         for item in walk(statements):
-            if isinstance(item.node, Token) and item.node.role in self.roles:
-                renamed = self.apply_rename(item.node)
-                if renamed is not item.node:
-                    item.replace(renamed)
+            node = item.node
+            if not isinstance(node, Token):
+                continue
+
+            if node.role in self.roles:
+                renamed = self.apply_rename(node)
+            elif self.assume_defined and node.role is None:
+                # A bare, unannotated token may be a reference to a name defined
+                # in a file that was not loaded; only literal matches are applied
+                # so broad regex patterns can't rewrite numbers/operators.
+                renamed = self.apply_rename(node, allow_regex=False)
+            else:
+                continue
+
+            if renamed is not node:
+                item.replace(renamed)
 
 
 def _make_attribute(item: Attribute | Token | Seq) -> Attribute:
@@ -433,8 +449,41 @@ def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
     return named_items
 
 
+def _iter_element_references(
+    statements: Sequence[Statement],
+) -> Generator[tuple[Statement, Token], None, None]:
+    """Yield ``(statement, name_token)`` for every ``NAME[attr]`` reference."""
+    for item in walk(statements):
+        node = item.node
+        if not isinstance(node, Seq):
+            continue
+        for idx, sub in enumerate(node.items[:-1]):
+            nxt = node.items[idx + 1]
+            # Token[token...]
+            if (
+                isinstance(sub, Token)
+                and isinstance(nxt, Seq)
+                and nxt.opener == "["
+                and all(isinstance(inner, Token) for inner in nxt.items)
+            ):
+                yield item.statement, sub
+
+
+def resolve_references(statements: Sequence[Statement]) -> None:
+    """Annotate ``NAME[attr]`` element references as names.
+
+    The bracketed-attribute suffix is structural proof that ``NAME`` is an
+    element reference, so it is recognized as a name regardless of whether the
+    element was defined in a loaded file (see :func:`_iter_element_references`).
+    """
+    for _statement, name in _iter_element_references(statements):
+        name.role = Role.name_
+
+
 def parse(
-    contents: str, filename: pathlib.Path | str = "unset", annotate: bool = True
+    contents: str,
+    filename: pathlib.Path | str = "unset",
+    annotate: bool = True,
 ) -> Sequence[Statement]:
     blocks = tokenize(contents, filename)
     res = [block.parse() for block in blocks]
@@ -442,6 +491,7 @@ def parse(
         named = get_named_items(res)
         for st in res:
             st.annotate(named=named)
+        resolve_references(res)
 
     return res
 
@@ -627,6 +677,7 @@ class Files:
         for statements in self.by_filename.values():
             for st in statements:
                 st.annotate(named=named)
+            resolve_references(statements)
 
     def get_named_items(self) -> dict[Token, Statement]:
         """
@@ -680,6 +731,7 @@ class Files:
         renames: dict[str, str],
         case_sensitive: bool = False,
         only_name_role: bool = True,
+        assume_defined: bool = True,
     ):
         roles = (
             {Role.name_}
@@ -690,7 +742,9 @@ class Files:
                 Role.kind,
             }
         )
-        ctx = _RenameContext.from_renames(renames, case_sensitive=case_sensitive, roles=roles)
+        ctx = _RenameContext.from_renames(
+            renames, case_sensitive=case_sensitive, roles=roles, assume_defined=assume_defined
+        )
 
         for statements in self.by_filename.values():
             ctx.apply(statements)

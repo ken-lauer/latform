@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 from .statements import Simple, Statement
 from .token import Token
@@ -27,6 +28,18 @@ class Lint:
         return " ".join(parts)
 
 
+def lint_statements(
+    statements: list[Statement],
+    named: dict[Token, Statement],
+    *,
+    assume_defined: bool = True,
+) -> list[Lint]:
+    lints = [lint for st in statements for lint in lint_statement(st)]
+    if not assume_defined:
+        lints.extend(lint_undefined_references(statements, named))
+    return lints
+
+
 def lint_statement(st: Statement) -> list[Lint]:
     if isinstance(st, Simple):
         if not Simple.is_known_statement(st.statement):
@@ -38,3 +51,26 @@ def lint_statement(st: Statement) -> list[Lint]:
                 )
             ]
     return []
+
+
+def lint_undefined_references(
+    statements: Sequence[Statement],
+    named: dict[Token, Statement],
+) -> list[Lint]:
+    """
+    Flag ``NAME[attr]`` references whose ``NAME`` is not defined in any loaded file.
+    """
+
+    from .parser import _iter_element_references
+
+    lints = []
+    for statement, name in _iter_element_references(statements):
+        if name.upper() not in named:
+            lints.append(
+                Lint(
+                    statement=statement,
+                    message=f"Reference to undefined element or constant: {name}",
+                    relevant_tokens=[name],
+                )
+            )
+    return lints

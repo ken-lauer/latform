@@ -137,3 +137,31 @@ def test_rename_line_with_repetition_and_reversal():
         "CC: quad",
         "L1: line = (A, 2*BB, --CC)",
     ]
+
+
+def test_rename_bracketed_reference_always_applies():
+    # `BX_QUA1[k1]` is structurally a name (the bracket proves it), so it is
+    # renamed even in strict mode and even though BX_QUA1 is not defined here.
+    src = "B0_QUA1[k1] = BX_QUA1[k1]*3"
+    for assume_defined in (True, False):
+        text = rename(src, {"BX_QUA1": "B0_QUA1"}, assume_defined=assume_defined)
+        assert text.strip() == "B0_QUA1[k1] = B0_QUA1[k1]*3"
+
+
+def test_rename_bare_token_applies_when_assuming_defined():
+    # `bar` has no role and no `[attr]`; under assume_defined it is treated as a
+    # name and renamed on an exact match.
+    text = rename("foo = bar + 3", {"bar": "bbb"})
+    assert text.strip() == "FOO = bbb + 3"
+
+
+def test_rename_bare_token_untouched_when_strict():
+    text = rename("foo = bar + 3", {"bar": "bbb"}, assume_defined=False)
+    assert text.strip() == "FOO = bar + 3"
+
+
+def test_rename_regex_does_not_touch_bare_tokens():
+    # Regex renames only apply to name-role tokens, so a broad pattern cannot
+    # rewrite an unannotated token even when assuming references are defined.
+    text = rename("foo = bar + 3", {r"ba.*": "X"})
+    assert text.strip() == "FOO = bar + 3"
