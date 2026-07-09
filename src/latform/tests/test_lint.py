@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ..lint import lint_statements, lint_undefined_references, lint_unknown_element_types
+from ..lint import (
+    LintCode,
+    lint_statements,
+    lint_undefined_references,
+    lint_unknown_element_types,
+)
 from ..parser import MemoryFiles
 
 
@@ -58,3 +63,22 @@ def test_unknown_element_type_suppressed_when_assuming_defined():
     assert _all_lints(files, assume_defined=True) == []
     messages = [lint.message for lint in _all_lints(files, assume_defined=False)]
     assert any("from_another_file" in message for message in messages)
+
+
+def test_lints_carry_stable_codes():
+    (statements,) = _files("bad: quadrpole").by_filename.values()
+    (lint,) = lint_unknown_element_types(statements)
+    assert lint.code is LintCode.unknown_element_type
+    assert lint.to_user_message().startswith("[LF003]")
+
+
+def test_ignore_suppresses_by_code():
+    files = _files("bad: quadrpole\nB0[k1] = BX[k1]*3")
+    named = files.get_named_items()
+    (statements,) = files.by_filename.values()
+
+    codes = {lint.code for lint in lint_statements(statements, named, assume_defined=False)}
+    assert codes == {LintCode.undefined_reference, LintCode.unknown_element_type}
+
+    kept = lint_statements(statements, named, assume_defined=False, ignore=["LF003"])
+    assert {lint.code for lint in kept} == {LintCode.undefined_reference}

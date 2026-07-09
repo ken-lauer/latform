@@ -8,6 +8,7 @@ import argparse
 import difflib
 import logging
 import pathlib
+from typing import Collection
 
 from . import output as output_mod
 from .debug import print_blocks
@@ -81,6 +82,7 @@ def process_files(
     output: pathlib.Path | str | None,
     error_if_missing: bool,
     assume_defined: bool = True,
+    ignore_lints: Collection[str] = (),
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
     files_obj.parse(
@@ -99,7 +101,9 @@ def process_files(
     named = files_obj.get_named_items()
     for fn, statements in files_obj.by_filename.items():
         logger.info("Processing %s", fn)
-        for lint in lint_statements(statements, named=named, assume_defined=assume_defined):
+        for lint in lint_statements(
+            statements, named=named, assume_defined=assume_defined, ignore=ignore_lints
+        ):
             msg = lint.to_user_message()
             if recursive:
                 name = files_obj.local_file_to_source_filename.get(fn, fn.name)
@@ -185,6 +189,7 @@ def main(
     error_if_missing: bool = False,
     combine: bool = False,
     assume_defined: bool = True,
+    ignore_lints: list[str] | None = None,
 ) -> None:
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
@@ -196,6 +201,9 @@ def main(
         filenames = list(filename)
 
     loaded_renames = load_renames(rename_file, raw_renames, renames)
+    ignore_codes = [
+        code.strip() for entry in (ignore_lints or []) for code in entry.split(",") if code.strip()
+    ]
 
     options = FormatOptions(
         line_length=line_length,
@@ -230,6 +238,7 @@ def main(
             output=output,
             error_if_missing=error_if_missing,
             assume_defined=assume_defined,
+            ignore_lints=ignore_codes,
         )
 
 
@@ -416,6 +425,17 @@ def _build_argparser() -> argparse.ArgumentParser:
             "Only recognize element/constant references defined in the loaded files. "
             "By default, references to names defined elsewhere are assumed to exist; "
             "with this flag they are left unresolved and reported as lint warnings."
+        ),
+    )
+
+    parser.add_argument(
+        "--ignore",
+        dest="ignore_lints",
+        action="append",
+        metavar="CODE",
+        help=(
+            "Lint code(s) to suppress, e.g. --ignore LF002 (repeatable, or "
+            "comma-separated: --ignore LF002,LF003)."
         ),
     )
 

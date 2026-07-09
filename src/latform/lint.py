@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Collection, Sequence
 
 from .statements import Element, Simple, Statement
 from .token import Token
 
 
+class LintCode(str, enum.Enum):
+    """Stable identifiers for each lint, usable to opt out via the CLI."""
+
+    unknown_statement = "LF001"
+    undefined_reference = "LF002"
+    unknown_element_type = "LF003"
+
+
 @dataclass()
 class Lint:
+    code: LintCode
     statement: Statement
     message: str
     relevant_tokens: list[Token] | None
@@ -16,7 +26,7 @@ class Lint:
     def to_user_message(self):
         clsname = type(self.statement).__name__
         obj_name = str(getattr(self.statement, "name", "unnamed"))
-        parts = [f"{obj_name!r} Statement of type {clsname!r}: {self.message}"]
+        parts = [f"[{self.code.value}] {obj_name!r} Statement of type {clsname!r}: {self.message}"]
 
         if self.relevant_tokens:
             parts.append("\n    Found near:")
@@ -33,12 +43,14 @@ def lint_statements(
     named: dict[Token, Statement],
     *,
     assume_defined: bool = True,
+    ignore: Collection[str] = (),
 ) -> list[Lint]:
+    ignored = {code.upper() for code in ignore}
     lints = [lint for st in statements for lint in lint_statement(st)]
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
         lints.extend(lint_unknown_element_types(statements))
-    return lints
+    return [lint for lint in lints if lint.code.value not in ignored]
 
 
 def lint_statement(st: Statement) -> list[Lint]:
@@ -46,6 +58,7 @@ def lint_statement(st: Statement) -> list[Lint]:
         if not Simple.is_known_statement(st.statement):
             return [
                 Lint(
+                    code=LintCode.unknown_statement,
                     statement=st,
                     message=f"Statement type is unknown; this may indicate an error in parsing: {st.statement}",
                     relevant_tokens=[st.statement],
@@ -69,6 +82,7 @@ def lint_undefined_references(
         if name.upper() not in named:
             lints.append(
                 Lint(
+                    code=LintCode.undefined_reference,
                     statement=statement,
                     message=f"Reference to undefined element or constant: {name}",
                     relevant_tokens=[name],
@@ -91,6 +105,7 @@ def lint_unknown_element_types(statements: Sequence[Statement]) -> list[Lint]:
         ):
             lints.append(
                 Lint(
+                    code=LintCode.unknown_element_type,
                     statement=statement,
                     message=f"Unknown element type or undefined base element: {statement.keyword}",
                     relevant_tokens=[statement.keyword],
