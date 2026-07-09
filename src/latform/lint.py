@@ -4,6 +4,7 @@ import enum
 import logging
 import typing
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Collection, Generator, Sequence
 
 from .attrs import element_key_to_attrs
@@ -114,6 +115,49 @@ def lint_duplicate_attributes(element: Element) -> list[Lint]:
     return lints
 
 
+# Hardcoded attribute name aliases, matching Bmad's ``attribute_index2``
+# (bmad/modules/attribute_mod.f90). These are resolved before name matching.
+_ATTRIBUTE_ALIASES = {
+    "REF": "REFERENCE",
+    "G_ERR": "DG",
+    "B_FIELD_ERR": "DB_FIELD",
+}
+
+# Minimum length of an attribute abbreviation (Bmad requires >= 3 characters).
+_MIN_ABBREV_LEN = 3
+
+
+@lru_cache(maxsize=None)
+def _acceptable_attribute_names(element_type: str) -> frozenset[str]:
+    """
+    Every attribute name (uppercase) accepted for an element type.
+
+    Following Bmad's ``attribute_index2`` (``attribute_mod.f90``), this is every
+    full attribute name plus every *unambiguous* abbreviation — a prefix of at
+    least three characters that is unique to a single attribute. Exact names are
+    always included, so a name that is both a full attribute and a (necessarily
+    ambiguous) prefix of longer ones still matches, mirroring Bmad's rule that an
+    exact match wins over abbreviation.
+    """
+    names = element_key_to_attrs[element_type]
+
+    prefix_counts: dict[str, int] = {}
+    for full in names:
+        for length in range(_MIN_ABBREV_LEN, len(full)):
+            prefix = full[:length]
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+
+    acceptable = set(names)
+    acceptable.update(prefix for prefix, count in prefix_counts.items() if count == 1)
+    return frozenset(acceptable)
+
+
+def _is_known_attribute(name: str, element_type: str) -> bool:
+    """Whether ``name`` is a valid (possibly abbreviated) attribute of the type."""
+    upper = _ATTRIBUTE_ALIASES.get(name.upper(), name.upper())
+    return upper in _acceptable_attribute_names(element_type)
+
+
 def lint_element_attributes(element: Element) -> list[Lint]:
     """
     Flag attributes that are not defined for an element's type.
@@ -121,7 +165,7 @@ def lint_element_attributes(element: Element) -> list[Lint]:
     if element.element_type is None:
         return []
 
-    valid = element_key_to_attrs[element.element_type]
+    element_type = str(element.element_type)
     controller_vars: set[Token] = {var.lower() for var in get_controller_variables(element)}
     controller_defaults_set: set[Token] = set()
 
@@ -136,13 +180,13 @@ def lint_element_attributes(element: Element) -> list[Lint]:
             # Default definition
             controller_defaults_set.add(name.lower())
             continue
-        if name.upper() not in valid:
+        if not _is_known_attribute(str(name), element_type):
             lints.append(
                 Lint(
                     code=LintCode.unknown_attribute,
                     statement=element,
                     message=(
-                        f"Unknown attribute '{name} for element type "
+                        f"Unknown attribute '{name}' for element type "
                         f"'{element.element_type.lower()}'"
                     ),
                     relevant_tokens=[name],

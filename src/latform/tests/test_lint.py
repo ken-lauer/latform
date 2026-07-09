@@ -102,6 +102,20 @@ def test_known_attributes_not_reported(src):
     assert lints == []
 
 
+@pytest.mark.parametrize(
+    "src",
+    [
+        "q1: quadrupole, mat6_calc = bmad_standard",  # abbreviation
+        "q1: quadrupole, mat6_calc_method = bmad_standard",  # full name
+        "q1: quadrupole, tracking = bmad_standard",  # abbreviation of tracking_method
+    ],
+)
+def test_abbreviated_attributes_not_reported(src):
+    (statements,) = _files(src).by_filename.values()
+    (element,) = statements
+    assert lint_element_attributes(element) == []
+
+
 def test_unknown_attribute_on_inherited_type_reported():
     (statements,) = _files("qa: quadrupole\nqb: qa, junk = 1").by_filename.values()
     lints = [lint for st in statements for lint in lint_element_attributes(st)]
@@ -113,6 +127,48 @@ def test_controller_variables_not_reported():
     (statements,) = _files("o1: overlay = {q1[k1]}, var = {x}, x = 0").by_filename.values()
     lints = [lint for st in statements for lint in lint_element_attributes(st)]
     assert lints == []
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "q: quad, superimpose, ref = B12, offset = 1.3, ele_origin = beginning, ref_origin = end",
+        "q: quad, superimpose = T, ref = B12",
+    ],
+)
+def test_superimpose_enables_superposition_attributes(src):
+    (statements,) = _files(src).by_filename.values()
+    (element,) = statements
+    assert lint_element_attributes(element) == []
+
+
+def test_ref_alias_accepted():
+    # Bmad hardcodes ``ref`` as an alias for ``reference`` (attribute_index2),
+    # so it is valid on any element type that has ``reference``.
+    (statements,) = _files("q: quad, ref = B12").by_filename.values()
+    (element,) = statements
+    assert lint_element_attributes(element) == []
+
+
+def test_superimpose_still_flags_unknown_attributes():
+    (statements,) = _files("q: quad, superimpose, bogus = 1").by_filename.values()
+    (element,) = statements
+    lints = lint_element_attributes(element)
+    assert [lint.code for lint in lints] == [LintCode.unknown_attribute]
+    assert "bogus" in lints[0].message
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "q: quadrupole, x_pi = 0",  # ambiguous: x_pitch vs x_pitch_tot
+        "q: quadrupole, ab = 0",  # too short (< 3 chars) and not exact
+    ],
+)
+def test_ambiguous_or_short_abbreviation_reported(src):
+    (statements,) = _files(src).by_filename.values()
+    (element,) = statements
+    assert [lint.code for lint in lint_element_attributes(element)] == [LintCode.unknown_attribute]
 
 
 def test_unknown_type_skips_attribute_lint():
