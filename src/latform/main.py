@@ -12,7 +12,7 @@ from typing import Collection
 
 from . import output as output_mod
 from .debug import print_blocks
-from .lint import lint_statements
+from .lint import lint_files
 from .output import format_statements
 from .parser import Files, build_files
 from .types import FormatOptions, NameCase
@@ -82,6 +82,7 @@ def process_files(
     output: pathlib.Path | str | None,
     error_if_missing: bool,
     assume_defined: bool = True,
+    lint: bool = False,
     ignore_lints: Collection[str] = (),
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
@@ -98,13 +99,14 @@ def process_files(
     if verbose > 0:
         print_blocks(files_obj, verbose=verbose)
 
-    named = files_obj.get_named_items()
-    for fn, statements in files_obj.by_filename.items():
+    for fn in files_obj.by_filename:
         logger.info("Processing %s", fn)
-        for lint in lint_statements(
-            statements, named=named, assume_defined=assume_defined, ignore=ignore_lints
+
+    if lint:
+        for fn, lint_item in lint_files(
+            files_obj, assume_defined=assume_defined, ignore=ignore_lints
         ):
-            msg = lint.to_user_message()
+            msg = lint_item.to_user_message()
             if recursive:
                 name = files_obj.local_file_to_source_filename.get(fn, fn.name)
                 logger.warning(f"[{name}] {msg}")
@@ -189,6 +191,7 @@ def main(
     error_if_missing: bool = False,
     combine: bool = False,
     assume_defined: bool = True,
+    lint: bool = False,
     ignore_lints: list[str] | None = None,
 ) -> None:
     if verbose >= 4:
@@ -199,6 +202,9 @@ def main(
         filenames: list[str | pathlib.Path] = [filename]
     else:
         filenames = list(filename)
+
+    # --strict-references promises reference issues "reported as lint warnings".
+    lint = lint or not assume_defined
 
     loaded_renames = load_renames(rename_file, raw_renames, renames)
     ignore_codes = [
@@ -238,6 +244,7 @@ def main(
             output=output,
             error_if_missing=error_if_missing,
             assume_defined=assume_defined,
+            lint=lint,
             ignore_lints=ignore_codes,
         )
 
@@ -416,6 +423,16 @@ def _build_argparser() -> argparse.ArgumentParser:
             "Without this, each file is parsed independently of the others."
         ),
     )
+    parser.add_argument(
+        "--lint",
+        action="store_true",
+        default=False,
+        help=(
+            "Report lint warnings (unknown attributes, duplicate attributes, etc.) "
+            "in addition to formatting. See also the dedicated 'latform-lint' command."
+        ),
+    )
+
     parser.add_argument(
         "--strict-references",
         dest="assume_defined",

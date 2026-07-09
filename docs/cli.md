@@ -15,6 +15,7 @@ latform [-h] [-i] [-o] [-r] [-R old,new] [--diff] [--compact]
         [--section-break-character CHAR] [--section-break-width WIDTH]
         [--flatten] [--flatten-call] [--flatten-inline]
         [--strip-comments] [--rename-file FILE]
+        [--lint] [--strict-references] [--ignore CODE]
         [-v] [-V] [-L {DEBUG,INFO,WARNING,CRITICAL}]
         filename [filename ...]
 ```
@@ -145,6 +146,92 @@ latform --flatten parse_test.bmad
 `--flatten` implies both `--flatten-call` (inline call statements) and
 `--flatten-inline` (inline `call::` arguments). These can also be used
 independently.
+
+### Linting
+
+By default `latform` only reformats. Pass `--lint` to also report lint warnings
+(unknown attributes, duplicate attributes, and so on) alongside the formatted
+output:
+
+```bash
+latform --lint my_lattice.bmad
+```
+
+For linting without reformatting — for example in CI — use the dedicated
+[`latform-lint`](#latform-lint) command instead, which exits non-zero when any
+findings are reported.
+
+`--strict-references` additionally treats element/constant references that are
+not defined in the loaded files as lint warnings (it implies `--lint`). By
+default such references are assumed to be defined elsewhere. Suppress individual
+lints by code with `--ignore`, e.g. `--ignore LF004` (repeatable, or
+comma-separated: `--ignore LF004,LF006`).
+
+See [Lint Codes](#lint-codes) for the full list.
+
+---
+
+## latform-lint
+
+Lint Bmad lattice files without reformatting them. This is the linting-focused
+counterpart to `latform --lint`: it prints any findings and **exits non-zero
+when lints are reported**, which makes it suitable for use in CI or pre-commit
+checks.
+
+```
+latform-lint [-h] [-r] [--combine] [-e]
+             [--strict-references] [--ignore CODE]
+             [-V] [-L {DEBUG,INFO,WARNING,CRITICAL}]
+             filename [filename ...]
+```
+
+### Basic Usage
+
+Lint one or more files:
+
+```bash
+latform-lint my_lattice.bmad
+```
+
+Lint from stdin:
+
+```bash
+cat my_lattice.bmad | latform-lint -
+```
+
+The command exits with status `1` if any lints are found and `0` otherwise:
+
+```bash
+latform-lint my_lattice.bmad && echo "clean"
+```
+
+### Options
+
+| Option                 | Default | Description                                                                              |
+| ---------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `--recursive`, `-r`    | off     | Recursively parse lattice files, following `call` statements                             |
+| `--combine`            | off     | Process all input files together as a single set, sharing one parse stack                |
+| `--error-if-missing`, `-e` | off | Exit with an error if a file is missing during parsing                                    |
+| `--strict-references`  | off     | Report references not defined in the loaded files (and unknown element types) as lint warnings |
+| `--ignore CODE`        | none    | Suppress the given lint code(s); repeatable or comma-separated (e.g. `--ignore LF004,LF006`) |
+
+### Lint Codes
+
+Each lint carries a stable code so it can be suppressed with `--ignore` (in
+either `latform --lint` or `latform-lint`).
+
+| Code    | Name                         | Description                                                                 |
+| ------- | ---------------------------- | --------------------------------------------------------------------------- |
+| `LF001` | `unknown_statement`          | Statement type is unrecognized (may indicate a parsing error)               |
+| `LF002` | `undefined_reference`        | `NAME[attr]` reference whose `NAME` is not defined (needs `--strict-references`) |
+| `LF003` | `unknown_element_type`       | Element type is neither a known Bmad type nor a defined base element (needs `--strict-references`) |
+| `LF004` | `unknown_attribute`          | Attribute is not valid for the element's (resolved) type                     |
+| `LF005` | `controller_default_missing` | An overlay/group/ramper `var={...}` variable has no default value set        |
+| `LF006` | `duplicate_attribute`        | The same attribute is set more than once on a single element                 |
+
+Overriding an inherited attribute value (re-setting in a child element an
+attribute its base element also sets) is allowed and is not flagged as a
+duplicate.
 
 ---
 

@@ -38,6 +38,7 @@ file = "LICENSE"
 
 [project.scripts]
 "latform" = "latform.main:cli_main"
+"latform-lint" = "latform.lint:cli_main"
 "latform-graph" = "latform.graph:cli_main"
 "latform-dump" = "latform.dump:cli_main"
 "latform-diff" = "latform.diff:cli_main"

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from ..lint import (
     LintCode,
+    cli_main,
     lint_duplicate_attributes,
     lint_element_attributes,
+    lint_files,
     lint_statements,
     lint_undefined_references,
     lint_unknown_element_types,
@@ -176,3 +180,49 @@ def test_ignore_suppresses_by_code():
 
     kept = lint_statements(statements, named, assume_defined=False, ignore=["LF003"])
     assert {lint.code for lint in kept} == {LintCode.undefined_reference}
+
+
+def test_lint_files():
+    files = _files("q1: quadrupole, bogus = 1")
+    codes = {lint.code for _fn, lint in lint_files(files)}
+    assert LintCode.unknown_attribute in codes
+
+
+def test_lint_cli_exits_nonzero_on_findings(tmp_path):
+    path = tmp_path / "t.bmad"
+    path.write_text("q1: quadrupole, bogus = 1\n")
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main([str(path)])
+    assert excinfo.value.code == 1
+
+
+def test_lint_cli_exits_zero_when_clean(tmp_path):
+    path = tmp_path / "t.bmad"
+    path.write_text("q1: quadrupole, k1 = 0.5\n")
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main([str(path)])
+    assert excinfo.value.code == 0
+
+
+def test_lint_cli_ignore_suppresses_findings(tmp_path):
+    path = tmp_path / "t.bmad"
+    path.write_text("q1: quadrupole, bogus = 1\n")
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main([str(path), "--ignore", "LF004"])
+    assert excinfo.value.code == 0
+
+
+def test_main_lint_flag_gates_warnings(tmp_path, capsys, caplog):
+    from ..main import main
+
+    path = tmp_path / "t.bmad"
+    path.write_text("q1: quadrupole, bogus = 1\n")
+
+    with caplog.at_level(logging.WARNING, logger="latform.main"):
+        main(filename=str(path))
+    assert not any("LF004" in rec.getMessage() for rec in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="latform.main"):
+        main(filename=str(path), lint=True)
+    assert any("LF004" in rec.getMessage() for rec in caplog.records)

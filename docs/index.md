@@ -40,6 +40,7 @@ latform --diff my_lattice.bmad
 latform provides these CLI commands:
 
 - [**latform**](cli.md#latform) -- Format Bmad lattice files
+- [**latform-lint**](cli.md#latform-lint) -- Lint lattice files without reformatting
 - [**latform-dump**](cli.md#latform-dump) -- Extract parameters and element information
 - [**latform-diff**](cli.md#latform-diff) -- Compare two lattice files
 - [**latform-gitdiff**](cli.md#latform-gitdiff) -- Compare a lattice file across git revisions

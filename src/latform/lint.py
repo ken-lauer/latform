@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import enum
+import logging
+import typing
 from dataclasses import dataclass
-from typing import Collection, Sequence
+from typing import Collection, Generator, Sequence
 
 from .attrs import element_key_to_attrs
 from .statements import Element, Simple, Statement, get_controller_variables
 from .token import Token
 from .types import Attribute
+
+if typing.TYPE_CHECKING:
+    import pathlib
+
+    from .parser import Files
+
+logger = logging.getLogger(__name__)
 
 
 class LintCode(str, enum.Enum):
@@ -199,3 +208,143 @@ def lint_unknown_element_types(statements: Sequence[Statement]) -> list[Lint]:
                 )
             )
     return lints
+
+
+def lint_files(
+    files_obj: Files,
+    *,
+    assume_defined: bool = True,
+    ignore: Collection[str] = (),
+) -> Generator[tuple[pathlib.Path, Lint], None, None]:
+    """
+    Yield ``(filename, lint)`` for every lint across a parsed `Files` set.
+
+    Parameters
+    ----------
+    files_obj : Files
+        An already-parsed and annotated file set.
+    assume_defined : bool, optional
+        If False, also report undefined references and unknown element types.
+    ignore : collection of str, optional
+        Lint codes (e.g. ``"LF004"``) to suppress.
+    """
+    named = files_obj.get_named_items()
+    for fn, statements in files_obj.by_filename.items():
+        for lint in lint_statements(
+            statements, named=named, assume_defined=assume_defined, ignore=ignore
+        ):
+            yield fn, lint
+
+
+def _build_argparser():
+    import argparse
+
+    from ._version import __version__ as package_version
+
+    parser = argparse.ArgumentParser(
+        prog="latform-lint",
+        description="Lint Bmad lattice files without reformatting them.",
+    )
+    parser.add_argument(
+        "filename",
+        nargs="+",
+        help="Filename(s) to lint (use '-' for stdin/standard input)",
+    )
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="Recursively parse lattice files, following call statements",
+    )
+    parser.add_argument(
+        "--combine",
+        action="store_true",
+        help="Process all input files together as a single set, sharing one parse stack.",
+    )
+    parser.add_argument(
+        "-e",
+        "--error-if-missing",
+        action="store_true",
+        help="If a file is missing during parsing, exit with an error.",
+    )
+    parser.add_argument(
+        "--strict-references",
+        dest="assume_defined",
+        action="store_false",
+        default=True,
+        help=(
+            "Only recognize element/constant references defined in the loaded files, "
+            "reporting anything else (and unknown element types) as lint warnings."
+        ),
+    )
+    parser.add_argument(
+        "--ignore",
+        dest="ignore_lints",
+        action="append",
+        metavar="CODE",
+        help=(
+            "Lint code(s) to suppress, e.g. --ignore LF002 (repeatable, or "
+            "comma-separated: --ignore LF002,LF003)."
+        ),
+    )
+    parser.add_argument(
+        "--log",
+        "-L",
+        dest="log_level",
+        default="WARNING",
+        choices=("DEBUG", "INFO", "WARNING", "CRITICAL"),
+        help="Python logging level (e.g. DEBUG, INFO, WARNING)",
+    )
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=package_version,
+        help="Show the latform version number and exit.",
+    )
+    return parser
+
+
+def cli_main(args: list[str] | None = None) -> None:
+    """
+    CLI entrypoint for ``latform-lint``.
+
+    Parses and lints the given lattice files, printing any findings.  Exits with
+    a non-zero status when lints are reported, so it can be used in CI.
+    """
+    from .parser import build_files
+
+    parsed = _build_argparser().parse_args(args=args)
+
+    logging.getLogger("latform").setLevel(parsed.log_level)
+    logging.basicConfig()
+
+    ignore_codes = [
+        code.strip()
+        for entry in (parsed.ignore_lints or [])
+        for code in entry.split(",")
+        if code.strip()
+    ]
+
+    found = False
+    try:
+        files_sets = build_files(parsed.filename, combine=parsed.combine)
+    except FileNotFoundError as ex:
+        logger.error("%s", ex)
+        raise SystemExit(1) from None
+
+    for files_obj in files_sets:
+        files_obj.parse(recurse=parsed.recursive, raise_if_missing=parsed.error_if_missing)
+        files_obj.annotate()
+        for fn, lint in lint_files(
+            files_obj, assume_defined=parsed.assume_defined, ignore=ignore_codes
+        ):
+            found = True
+            name = files_obj.local_file_to_source_filename.get(fn, str(fn))
+            logger.warning("[%s] %s", name, lint.to_user_message())
+
+    raise SystemExit(1 if found else 0)
+
+
+if __name__ == "__main__":
+    cli_main()
