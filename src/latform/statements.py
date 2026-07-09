@@ -318,11 +318,16 @@ class Element(Statement):
     ele_list: Seq | None = None  # ele_name: keyword = { ele_list }
     attributes: list[Attribute] = field(default_factory=list)
 
+    # The element this one inherits from (``qb: qa``)
+    base_element: Element | None = field(default=None, compare=False, repr=False)
+    # The resolved canonical element type (e.g. ``"QUADRUPOLE"``)
+    element_type: str | None = field(default=None, compare=False, repr=False)
+
     @property
     def is_controller(self) -> bool:
         """Whether this is an overlay/group/ramper."""
-        # TODO: shortened keywords, element attribute inheritance...
-        return self.keyword.lower() in CONTROLLER_TYPES
+        resolved = self.element_type or str(self.keyword)
+        return resolved.lower() in CONTROLLER_TYPES
 
     def annotate(self, named: dict[Token, Statement]):
         self.name.role = Role.name_

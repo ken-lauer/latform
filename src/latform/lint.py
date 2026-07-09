@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from .statements import Simple, Statement
+from .statements import Element, Simple, Statement
 from .token import Token
 
 
@@ -37,6 +37,7 @@ def lint_statements(
     lints = [lint for st in statements for lint in lint_statement(st)]
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
+        lints.extend(lint_unknown_element_types(statements))
     return lints
 
 
@@ -71,6 +72,28 @@ def lint_undefined_references(
                     statement=statement,
                     message=f"Reference to undefined element or constant: {name}",
                     relevant_tokens=[name],
+                )
+            )
+    return lints
+
+
+def lint_unknown_element_types(statements: Sequence[Statement]) -> list[Lint]:
+    """
+    Flag elements whose type keyword is neither a known Bmad type (or a valid
+    abbreviation of one) nor an element defined in a loaded file.
+    """
+    lints = []
+    for statement in statements:
+        if (
+            isinstance(statement, Element)
+            and statement.element_type is None
+            and statement.base_element is None
+        ):
+            lints.append(
+                Lint(
+                    statement=statement,
+                    message=f"Unknown element type or undefined base element: {statement.keyword}",
+                    relevant_tokens=[statement.keyword],
                 )
             )
     return lints

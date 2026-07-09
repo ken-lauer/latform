@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Generator, Sequence
 
+from .attrs import element_key_to_attrs
 from .const import EQUALS
 from .exceptions import UnexpectedAssignment
 from .location import Location
@@ -476,6 +477,43 @@ def _iter_element_references(
                 yield item.statement, sub
 
 
+_ELEMENT_TYPE_NAMES = frozenset(k for k in element_key_to_attrs if not k.startswith("!"))
+
+
+def _expand_element_type(keyword: str) -> str | None:
+    """Resolve a (possibly abbreviated) type keyword to its canonical name."""
+    kw = keyword.upper()
+    if kw in _ELEMENT_TYPE_NAMES:
+        return kw
+    matches = [name for name in _ELEMENT_TYPE_NAMES if name.startswith(kw)]
+    # More than one match -> ambiguous
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resolve_element_types(
+    statements: Sequence[Statement], defined: dict[str, Element] | None = None
+) -> dict[str, Element]:
+    """Resolve each element's concrete type, following inheritance."""
+    if defined is None:
+        defined = {}
+
+    for statement in statements:
+        if not isinstance(statement, Element):
+            continue
+
+        base = defined.get(statement.keyword.upper())
+        if base is not None:
+            statement.base_element = base
+            statement.element_type = base.element_type
+        else:
+            statement.base_element = None
+            statement.element_type = _expand_element_type(statement.keyword)
+
+        defined[statement.name.upper()] = statement
+
+    return defined
+
+
 def _resolve_references(statements: Sequence[Statement]) -> None:
     """Annotate ``NAME[attr]`` references as names (or builtins)."""
     for _statement, name in _iter_element_references(statements):
@@ -497,6 +535,7 @@ def parse(
         named = get_named_items(res)
         for st in res:
             st.annotate(named=named)
+        _resolve_element_types(res)
         _resolve_references(res)
 
     return res
@@ -680,9 +719,11 @@ class Files:
         Resolve named items across all parsed files.
         """
         named = self.get_named_items()
+        defined: dict[str, Element] = {}
         for statements in self.by_filename.values():
             for st in statements:
                 st.annotate(named=named)
+            _resolve_element_types(statements, defined)
             _resolve_references(statements)
 
     def get_named_items(self) -> dict[Token, Statement]:
