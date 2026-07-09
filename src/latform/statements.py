@@ -393,7 +393,7 @@ def get_call_filename(
     return sub_filename, caller_directory / expanded
 
 
-def get_controller_variables(element: Element) -> set[str]:
+def get_controller_variables(element: Element) -> set[Token]:
     """
     Get variable names declared in an element's ``var={...}``.
     """

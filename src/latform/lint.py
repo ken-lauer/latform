@@ -4,8 +4,10 @@ import enum
 from dataclasses import dataclass
 from typing import Collection, Sequence
 
-from .statements import Element, Simple, Statement
+from .attrs import element_key_to_attrs
+from .statements import Element, Simple, Statement, get_controller_variables
 from .token import Token
+from .types import Attribute
 
 
 class LintCode(str, enum.Enum):
@@ -14,6 +16,9 @@ class LintCode(str, enum.Enum):
     unknown_statement = "LF001"
     undefined_reference = "LF002"
     unknown_element_type = "LF003"
+    unknown_attribute = "LF004"
+    controller_default_missing = "LF005"
+    duplicate_attribute = "LF006"
 
 
 @dataclass()
@@ -64,7 +69,89 @@ def lint_statement(st: Statement) -> list[Lint]:
                     relevant_tokens=[st.statement],
                 )
             ]
+    if isinstance(st, Element):
+        return lint_duplicate_attributes(st) + lint_element_attributes(st)
     return []
+
+
+def lint_duplicate_attributes(element: Element) -> list[Lint]:
+    """
+    Flag attributes assigned more than once within a single element.
+
+    Overriding an inherited value (re-setting an attribute in a child element
+    that its base element also sets) is fine; only repeats within the same
+    statement are flagged.
+    """
+    first_seen: dict[Token, Token] = {}
+    lints = []
+    for attr in element.attributes:
+        # Indexed/struct names (``tt(1)``, ``curve(1)%r0``) are CallName/Seq;
+        # only plain attribute names are checked for duplicates.
+        if not isinstance(attr, Attribute) or not isinstance(attr.name, Token):
+            continue
+        name = attr.name
+        key = name.lower()
+        if key in first_seen:
+            lints.append(
+                Lint(
+                    code=LintCode.duplicate_attribute,
+                    statement=element,
+                    message=f"Attribute '{name}' is set more than once",
+                    relevant_tokens=[first_seen[key], name],
+                )
+            )
+        else:
+            first_seen[key] = name
+    return lints
+
+
+def lint_element_attributes(element: Element) -> list[Lint]:
+    """
+    Flag attributes that are not defined for an element's type.
+    """
+    if element.element_type is None:
+        return []
+
+    valid = element_key_to_attrs[element.element_type]
+    controller_vars: set[Token] = {var.lower() for var in get_controller_variables(element)}
+    controller_defaults_set: set[Token] = set()
+
+    lints = []
+    for attr in element.attributes:
+        # Indexed/struct names (``tt(1)``, ``curve(1)%r0``) are CallName/Seq and
+        # are not represented in the flat attribute schema; only check plain names.
+        if not isinstance(attr, Attribute) or not isinstance(attr.name, Token):
+            continue
+        name = attr.name
+        if name.lower() in controller_vars:
+            # Default definition
+            controller_defaults_set.add(name.lower())
+            continue
+        if name.upper() not in valid:
+            lints.append(
+                Lint(
+                    code=LintCode.unknown_attribute,
+                    statement=element,
+                    message=(
+                        f"Unknown attribute '{name} for element type "
+                        f"'{element.element_type.lower()}'"
+                    ),
+                    relevant_tokens=[name],
+                )
+            )
+
+    missing_defaults = controller_vars - controller_defaults_set
+    for missing in missing_defaults:
+        lints.append(
+            Lint(
+                code=LintCode.controller_default_missing,
+                statement=element,
+                message=(f"Controller variable '{missing}' does not have a default set"),
+                relevant_tokens=[missing],
+            )
+        )
+
+    return lints
 
 
 def lint_undefined_references(
