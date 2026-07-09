@@ -61,6 +61,26 @@ class ListItem(WalkItem):
         self.container[self.index] = new
 
 
+def iter_tokens(node: WalkNode | None) -> Generator[Token, None, None]:
+    """Yield every `Token` nested within ``node`` (depth-first)."""
+    if node is None:
+        return
+
+    match node:
+        case Token():
+            yield node
+        case Seq():
+            for item in node.items:
+                yield from iter_tokens(item)
+        case Attribute():
+            yield from iter_tokens(node.name)
+            if node.value is not None:
+                yield from iter_tokens(node.value)
+        case CallName():
+            yield node.name
+            yield from iter_tokens(node.args)
+
+
 def walk(
     statements: Statement | Sequence[Statement],
 ) -> Generator[WalkItem, None, None]:

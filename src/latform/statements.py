@@ -31,6 +31,8 @@ BUILTIN_TARGETS = frozenset(
     }
 )
 
+CONTROLLER_TYPES = frozenset({"overlay", "group", "ramper"})
+
 
 @dataclass(kw_only=True)
 class Statement:
@@ -316,6 +318,12 @@ class Element(Statement):
     ele_list: Seq | None = None  # ele_name: keyword = { ele_list }
     attributes: list[Attribute] = field(default_factory=list)
 
+    @property
+    def is_controller(self) -> bool:
+        """Whether this is an overlay/group/ramper."""
+        # TODO: shortened keywords, element attribute inheritance...
+        return self.keyword.lower() in CONTROLLER_TYPES
+
     def annotate(self, named: dict[Token, Statement]):
         self.name.role = Role.name_
 
@@ -328,6 +336,15 @@ class Element(Statement):
             self.ele_list.annotate(named=named)
         for attr in self.attributes:
             attr.annotate(named=named)
+
+    def get_named_attribute(self, name: Token | str, *, partial_match: bool = True) -> Attribute:
+        for attr in self.attributes:
+            if isinstance(attr.name, Token):
+                if attr.name == name:
+                    return attr
+                if partial_match and name.lower().startswith(attr.name.lower()):
+                    return attr
+        raise KeyError(str(name))
 
     def to_output_nodes(self):
         if self.ele_list is not None:
@@ -369,3 +386,53 @@ def get_call_filename(
     if not caller_directory:
         return sub_filename, pathlib.Path(expanded)
     return sub_filename, caller_directory / expanded
+
+
+def get_controller_variables(element: Element) -> set[str]:
+    """
+    Get variable names declared in an element's ``var={...}``.
+    """
+    from .walk import iter_tokens
+
+    try:
+        var_attr = element.get_named_attribute("var", partial_match=False)
+    except KeyError:
+        return set()
+
+    if not isinstance(var_attr.value, Seq):
+        return set()
+
+    return {tok for tok in iter_tokens(var_attr.value)}
+
+
+def annotate_controller_variables(element: Element) -> None:
+    """
+    Annotate a controller's ``var={...}`` names and their usages.
+
+    The declared variables are in ``var={...}``.
+
+    They are then annotated in the control expressions, and as default-value
+    attributes.
+    """
+    from .walk import iter_tokens
+
+    var_names = {var.lower() for var in get_controller_variables(element)}
+    if not var_names:
+        return
+
+    var_attr = element.get_named_attribute("var", partial_match=False)
+
+    def get_tokens():
+        yield from iter_tokens(element.ele_list)
+        for attr in element.attributes:
+            yield from iter_tokens(attr)
+
+    for tok in get_tokens():
+        if tok.role is None and tok.lower() in var_names:
+            tok.role = Role.controller_variable
+
+    for attr in element.attributes:
+        if attr is var_attr:
+            continue
+        if isinstance(attr.name, Token) and attr.name.lower() in var_names:
+            attr.name.role = Role.controller_variable

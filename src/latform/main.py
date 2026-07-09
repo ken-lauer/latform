@@ -170,6 +170,7 @@ def main(
     attribute_case: NameCase = "lower",
     kind_case: NameCase = "lower",
     builtin_case: NameCase = "lower",
+    controller_variable_case: NameCase = "same",
     section_break_character: str = "-",
     section_break_width: int = 0,
     output: pathlib.Path | str | None = None,
@@ -208,6 +209,7 @@ def main(
         attribute_case=attribute_case,
         kind_case=kind_case,
         builtin_case=builtin_case,
+        controller_variable_case=controller_variable_case,
         section_break_character=section_break_character,
         section_break_width=section_break_width,
         renames=loaded_renames,
@@ -309,6 +311,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         choices=("upper", "lower", "same"),
         default="lower",
         help="Case for builtin functions",
+    )
+
+    parser.add_argument(
+        "--controller-variable-case",
+        choices=("upper", "lower", "same"),
+        default="same",
+        help="Case for overlay/group/ramper control variables (from var={...})",
     )
 
     parser.add_argument(

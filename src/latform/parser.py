@@ -23,6 +23,7 @@ from .statements import (
     Parameter,
     Simple,
     Statement,
+    annotate_controller_variables,
     get_call_filename,
 )
 from .token import Comments, Role, Token
@@ -103,6 +104,11 @@ class _RenameContext:
 
             if node.role in self.roles:
                 renamed = self.apply_rename(node)
+            elif node.role is Role.controller_variable:
+                # Controller variables are element-scoped names; rename them on an
+                # exact match, but never via regex (a broad pattern shouldn't sweep
+                # up locally-scoped variables).
+                renamed = self.apply_rename(node, allow_regex=False)
             elif self.assume_defined and node.role is None:
                 # A bare, unannotated token may be a reference to a name defined
                 # in a file that was not loaded; only literal matches are applied
@@ -474,6 +480,10 @@ def _resolve_references(statements: Sequence[Statement]) -> None:
     """Annotate ``NAME[attr]`` references as names (or builtins)."""
     for _statement, name in _iter_element_references(statements):
         name.role = Role.builtin if name.lower() in BUILTIN_TARGETS else Role.name_
+
+    for statement in statements:
+        if isinstance(statement, Element) and statement.is_controller:
+            annotate_controller_variables(statement)
 
 
 def parse(

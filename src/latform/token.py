@@ -24,6 +24,7 @@ class Role(str, enum.Enum):
     env_var = "env_var"
     statement_definition = "statement_definition"
     filename = "filename"
+    controller_variable = "controller_variable"
 
 
 class Token(str):

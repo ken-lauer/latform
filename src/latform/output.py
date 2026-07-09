@@ -373,6 +373,7 @@ def _format(
     name_case = options.name_case
     kind_case = options.kind_case
     builtin_case = options.builtin_case
+    controller_variable_case = options.controller_variable_case
 
     def add_part_to_line(part: Token):
         role = part.role
@@ -394,6 +395,8 @@ def _format(
                 case = kind_case
             case Role.builtin:
                 case = builtin_case
+            case Role.controller_variable:
+                case = controller_variable_case
             case _:
                 case = "same"
 
