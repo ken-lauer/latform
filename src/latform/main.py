@@ -11,6 +11,7 @@ import pathlib
 from typing import Collection
 
 from . import output as output_mod
+from .config import LatformProjectConfig
 from .debug import print_blocks
 from .lint import lint_files
 from .output import format_statements
@@ -84,6 +85,7 @@ def process_files(
     assume_defined: bool = True,
     lint: bool = False,
     ignore_lints: Collection[str] = (),
+    config: LatformProjectConfig | None = None,
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
     files_obj.parse(
@@ -104,7 +106,7 @@ def process_files(
 
     if lint:
         for fn, lint_item in lint_files(
-            files_obj, assume_defined=assume_defined, ignore=ignore_lints
+            files_obj, assume_defined=assume_defined, ignore=ignore_lints, config=config
         ):
             msg = lint_item.to_user_message()
             if recursive:
@@ -193,6 +195,7 @@ def main(
     assume_defined: bool = True,
     lint: bool = False,
     ignore_lints: list[str] | None = None,
+    config: LatformProjectConfig | None = None,
 ) -> None:
     if verbose >= 4:
         output_mod.LATFORM_OUTPUT_DEBUG = True
@@ -246,23 +249,21 @@ def main(
             assume_defined=assume_defined,
             lint=lint,
             ignore_lints=ignore_codes,
+            config=config,
         )
 
 
 def _build_argparser() -> argparse.ArgumentParser:
+    from . import cli
+
     parser = argparse.ArgumentParser(
         prog="latform",
         description=DESCRIPTION,
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
-    from ._version import __version__ as package_version
-
-    parser.add_argument(
-        "filename",
-        help="Filename to parse (use '-' for stdin/standard input)",
-        nargs="+",
-    )
+    cli.add_input_arguments(parser)
+    cli.add_config_arguments(parser)
 
     parser.add_argument(
         "--rename",
@@ -272,27 +273,23 @@ def _build_argparser() -> argparse.ArgumentParser:
         dest="raw_renames",
         help="Rename an element. In the form: 'old,new' (comma-delimited)",
     )
-
     parser.add_argument(
         "--rename-file",
         type=str,
         help="Load renames from a file. Each line should be comma-delimited in the form of `--rename`.",
     )
-
     parser.add_argument(
         "--diff",
         action="store_true",
         default=False,
         help="Show diff instead of formatted output",
     )
-
     parser.add_argument(
         "--compact",
         action="store_true",
         default=False,
         help="Compact output mode",
     )
-
     parser.add_argument(
         "--in-place",
         "-i",
@@ -305,37 +302,38 @@ def _build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write to this filename (or directory, if multiple files)",
     )
-
     parser.add_argument(
         "--name-case",
         "--name",
-        choices=("upper", "lower", "same"),
+        choices=cli.CASE_CHOICES,
         default="upper",
         help="Case for element names, kinds, and functions",
     )
-
+    parser.add_argument(
+        "--attribute-case",
+        choices=cli.CASE_CHOICES,
+        default="lower",
+        help="Case for element attribute names",
+    )
     parser.add_argument(
         "--kind-case",
         "--kind",
-        choices=("upper", "lower", "same"),
+        choices=cli.CASE_CHOICES,
         default="lower",
         help="Case for kinds (keywords)",
     )
-
     parser.add_argument(
         "--builtin-case",
-        choices=("upper", "lower", "same"),
+        choices=cli.CASE_CHOICES,
         default="lower",
         help="Case for builtin functions",
     )
-
     parser.add_argument(
         "--controller-variable-case",
-        choices=("upper", "lower", "same"),
+        choices=cli.CASE_CHOICES,
         default="same",
         help="Case for overlay/group/ramper control variables (from var={...})",
     )
-
     parser.add_argument(
         "--line-length",
         "-l",
@@ -343,7 +341,6 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=100,
         help="Desired line length. Some lines may exceed this (see also --max-line-length).",
     )
-
     parser.add_argument(
         "--max-line-length",
         "-m",
@@ -351,7 +348,6 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="Force lines over this length to be multilined. Defaults to 130%% of line_length.",
     )
-
     parser.add_argument(
         "--verbose",
         "-v",
@@ -359,36 +355,18 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=0,
         help="Increase debug verbosity",
     )
-
-    parser.add_argument(
-        "--version",
-        "-V",
-        action="version",
-        version=package_version,
-        help="Show the latform version number and exit.",
-    )
-
-    parser.add_argument(
-        "-r",
-        "--recursive",
-        action="store_true",
-        help="Recursively (-r) parse lattice files, following call statements",
-    )
-
     parser.add_argument(
         "--section-break-character",
         type=str,
         default="-",
         help="Section break character.  By default --line-length characters, unless overridden by --section-break-width",
     )
-
     parser.add_argument(
         "--section-break-width",
         type=int,
         default=None,
         help="Section break line width.  By default --line-length characters",
     )
-
     parser.add_argument(
         "--flatten",
         action="store_true",
@@ -410,20 +388,6 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Remove comments from the output",
     )
     parser.add_argument(
-        "-e",
-        "--error-if-missing",
-        action="store_true",
-        help="If a file is missing during parsing, exit with an error.",
-    )
-    parser.add_argument(
-        "--combine",
-        action="store_true",
-        help=(
-            "Process all input files together as a single set, sharing one parse stack. "
-            "Without this, each file is parsed independently of the others."
-        ),
-    )
-    parser.add_argument(
         "--lint",
         action="store_true",
         default=False,
@@ -433,38 +397,8 @@ def _build_argparser() -> argparse.ArgumentParser:
         ),
     )
 
-    parser.add_argument(
-        "--strict-references",
-        dest="assume_defined",
-        action="store_false",
-        default=True,
-        help=(
-            "Only recognize element/constant references defined in the loaded files. "
-            "By default, references to names defined elsewhere are assumed to exist; "
-            "with this flag they are left unresolved and reported as lint warnings."
-        ),
-    )
-
-    parser.add_argument(
-        "--ignore",
-        dest="ignore_lints",
-        action="append",
-        metavar="CODE",
-        help=(
-            "Lint code(s) to suppress, e.g. --ignore LF002 (repeatable, or "
-            "comma-separated: --ignore LF002,LF003)."
-        ),
-    )
-
-    parser.add_argument(
-        "--log",
-        "-L",
-        dest="log_level",
-        default="INFO",
-        choices=("DEBUG", "INFO", "WARNING", "CRITICAL"),
-        help="Python logging level (e.g. DEBUG, INFO, WARNING)",
-    )
-
+    cli.add_lint_arguments(parser)
+    cli.add_logging_arguments(parser, default_level="INFO")
     return parser
 
 
@@ -477,17 +411,32 @@ def cli_main(args: list[str] | None = None) -> None:
     args : list of str, optional
         Command-line arguments to parse and pass to :func:`main()`.
     """
-    parsed = _build_argparser().parse_args(args=args)
+    from . import cli
+
+    parser = _build_argparser()
+
+    # Peek at config-related flags so the config can supply argparse defaults
+    # (which explicit CLI flags then override).
+    prelim, _ = parser.parse_known_args(args=args)
+    config = cli.resolve_config(prelim)
+    if config.format:
+        parser.set_defaults(**config.format)
+
+    parsed = parser.parse_args(args=args)
+    cli.configure_logging(parsed.log_level)
+
     kwargs = vars(parsed)
-    log_level = kwargs.pop("log_level")
-
-    # Adjust the package-level logger level as requested:
-    logging.getLogger("latform").setLevel(log_level)
-    logging.basicConfig()
-
+    kwargs.pop("log_level")
+    kwargs.pop("config", None)
+    kwargs.pop("use_config", None)
     filenames = kwargs.pop("filename")
+
+    filenames, from_top_level = cli.require_input_files(filenames, config)
+    if from_top_level:
+        kwargs["recursive"] = True
+
     try:
-        main(filename=filenames, **kwargs)
+        main(filename=filenames, config=config, **kwargs)
     except FileNotFoundError as ex:
         logger.error("%s", ex)
         raise SystemExit(1) from None

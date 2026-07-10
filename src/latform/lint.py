@@ -15,6 +15,7 @@ from .types import Attribute
 if typing.TYPE_CHECKING:
     import pathlib
 
+    from .config import LatformProjectConfig
     from .parser import Files
 
 logger = logging.getLogger(__name__)
@@ -259,6 +260,7 @@ def lint_files(
     *,
     assume_defined: bool = True,
     ignore: Collection[str] = (),
+    config: LatformProjectConfig | None = None,
 ) -> Generator[tuple[pathlib.Path, Lint], None, None]:
     """
     Yield ``(filename, lint)`` for every lint across a parsed `Files` set.
@@ -270,12 +272,17 @@ def lint_files(
     assume_defined : bool, optional
         If False, also report undefined references and unknown element types.
     ignore : collection of str, optional
-        Lint codes (e.g. ``"LF004"``) to suppress.
+        Lint codes (e.g. ``"LF004"``) to suppress everywhere.
+    config : LatformProjectConfig, optional
+        When given, its global and per-file lint ignores are merged in per file.
     """
     named = files_obj.get_named_items()
     for fn, statements in files_obj.by_filename.items():
+        file_ignore = set(ignore)
+        if config is not None:
+            file_ignore |= config.ignores_for(fn)
         for lint in lint_statements(
-            statements, named=named, assume_defined=assume_defined, ignore=ignore
+            statements, named=named, assume_defined=assume_defined, ignore=file_ignore
         ):
             yield fn, lint
 
@@ -283,69 +290,16 @@ def lint_files(
 def _build_argparser():
     import argparse
 
-    from ._version import __version__ as package_version
+    from . import cli
 
     parser = argparse.ArgumentParser(
         prog="latform-lint",
         description="Lint Bmad lattice files without reformatting them.",
     )
-    parser.add_argument(
-        "filename",
-        nargs="+",
-        help="Filename(s) to lint (use '-' for stdin/standard input)",
-    )
-    parser.add_argument(
-        "-r",
-        "--recursive",
-        action="store_true",
-        help="Recursively parse lattice files, following call statements",
-    )
-    parser.add_argument(
-        "--combine",
-        action="store_true",
-        help="Process all input files together as a single set, sharing one parse stack.",
-    )
-    parser.add_argument(
-        "-e",
-        "--error-if-missing",
-        action="store_true",
-        help="If a file is missing during parsing, exit with an error.",
-    )
-    parser.add_argument(
-        "--strict-references",
-        dest="assume_defined",
-        action="store_false",
-        default=True,
-        help=(
-            "Only recognize element/constant references defined in the loaded files, "
-            "reporting anything else (and unknown element types) as lint warnings."
-        ),
-    )
-    parser.add_argument(
-        "--ignore",
-        dest="ignore_lints",
-        action="append",
-        metavar="CODE",
-        help=(
-            "Lint code(s) to suppress, e.g. --ignore LF002 (repeatable, or "
-            "comma-separated: --ignore LF002,LF003)."
-        ),
-    )
-    parser.add_argument(
-        "--log",
-        "-L",
-        dest="log_level",
-        default="WARNING",
-        choices=("DEBUG", "INFO", "WARNING", "CRITICAL"),
-        help="Python logging level (e.g. DEBUG, INFO, WARNING)",
-    )
-    parser.add_argument(
-        "--version",
-        "-V",
-        action="version",
-        version=package_version,
-        help="Show the latform version number and exit.",
-    )
+    cli.add_input_arguments(parser)
+    cli.add_config_arguments(parser)
+    cli.add_lint_arguments(parser)
+    cli.add_logging_arguments(parser, default_level="WARNING")
     return parser
 
 
@@ -356,32 +310,32 @@ def cli_main(args: list[str] | None = None) -> None:
     Parses and lints the given lattice files, printing any findings.  Exits with
     a non-zero status when lints are reported, so it can be used in CI.
     """
+    from . import cli
     from .parser import build_files
 
     parsed = _build_argparser().parse_args(args=args)
+    cli.configure_logging(parsed.log_level)
 
-    logging.getLogger("latform").setLevel(parsed.log_level)
-    logging.basicConfig()
-
-    ignore_codes = [
-        code.strip()
-        for entry in (parsed.ignore_lints or [])
-        for code in entry.split(",")
-        if code.strip()
-    ]
+    ignore_codes = cli.resolve_ignore_codes(parsed.ignore_lints)
+    config = cli.resolve_config(parsed)
+    filenames, from_top_level = cli.require_input_files(parsed.filename, config)
+    recursive = parsed.recursive or from_top_level
 
     found = False
     try:
-        files_sets = build_files(parsed.filename, combine=parsed.combine)
+        files_sets = build_files(filenames, combine=parsed.combine)
     except FileNotFoundError as ex:
         logger.error("%s", ex)
         raise SystemExit(1) from None
 
     for files_obj in files_sets:
-        files_obj.parse(recurse=parsed.recursive, raise_if_missing=parsed.error_if_missing)
+        files_obj.parse(recurse=recursive, raise_if_missing=parsed.error_if_missing)
         files_obj.annotate()
         for fn, lint in lint_files(
-            files_obj, assume_defined=parsed.assume_defined, ignore=ignore_codes
+            files_obj,
+            assume_defined=parsed.assume_defined,
+            ignore=ignore_codes,
+            config=config,
         ):
             found = True
             name = files_obj.local_file_to_source_filename.get(fn, str(fn))
