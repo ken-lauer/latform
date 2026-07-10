@@ -8,9 +8,20 @@ from functools import lru_cache
 from typing import Collection, Generator, Sequence
 
 from .attrs import element_key_to_attrs
-from .statements import Element, Simple, Statement, get_controller_variables
+from .statements import (
+    Assignment,
+    Constant,
+    Element,
+    ElementList,
+    Line,
+    Parameter,
+    Simple,
+    Statement,
+    get_controller_variables,
+)
 from .token import Token
 from .types import Attribute
+from .walk import iter_tokens
 
 if typing.TYPE_CHECKING:
     import pathlib
@@ -30,6 +41,7 @@ class LintCode(str, enum.Enum):
     unknown_attribute = "LF004"
     controller_default_missing = "LF005"
     duplicate_attribute = "LF006"
+    unused_constant = "LF007"
 
 
 @dataclass()
@@ -60,9 +72,11 @@ def lint_statements(
     *,
     assume_defined: bool = True,
     ignore: Collection[str] = (),
+    used_names: frozenset[str] | None = None,
 ) -> list[Lint]:
     ignored = {code.upper() for code in ignore}
     lints = [lint for st in statements for lint in lint_statement(st)]
+    lints.extend(lint_unused_constants(statements, used_names=used_names))
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
         lints.extend(lint_unknown_element_types(statements))
@@ -113,6 +127,76 @@ def lint_duplicate_attributes(element: Element) -> list[Lint]:
             )
         else:
             first_seen[key] = name
+    return lints
+
+
+def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None, None]:
+    """
+    Yield tokens from positions where a constant could be *referenced*.
+
+    Definition-side tokens (statement names, element attribute names) are
+    excluded so that, e.g., an element attribute ``l = 2`` does not count as a
+    use of a constant named ``l``.
+    """
+    for st in statements:
+        match st:
+            case Constant(value=value) | Assignment(value=value) | Parameter(value=value):
+                yield from iter_tokens(value)
+            case Simple(arguments=arguments):
+                for arg in arguments:
+                    if isinstance(arg, Attribute):
+                        yield from iter_tokens(arg.value)
+                    else:
+                        yield from iter_tokens(arg)
+            case Line(elements=elements) | ElementList(elements=elements):
+                yield from iter_tokens(elements)
+            case Element(ele_list=ele_list, attributes=attributes):
+                yield from iter_tokens(ele_list)
+                for attr in attributes:
+                    if isinstance(attr, Attribute):
+                        yield from iter_tokens(attr.value)
+                    else:
+                        yield from iter_tokens(attr)
+
+
+def get_used_names(statements: Sequence[Statement]) -> frozenset[str]:
+    """Uppercase names referenced anywhere in value/expression positions."""
+    return frozenset(str(tok.upper()) for tok in _iter_usage_tokens(statements))
+
+
+def lint_unused_constants(
+    statements: Sequence[Statement],
+    *,
+    used_names: frozenset[str] | None = None,
+) -> list[Lint]:
+    """
+    Flag constants that are defined but never referenced.
+
+    Parameters
+    ----------
+    statements : sequence of Statement
+        The statements whose `Constant` definitions are checked.
+    used_names : frozenset of str, optional
+        Uppercase names considered used.  When linting a multi-file set, pass
+        `get_used_names` over *all* files so cross-file usage is recognized;
+        defaults to the usages within ``statements`` itself.
+    """
+    if used_names is None:
+        used_names = get_used_names(statements)
+
+    lints = []
+    for st in statements:
+        if not isinstance(st, Constant) or st.redef:
+            continue
+        if str(st.name.upper()) not in used_names:
+            lints.append(
+                Lint(
+                    code=LintCode.unused_constant,
+                    statement=st,
+                    message=f"Constant '{st.name}' is defined but never used",
+                    relevant_tokens=[st.name],
+                )
+            )
     return lints
 
 
@@ -277,12 +361,19 @@ def lint_files(
         When given, its global and per-file lint ignores are merged in per file.
     """
     named = files_obj.get_named_items()
+    used_names = get_used_names(
+        [st for statements in files_obj.by_filename.values() for st in statements]
+    )
     for fn, statements in files_obj.by_filename.items():
         file_ignore = set(ignore)
         if config is not None:
             file_ignore |= config.ignores_for(fn)
         for lint in lint_statements(
-            statements, named=named, assume_defined=assume_defined, ignore=file_ignore
+            statements,
+            named=named,
+            assume_defined=assume_defined,
+            ignore=file_ignore,
+            used_names=used_names,
         ):
             yield fn, lint
 

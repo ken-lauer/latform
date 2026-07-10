@@ -7,12 +7,14 @@ import pytest
 from ..lint import (
     LintCode,
     cli_main,
+    get_used_names,
     lint_duplicate_attributes,
     lint_element_attributes,
     lint_files,
     lint_statements,
     lint_undefined_references,
     lint_unknown_element_types,
+    lint_unused_constants,
 )
 from ..parser import MemoryFiles
 
@@ -224,6 +226,61 @@ def test_distinct_attributes_not_reported():
     (statements,) = _files("q1: quadrupole, k1 = 0.5, l = 2").by_filename.values()
     (element,) = statements
     assert lint_duplicate_attributes(element) == []
+
+
+def test_unused_constant_reported():
+    (statements,) = _files("my_k = 0.5").by_filename.values()
+    (lint,) = lint_unused_constants(statements)
+    assert lint.code is LintCode.unused_constant
+    assert "my_k" in lint.message
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "my_k = 0.5\nq1: quadrupole, k1 = my_k",  # element attribute value
+        "my_k = 0.5\nother = my_k * 2\nq1: quadrupole, k1 = other",  # another constant
+        "my_k = 0.5\nq1[k1] = my_k",  # parameter statement value
+        "n_cell = 4\nlat: line = (n_cell*q1)",  # line definition
+    ],
+)
+def test_used_constant_not_reported(src):
+    (statements,) = _files(src).by_filename.values()
+    assert lint_unused_constants(statements) == []
+
+
+def test_attribute_name_is_not_constant_usage():
+    # ``l = 2`` sets the element's length attribute; it does not *use* a
+    # constant that happens to be named ``l``.
+    (statements,) = _files("l = 2\nq1: quadrupole, l = 2").by_filename.values()
+    (lint,) = lint_unused_constants(statements)
+    assert lint.code is LintCode.unused_constant
+
+
+def test_unused_constant_cross_file_usage_not_reported(tmp_path):
+    main = tmp_path / "main.bmad"
+    sub = tmp_path / "sub.bmad"
+    sub.write_text("my_k = 0.5\n")
+    main.write_text('call, filename = "sub.bmad"\nq1: quadrupole, k1 = my_k\n')
+
+    from ..parser import Files
+
+    files = Files(top_files=[main])
+    files.parse(recurse=True)
+    files.annotate()
+    codes = {lint.code for _fn, lint in lint_files(files)}
+    assert LintCode.unused_constant not in codes
+
+
+def test_unused_constant_via_lint_files():
+    files = _files("dead = 1\nq1: quadrupole, k1 = 0.5")
+    codes = {lint.code for _fn, lint in lint_files(files)}
+    assert LintCode.unused_constant in codes
+
+
+def test_get_used_names_uppercase():
+    (statements,) = _files("q1: quadrupole, k1 = my_k").by_filename.values()
+    assert "MY_K" in get_used_names(statements)
 
 
 def test_ignore_suppresses_by_code():
