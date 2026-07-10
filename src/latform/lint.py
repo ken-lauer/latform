@@ -42,6 +42,7 @@ class LintCode(str, enum.Enum):
     controller_default_missing = "LF005"
     duplicate_attribute = "LF006"
     unused_constant = "LF007"
+    attribute_override = "LF008"
 
 
 @dataclass()
@@ -76,6 +77,7 @@ def lint_statements(
 ) -> list[Lint]:
     ignored = {code.upper() for code in ignore}
     lints = [lint for st in statements for lint in lint_statement(st)]
+    lints.extend(lint_attribute_overrides(statements, named))
     lints.extend(lint_unused_constants(statements, used_names=used_names))
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
@@ -128,6 +130,64 @@ def lint_duplicate_attributes(element: Element) -> list[Lint]:
         else:
             first_seen[key] = name
     return lints
+
+
+def lint_attribute_overrides(
+    statements: Sequence[Statement],
+    named: dict[Token, Statement],
+) -> list[Lint]:
+    """
+    Flag ``name[attr] = value`` statements that override an earlier setting.
+
+    A parameter statement lints when the attribute was already set in the
+    element's own definition, or by an earlier parameter statement for the same
+    target and attribute (including builtin targets such as ``parameter``).
+    Overriding a value only set on a base element is fine, and names are
+    compared exactly (an abbreviation and its full attribute name are not
+    matched), consistent with `lint_duplicate_attributes`.
+    """
+    seen: dict[tuple[str, str], Token] = {}
+    lints = []
+    for st in statements:
+        if not isinstance(st, Parameter):
+            continue
+        if not isinstance(st.target, Token) or not isinstance(st.name, Token):
+            continue
+
+        original = _defined_attribute_name(named.get(st.target.upper()), st.name)
+        if original is not None:
+            message = (
+                f"Attribute '{st.name}' of '{st.target}' overrides the value set in its definition"
+            )
+        else:
+            key = (str(st.target.upper()), str(st.name.upper()))
+            original = seen.setdefault(key, st.name)
+            if original is st.name:
+                continue
+            message = (
+                f"Attribute '{st.name}' of '{st.target}' was already set by an earlier statement"
+            )
+
+        lints.append(
+            Lint(
+                code=LintCode.attribute_override,
+                statement=st,
+                message=message,
+                relevant_tokens=[original, st.name],
+            )
+        )
+    return lints
+
+
+def _defined_attribute_name(statement: Statement | None, name: Token) -> Token | None:
+    """The name token of ``name`` in an element definition's own attributes, if set."""
+    if not isinstance(statement, Element):
+        return None
+    try:
+        attr = statement.get_named_attribute(name, partial_match=False)
+    except KeyError:
+        return None
+    return attr.name if isinstance(attr.name, Token) else None
 
 
 def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None, None]:

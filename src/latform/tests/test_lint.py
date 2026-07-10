@@ -8,6 +8,7 @@ from ..lint import (
     LintCode,
     cli_main,
     get_used_names,
+    lint_attribute_overrides,
     lint_duplicate_attributes,
     lint_element_attributes,
     lint_files,
@@ -226,6 +227,56 @@ def test_distinct_attributes_not_reported():
     (statements,) = _files("q1: quadrupole, k1 = 0.5, l = 2").by_filename.values()
     (element,) = statements
     assert lint_duplicate_attributes(element) == []
+
+
+def _override_lints(src: str) -> list:
+    files = _files(src)
+    (statements,) = files.by_filename.values()
+    return lint_attribute_overrides(statements, files.get_named_items())
+
+
+def test_attribute_override_reported():
+    src = "q1: quadrupole, L = 0.4, k1 = 0.\nq1[k1] = 1\nq1[b1_gradient] = 1"
+    (lint,) = _override_lints(src)
+    assert lint.code is LintCode.attribute_override
+    assert "k1" in lint.message
+    assert "definition" in lint.message
+    # The original setting and the override, at distinct source locations.
+    assert [str(tok).lower() for tok in lint.relevant_tokens] == ["k1", "k1"]
+    first, second = lint.relevant_tokens
+    assert first.loc != second.loc
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "q1: quadrupole, K1 = 0.\nq1[k1] = 1",  # case-insensitive vs the definition
+        "q1: quadrupole\nq1[k1] = 1\nq1[k1] = 2",  # repeated parameter statements
+        "parameter[geometry] = open\nparameter[geometry] = closed",  # builtin target twice
+    ],
+)
+def test_attribute_override_variants_reported(src):
+    (lint,) = _override_lints(src)
+    assert lint.code is LintCode.attribute_override
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "q1: quadrupole, L = 0.4\nq1[k1] = 1",  # not set in the definition
+        "qa: quadrupole, k1 = 0.5\nqb: qa\nqb[k1] = 1",  # only set on the base element
+        "parameter[geometry] = open",  # builtin target set once
+        "qz[k1] = 1",  # undefined target
+    ],
+)
+def test_attribute_override_not_reported(src):
+    assert _override_lints(src) == []
+
+
+def test_attribute_override_via_lint_statements():
+    files = _files("q1: quadrupole, k1 = 0.\nq1[k1] = 1")
+    codes = {lint.code for lint in _all_lints(files, assume_defined=True)}
+    assert LintCode.attribute_override in codes
 
 
 def test_unused_constant_reported():

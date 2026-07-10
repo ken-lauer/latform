@@ -231,6 +231,8 @@ either `latform --lint` or `latform-lint`).
 | `LF004` | `unknown_attribute`          | Attribute is not valid for the element's (resolved) type                                           |
 | `LF005` | `controller_default_missing` | An overlay/group/ramper `var={...}` variable has no default value set                              |
 | `LF006` | `duplicate_attribute`        | The same attribute is set more than once on a single element                                       |
+| `LF007` | `unused_constant`            | A constant is defined but never referenced in any loaded file                                      |
+| `LF008` | `attribute_override`         | A `name[attr] = value` statement overrides a value set in the element's definition (or repeats an earlier `name[attr]` setting) |
 
 Overriding an inherited attribute value (re-setting in a child element an
 attribute its base element also sets) is allowed and is not flagged as a
