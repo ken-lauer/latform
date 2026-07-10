@@ -1,0 +1,14 @@
+! minimal cx line (synthetic test fixture)
+no_digested
+C2_LINE_ROT = 0
+C2_BEN0: sbend, L=0.5, ref_tilt=C2_LINE_ROT
+C2_BEN1: C2_BEN0, type=BEND_TYPE_A
+O_C2_BEN: overlay = {C2_BEN1[g]:g}, var={g}
+C2_QUA1: quadrupole, L=0.3
+C2_PIP5: pipe, L=1.0
+C2_PIP5[L] = 6.5
+C2: line = (C2_BEN1, C2_QUA1, C2_PIP5)
+call, file=c2.bpm.bmad
+call, file=c2.cor.bmad
+call, file=c2.col.bmad
+call, file=settings/settings.bmad

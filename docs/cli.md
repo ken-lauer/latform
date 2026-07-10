@@ -207,27 +207,27 @@ latform-lint my_lattice.bmad && echo "clean"
 
 ### Options
 
-| Option                 | Default | Description                                                                              |
-| ---------------------- | ------- | ---------------------------------------------------------------------------------------- |
-| `--recursive`, `-r`    | off     | Recursively parse lattice files, following `call` statements                             |
-| `--combine`            | off     | Process all input files together as a single set, sharing one parse stack                |
-| `--error-if-missing`, `-e` | off | Exit with an error if a file is missing during parsing                                    |
-| `--strict-references`  | off     | Report references not defined in the loaded files (and unknown element types) as lint warnings |
-| `--ignore CODE`        | none    | Suppress the given lint code(s); repeatable or comma-separated (e.g. `--ignore LF004,LF006`) |
+| Option                     | Default | Description                                                                                    |
+| -------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `--recursive`, `-r`        | off     | Recursively parse lattice files, following `call` statements                                   |
+| `--combine`                | off     | Process all input files together as a single set, sharing one parse stack                      |
+| `--error-if-missing`, `-e` | off     | Exit with an error if a file is missing during parsing                                         |
+| `--strict-references`      | off     | Report references not defined in the loaded files (and unknown element types) as lint warnings |
+| `--ignore CODE`            | none    | Suppress the given lint code(s); repeatable or comma-separated (e.g. `--ignore LF004,LF006`)   |
 
 ### Lint Codes
 
 Each lint carries a stable code so it can be suppressed with `--ignore` (in
 either `latform --lint` or `latform-lint`).
 
-| Code    | Name                         | Description                                                                 |
-| ------- | ---------------------------- | --------------------------------------------------------------------------- |
-| `LF001` | `unknown_statement`          | Statement type is unrecognized (may indicate a parsing error)               |
-| `LF002` | `undefined_reference`        | `NAME[attr]` reference whose `NAME` is not defined (needs `--strict-references`) |
+| Code    | Name                         | Description                                                                                        |
+| ------- | ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| `LF001` | `unknown_statement`          | Statement type is unrecognized (may indicate a parsing error)                                      |
+| `LF002` | `undefined_reference`        | `NAME[attr]` reference whose `NAME` is not defined (needs `--strict-references`)                   |
 | `LF003` | `unknown_element_type`       | Element type is neither a known Bmad type nor a defined base element (needs `--strict-references`) |
-| `LF004` | `unknown_attribute`          | Attribute is not valid for the element's (resolved) type                     |
-| `LF005` | `controller_default_missing` | An overlay/group/ramper `var={...}` variable has no default value set        |
-| `LF006` | `duplicate_attribute`        | The same attribute is set more than once on a single element                 |
+| `LF004` | `unknown_attribute`          | Attribute is not valid for the element's (resolved) type                                           |
+| `LF005` | `controller_default_missing` | An overlay/group/ramper `var={...}` variable has no default value set                              |
+| `LF006` | `duplicate_attribute`        | The same attribute is set more than once on a single element                                       |
 
 Overriding an inherited attribute value (re-setting in a child element an
 attribute its base element also sets) is allowed and is not flagged as a
@@ -427,3 +427,97 @@ graph LR
 latform-graph -o deps.txt parse_test.bmad
 latform-graph -f mermaid -o deps.mmd parse_test.bmad
 ```
+
+## latform-template
+
+Fill in and instance Bmad lattice templates. Unlike jinja/cookiecutter, the
+template is itself valid Bmad — it parses, lints, and formats standalone — while
+a YAML sidecar supplies per-element values and (for instancing) renames and
+output paths. See [Templating](templating.md) for the design.
+
+```
+latform-template [-h] [-L {DEBUG,INFO,WARNING,CRITICAL}] {interpolate,instantiate} ...
+```
+
+### interpolate
+
+Apply value overrides and/or renames to a **single** template file and write the
+result to stdout (or `-o FILE`).
+
+```
+latform-template interpolate TEMPLATE [--values VALUES.yaml]
+                 [--rename OLD NEW] [-o OUT]
+```
+
+Given `quad.bmad`:
+
+```
+Q1: quadrupole, L=0.3, k1=0.0
+```
+
+and `values.yaml`:
+
+```yaml
+Q1:
+  k1: 1.523 # override an attribute
+# "/.*_BPM/": { type: BPM_TYPE }   # regex key: every matching element
+# BEN0: { type: null }             # null removes an attribute
+```
+
+```bash
+latform-template interpolate quad.bmad --values values.yaml
+# -> Q1: quadrupole, L=0.3, k1=1.523
+```
+
+`--rename` is repeatable and accepts literal or regex rules:
+
+```bash
+latform-template interpolate quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'
+# -> ARC_Q1: quadrupole, L=0.3, k1=0.0
+```
+
+### instantiate
+
+Expand a template **set** across several instances, writing files under
+`--output-dir` (default: current directory). Use `--dry-run` to list the files
+that would be written without writing them.
+
+```
+latform-template instantiate INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
+```
+
+`instances.yaml` (paths are relative to the file's own directory):
+
+```yaml
+template:
+  - input: cx.bmad
+    output: "{instance}/{instance}.bmad" # {instance} -> c1, c2, ...
+  - input: cx.cor.bmad
+    output: "{instance}/{instance}.cor.bmad"
+
+renames:
+  "CX([_.].*|$)": "{instance:upper}\\1" # CX_BEN0 -> C1_BEN0, bare CX -> C1
+
+instances:
+  c1: {}
+  c2:
+    values: { CX_LINE_ROT: pi/2 } # per-instance overrides
+```
+
+```bash
+latform-template instantiate instances.yaml -d build/
+# wrote: build/c1/c1.bmad
+# wrote: build/c1/c1.cor.bmad
+# wrote: build/c2/c2.bmad
+# ...
+
+latform-template instantiate instances.yaml -d build/ --dry-run
+# would write: build/c1/c1.bmad
+# ...
+```
+
+Files that the template `call`s but are not in `template` (e.g. shared
+`settings/`) can be listed under a top-level `context:` key to be loaded for
+name resolution only — they are never written, and `call`s to them are left
+untouched. `call`s between transform-set files are rewritten to the instance
+outputs automatically.

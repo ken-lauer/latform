@@ -1,0 +1,29 @@
+template:
+  - input: cx.lat.bmad
+    output: "{instance}.lat.bmad"
+  - input: cx.bmad
+    output: "{instance}.bmad"
+  - input: cx.cor.bmad
+    output: "{instance}.cor.bmad"
+  - input: cx.bpm.bmad
+    output: "{instance}.bpm.bmad"
+  - input: cx.col.bmad
+    output: "{instance}.col.bmad"
+
+# Prefix rename applied to every instance (handles CX_, CX. and bare CX).
+renames:
+  "CX([_.].*|$)": "{instance:upper}\\1"
+
+instances:
+  c1: {}
+  c2: {}
+  c3: &mode2
+    values:
+      CX_LINE_ROT: "pi/2"
+      CX_BEN1: { type: BEND_TYPE_B }
+      CX_COL1: { offset: -0.4 }
+    insert:
+      cx.bmad:
+        - after: "CX_PIP5[L]"
+          text: "CX_PIP5[L] = CX_PIP5[L] + 0.1144"
+  c4: *mode2

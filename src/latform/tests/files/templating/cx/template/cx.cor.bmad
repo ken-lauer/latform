@@ -1,0 +1,3 @@
+! minimal cx correctors (synthetic test fixture)
+CX_XCR1: overlay = {CX_QUA1[hkick]}, var={kick}, kick=0
+CX_YCR1: overlay = {CX_QUA1[vkick]}, var={kick}, kick=0

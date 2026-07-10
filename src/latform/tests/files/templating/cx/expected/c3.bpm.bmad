@@ -1,0 +1,3 @@
+! minimal cx bpms (synthetic test fixture)
+C3_BPM_OFFSET = 0
+C3_BPM1: monitor, superimpose, ref=C3_QUA1, offset=C3_BPM_OFFSET, type=BPM_TYPE
