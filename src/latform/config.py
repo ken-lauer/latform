@@ -14,6 +14,7 @@ Example ``latform.toml``::
 
     [lint]
     ignore = ["LF002"]
+    min-name-length = 1
 
     [lint.per-file-ignores]
     "legacy/*.bmad" = ["LF004", "LF006"]
@@ -92,6 +93,7 @@ class LatformProjectConfig:
     format: dict[str, Any] = field(default_factory=dict)
     lint_ignore: list[str] = field(default_factory=list)
     per_file_ignores: dict[str, list[str]] = field(default_factory=dict)
+    min_name_length: int = 1
 
     @classmethod
     def empty(cls, root: pathlib.Path | None = None) -> LatformProjectConfig:
@@ -142,6 +144,17 @@ class LatformProjectConfig:
             str(pattern): [str(code).upper() for code in codes]
             for pattern, codes in per_file.items()
         }
+
+        min_name_length = lint.get("min-name-length", lint.get("min_name_length", 1))
+        if (
+            isinstance(min_name_length, bool)
+            or not isinstance(min_name_length, int)
+            or min_name_length < 1
+        ):
+            raise ConfigError(
+                f"{path}: lint.min-name-length must be an integer >= 1, got {min_name_length!r}"
+            )
+        config.min_name_length = min_name_length
 
         return config
 

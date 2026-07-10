@@ -8,6 +8,7 @@ from ..lint import (
     LintCode,
     cli_main,
     get_used_names,
+    lint_ambiguous_names,
     lint_attribute_overrides,
     lint_duplicate_attributes,
     lint_element_attributes,
@@ -376,6 +377,74 @@ def test_unused_constant_via_lint_files():
 def test_get_used_names_uppercase():
     (statements,) = _files("q1: quadrupole, k1 = my_k").by_filename.values()
     assert "MY_K" in get_used_names(statements)
+
+
+def _ambiguous_lints(src: str, **kwargs) -> list:
+    (statements,) = _files(src).by_filename.values()
+    return lint_ambiguous_names(statements, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "i = 1",  # constant
+        "L: quadrupole",  # element, case-insensitive
+        "o: line = (q1)",  # line
+        "l(a): line = (a, a)",  # line with call-style name
+        "i: list = (q1, q2)",  # element list
+    ],
+)
+def test_ambiguous_name_reported(src):
+    (lint,) = _ambiguous_lints(src)
+    assert lint.code is LintCode.ambiguous_name
+    assert "confused" in lint.message
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "ab = 1",  # two characters: short but not ambiguous
+        "x = 1",  # single character but not i/l/o
+        "q1: quadrupole",
+    ],
+)
+def test_short_names_not_reported_at_default_minimum(src):
+    assert _ambiguous_lints(src) == []
+
+
+def test_short_name_reported_with_minimum_length():
+    (lint,) = _ambiguous_lints("ab = 1", min_name_length=3)
+    assert lint.code is LintCode.ambiguous_name
+    assert "minimum length (3)" in lint.message
+
+
+def test_minimum_length_name_not_reported():
+    assert _ambiguous_lints("abc = 1", min_name_length=3) == []
+
+
+def test_ambiguous_name_single_lint_when_also_short():
+    (lint,) = _ambiguous_lints("i = 1", min_name_length=3)
+    assert lint.code is LintCode.ambiguous_name
+
+
+def test_min_name_length_from_config_via_lint_files():
+    import pathlib
+
+    from ..config import LatformProjectConfig
+
+    files = _files("ab: quadrupole")
+    config = LatformProjectConfig(root=pathlib.Path("."), min_name_length=3)
+    codes = {lint.code for _fn, lint in lint_files(files, config=config)}
+    assert LintCode.ambiguous_name in codes
+
+    codes = {lint.code for _fn, lint in lint_files(files)}
+    assert LintCode.ambiguous_name not in codes
+
+
+def test_ambiguous_name_via_lint_statements():
+    files = _files("i: quadrupole")
+    codes = {lint.code for lint in _all_lints(files, assume_defined=True)}
+    assert LintCode.ambiguous_name in codes
 
 
 def test_ignore_suppresses_by_code():

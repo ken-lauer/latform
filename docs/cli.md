@@ -233,6 +233,7 @@ either `latform --lint` or `latform-lint`).
 | `LF006` | `duplicate_attribute`        | The same attribute is set more than once on a single element                                       |
 | `LF007` | `unused_constant`            | A constant is defined but never referenced in any loaded file                                      |
 | `LF008` | `attribute_override`         | A `name[attr] = value` statement overrides a value set in the element's definition (or repeats an earlier `name[attr]` setting) |
+| `LF009` | `ambiguous_name`             | A defined name is a single easily-confused character (`i`/`l`/`o`) or shorter than the configured `min-name-length`             |
 
 Overriding an inherited attribute value (re-setting in a child element an
 attribute its base element also sets) is allowed and is not flagged as a
@@ -561,6 +562,8 @@ kind-case = "lower"
 # Lint settings.
 [lint]
 ignore = ["LF002"]              # codes to suppress everywhere
+min-name-length = 1             # LF009: minimum constant/element name length;
+                                # at the default of 1, only i/l/o are flagged
 
 [lint.per-file-ignores]
 "legacy/*.bmad" = ["LF004", "LF006"]

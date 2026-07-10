@@ -103,6 +103,23 @@ def test_explicit_missing_path_raises(tmp_path: pathlib.Path):
         discover_config(explicit=tmp_path / "nope.toml")
 
 
+def test_min_name_length_default_is_one(project: pathlib.Path):
+    assert discover_config(project).min_name_length == 1
+
+
+@pytest.mark.parametrize("key", ["min-name-length", "min_name_length"])
+def test_min_name_length_parsed(tmp_path: pathlib.Path, key: str):
+    (tmp_path / "latform.toml").write_text(f"[lint]\n{key} = 3\n")
+    assert discover_config(tmp_path).min_name_length == 3
+
+
+@pytest.mark.parametrize("value", ["0", '"three"', "true"])
+def test_invalid_min_name_length_raises(tmp_path: pathlib.Path, value: str):
+    (tmp_path / "latform.toml").write_text(f"[lint]\nmin-name-length = {value}\n")
+    with pytest.raises(ConfigError):
+        discover_config(tmp_path)
+
+
 def test_invalid_case_value_raises(tmp_path: pathlib.Path):
     (tmp_path / "latform.toml").write_text('[format]\nname-case = "Upper"\n')
     with pytest.raises(ConfigError):

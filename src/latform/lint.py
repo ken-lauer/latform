@@ -20,7 +20,7 @@ from .statements import (
     get_controller_variables,
 )
 from .token import Token
-from .types import Attribute, Seq
+from .types import Attribute, CallName, Seq
 from .walk import iter_tokens
 
 if typing.TYPE_CHECKING:
@@ -43,6 +43,7 @@ class LintCode(str, enum.Enum):
     duplicate_attribute = "LF006"
     unused_constant = "LF007"
     attribute_override = "LF008"
+    ambiguous_name = "LF009"
 
 
 @dataclass()
@@ -74,11 +75,13 @@ def lint_statements(
     assume_defined: bool = True,
     ignore: Collection[str] = (),
     used_names: frozenset[str] | None = None,
+    min_name_length: int = 1,
 ) -> list[Lint]:
     ignored = {code.upper() for code in ignore}
     lints = [lint for st in statements for lint in lint_statement(st)]
     lints.extend(lint_attribute_overrides(statements, named))
     lints.extend(lint_unused_constants(statements, used_names=used_names))
+    lints.extend(lint_ambiguous_names(statements, min_name_length=min_name_length))
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
         lints.extend(lint_unknown_element_types(statements))
@@ -212,6 +215,52 @@ def _defined_attribute_name(statement: Statement | None, name: Token) -> Token |
     except KeyError:
         return None
     return attr.name if isinstance(attr.name, Token) else None
+
+
+# Single-character names easily mistaken for one another or for the digits
+# ``1`` and ``0`` (compare flake8's E741).
+_AMBIGUOUS_NAMES = frozenset({"I", "L", "O"})
+
+
+def lint_ambiguous_names(
+    statements: Sequence[Statement],
+    *,
+    min_name_length: int = 1,
+) -> list[Lint]:
+    """
+    Flag defined names that are too short or easily confused.
+
+    The names of constants, elements, lines, and element lists are checked.
+    Names shorter than ``min_name_length`` are flagged; with the default
+    minimum of 1, only the single-character names ``i``, ``l``, and ``o`` are
+    flagged, as they are easily confused with other names or digits.
+    """
+    lints = []
+    for st in statements:
+        if not isinstance(st, (Constant, Element, Line, ElementList)):
+            continue
+        name = st.name
+        if isinstance(name, CallName):
+            name = name.name
+        if not isinstance(name, Token):
+            continue
+        if len(name) < min_name_length:
+            message = f"Name '{name}' is shorter than the minimum length ({min_name_length})"
+        elif str(name.upper()) in _AMBIGUOUS_NAMES:
+            message = (
+                f"Single-character name '{name}' is easily confused with other names or digits"
+            )
+        else:
+            continue
+        lints.append(
+            Lint(
+                code=LintCode.ambiguous_name,
+                statement=st,
+                message=message,
+                relevant_tokens=[name],
+            )
+        )
+    return lints
 
 
 def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None, None]:
@@ -442,12 +491,14 @@ def lint_files(
     ignore : collection of str, optional
         Lint codes (e.g. ``"LF004"``) to suppress everywhere.
     config : LatformProjectConfig, optional
-        When given, its global and per-file lint ignores are merged in per file.
+        When given, its global and per-file lint ignores are merged in per
+        file, and its ``min-name-length`` setting applies.
     """
     named = files_obj.get_named_items()
     used_names = get_used_names(
         [st for statements in files_obj.by_filename.values() for st in statements]
     )
+    min_name_length = config.min_name_length if config is not None else 1
     for fn, statements in files_obj.by_filename.items():
         file_ignore = set(ignore)
         if config is not None:
@@ -458,6 +509,7 @@ def lint_files(
             assume_defined=assume_defined,
             ignore=file_ignore,
             used_names=used_names,
+            min_name_length=min_name_length,
         ):
             yield fn, lint
 
