@@ -234,6 +234,7 @@ either `latform --lint` or `latform-lint`).
 | `LF007` | `unused_constant`            | A constant is defined but never referenced in any loaded file                                      |
 | `LF008` | `attribute_override`         | A `name[attr] = value` statement overrides a value set in the element's definition (or repeats an earlier `name[attr]` setting) |
 | `LF009` | `ambiguous_name`             | A defined name is a single easily-confused character (`i`/`l`/`o`) or shorter than the configured `min-name-length`             |
+| `LF010` | `use_builtin_constant`       | A numeric literal in a constant or attribute value matches a built-in physical constant (or its negation) within `builtin-constant-rtol` |
 
 Overriding an inherited attribute value (re-setting in a child element an
 attribute its base element also sets) is allowed and is not flagged as a
@@ -564,6 +565,8 @@ kind-case = "lower"
 ignore = ["LF002"]              # codes to suppress everywhere
 min-name-length = 1             # LF009: minimum constant/element name length;
                                 # at the default of 1, only i/l/o are flagged
+builtin-constant-rtol = 1e-4    # LF010: relative tolerance when matching constant
+                                # values against built-in physical constants
 
 [lint.per-file-ignores]
 "legacy/*.bmad" = ["LF004", "LF006"]

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import enum
 import logging
+import math
 import typing
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Collection, Generator, Sequence
+from typing import Collection, Generator, Iterable, Sequence
 
 from .attrs import element_key_to_attrs
+from .const import named_physical_constants
 from .statements import (
     Assignment,
     Constant,
@@ -44,6 +46,7 @@ class LintCode(str, enum.Enum):
     unused_constant = "LF007"
     attribute_override = "LF008"
     ambiguous_name = "LF009"
+    use_builtin_constant = "LF010"
 
 
 @dataclass()
@@ -76,12 +79,14 @@ def lint_statements(
     ignore: Collection[str] = (),
     used_names: frozenset[str] | None = None,
     min_name_length: int = 1,
+    builtin_constant_rtol: float = 1e-4,
 ) -> list[Lint]:
     ignored = {code.upper() for code in ignore}
     lints = [lint for st in statements for lint in lint_statement(st)]
     lints.extend(lint_attribute_overrides(statements, named))
     lints.extend(lint_unused_constants(statements, used_names=used_names))
     lints.extend(lint_ambiguous_names(statements, min_name_length=min_name_length))
+    lints.extend(lint_builtin_constants(statements, rtol=builtin_constant_rtol))
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
         lints.extend(lint_unknown_element_types(statements))
@@ -263,33 +268,38 @@ def lint_ambiguous_names(
     return lints
 
 
-def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None, None]:
+def _iter_value_tokens(st: Statement) -> Generator[Token, None, None]:
     """
-    Yield tokens from positions where a constant could be *referenced*.
+    Yield tokens from a statement's value/expression positions.
 
     Definition-side tokens (statement names, element attribute names) are
     excluded so that, e.g., an element attribute ``l = 2`` does not count as a
     use of a constant named ``l``.
     """
+    match st:
+        case Constant(value=value) | Assignment(value=value) | Parameter(value=value):
+            yield from iter_tokens(value)
+        case Simple(arguments=arguments):
+            for arg in arguments:
+                if isinstance(arg, Attribute):
+                    yield from iter_tokens(arg.value)
+                else:
+                    yield from iter_tokens(arg)
+        case Line(elements=elements) | ElementList(elements=elements):
+            yield from iter_tokens(elements)
+        case Element(ele_list=ele_list, attributes=attributes):
+            yield from iter_tokens(ele_list)
+            for attr in attributes:
+                if isinstance(attr, Attribute):
+                    yield from iter_tokens(attr.value)
+                else:
+                    yield from iter_tokens(attr)
+
+
+def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None, None]:
+    """Yield tokens from positions where a constant could be *referenced*."""
     for st in statements:
-        match st:
-            case Constant(value=value) | Assignment(value=value) | Parameter(value=value):
-                yield from iter_tokens(value)
-            case Simple(arguments=arguments):
-                for arg in arguments:
-                    if isinstance(arg, Attribute):
-                        yield from iter_tokens(arg.value)
-                    else:
-                        yield from iter_tokens(arg)
-            case Line(elements=elements) | ElementList(elements=elements):
-                yield from iter_tokens(elements)
-            case Element(ele_list=ele_list, attributes=attributes):
-                yield from iter_tokens(ele_list)
-                for attr in attributes:
-                    if isinstance(attr, Attribute):
-                        yield from iter_tokens(attr.value)
-                    else:
-                        yield from iter_tokens(attr)
+        yield from _iter_value_tokens(st)
 
 
 def get_used_names(statements: Sequence[Statement]) -> frozenset[str]:
@@ -328,6 +338,72 @@ def lint_unused_constants(
                     statement=st,
                     message=f"Constant '{st.name}' is defined but never used",
                     relevant_tokens=[st.name],
+                )
+            )
+    return lints
+
+
+def _iter_numeric_literals(tokens: Iterable[Token]) -> Generator[tuple[Token, float], None, None]:
+    """Yield ``(token, float)`` for every finite numeric literal among ``tokens``."""
+    for tok in tokens:
+        try:
+            number = float(str(tok))
+        except ValueError:
+            continue
+        if math.isfinite(number):
+            yield tok, number
+
+
+def _matching_builtin_names(value: float, rtol: float) -> list[str]:
+    """Built-in constant names matching ``value`` (or its negation, as ``-name``)."""
+    matches = []
+    for name, ref in named_physical_constants.items():
+        tol = rtol * abs(ref)
+        if abs(value - ref) <= tol:
+            matches.append(name)
+        elif abs(value + ref) <= tol:
+            matches.append(f"-{name}")
+    return matches
+
+
+def lint_builtin_constants(
+    statements: Sequence[Statement],
+    *,
+    rtol: float = 1e-4,
+) -> list[Lint]:
+    """
+    Flag numeric literals that duplicate a built-in physical constant.
+
+    Every value/expression position is checked: constant definitions
+    (``my_pi = 3.1416``), element attributes (``q: quadrupole, k1 = 3.1415 * 2``),
+    and ``name[attr] = value`` statements — including literals nested inside
+    expressions.  A literal matches a constant from
+    `latform.const.named_physical_constants` when it is within ``rtol``
+    relative tolerance of it or its negation; all matching built-in names are
+    suggested, negated matches as ``-name``.  Expressions are not numerically
+    evaluated (TODO: ``2 * 3.1415`` is caught via the ``3.1415`` literal, but
+    ``6.2832`` only matches ``twopi`` directly).
+
+    The default tolerance of 1e-4 catches values hand-rounded to roughly four
+    or more significant digits (``3.1416``, ``0.511e6``, ``2.998e8``) while
+    staying below the ~1e-3 level where unrelated values start to coincide.
+    """
+    lints = []
+    for st in statements:
+        for tok, value in _iter_numeric_literals(_iter_value_tokens(st)):
+            matches = _matching_builtin_names(value, rtol)
+            if not matches:
+                continue
+            names = ", ".join(f"'{name}'" for name in matches)
+            lints.append(
+                Lint(
+                    code=LintCode.use_builtin_constant,
+                    statement=st,
+                    message=(
+                        f"Value {tok} matches built-in constant(s) {names}; "
+                        "use the built-in instead"
+                    ),
+                    relevant_tokens=[tok],
                 )
             )
     return lints
@@ -492,13 +568,15 @@ def lint_files(
         Lint codes (e.g. ``"LF004"``) to suppress everywhere.
     config : LatformProjectConfig, optional
         When given, its global and per-file lint ignores are merged in per
-        file, and its ``min-name-length`` setting applies.
+        file, and its ``min-name-length`` / ``builtin-constant-rtol`` settings
+        apply.
     """
     named = files_obj.get_named_items()
     used_names = get_used_names(
         [st for statements in files_obj.by_filename.values() for st in statements]
     )
     min_name_length = config.min_name_length if config is not None else 1
+    builtin_constant_rtol = config.builtin_constant_rtol if config is not None else 1e-4
     for fn, statements in files_obj.by_filename.items():
         file_ignore = set(ignore)
         if config is not None:
@@ -510,6 +588,7 @@ def lint_files(
             ignore=file_ignore,
             used_names=used_names,
             min_name_length=min_name_length,
+            builtin_constant_rtol=builtin_constant_rtol,
         ):
             yield fn, lint
 

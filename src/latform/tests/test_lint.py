@@ -10,6 +10,7 @@ from ..lint import (
     get_used_names,
     lint_ambiguous_names,
     lint_attribute_overrides,
+    lint_builtin_constants,
     lint_duplicate_attributes,
     lint_element_attributes,
     lint_files,
@@ -445,6 +446,110 @@ def test_ambiguous_name_via_lint_statements():
     files = _files("i: quadrupole")
     codes = {lint.code for lint in _all_lints(files, assume_defined=True)}
     assert LintCode.ambiguous_name in codes
+
+
+def _builtin_constant_lints(src: str, **kwargs) -> list:
+    (statements,) = _files(src).by_filename.values()
+    return lint_builtin_constants(statements, **kwargs)
+
+
+def test_builtin_constant_reported():
+    (lint,) = _builtin_constant_lints("my_pi = 3.1415926535897931")
+    assert lint.code is LintCode.use_builtin_constant
+    assert "'pi'" in lint.message
+    assert [str(tok) for tok in lint.relevant_tokens] == ["3.1415926535897931"]
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        ("my_pi = 3.14159", "'pi'"),  # ~8e-7 relative error
+        ("my_pi = 3.1416", "'pi'"),  # ~2.3e-6
+        ("emass_ev = 0.511e6", "'m_electron'"),  # ~2.1e-6
+        ("c = 2.998e8", "'c_light'"),  # ~2.5e-5
+    ],
+)
+def test_builtin_constant_rounded_value_reported(src, expected):
+    # Hand-rounded values land within the default 1e-4 relative tolerance.
+    (lint,) = _builtin_constant_lints(src)
+    assert expected in lint.message
+
+
+def test_builtin_constant_negative_value_reported():
+    (lint,) = _builtin_constant_lints("anom = -1.9130427299999999")
+    assert "'anom_moment_neutron'" in lint.message
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        ("neg_pi = -3.1415926535897931", "'-pi'"),
+        ("pos_anom = 1.9130427299999999", "'-anom_moment_neutron'"),
+    ],
+)
+def test_negated_builtin_constant_reported(src, expected):
+    (lint,) = _builtin_constant_lints(src)
+    assert expected in lint.message
+
+
+def test_builtin_constant_reports_all_matching_names():
+    (lint,) = _builtin_constant_lints("my_c = 299792458")
+    assert "'c_light'" in lint.message
+    assert "'clight'" in lint.message
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "my_pi = 3.14",  # outside the default relative tolerance
+        "my_pi = 2*pi",  # no numeric literal in the expression matches
+        'name = "pi"',  # non-numeric value
+        "x = 0",
+        "n = 1",
+        "half = 0.5",
+    ],
+)
+def test_builtin_constant_not_reported(src):
+    assert _builtin_constant_lints(src) == []
+
+
+def test_builtin_constant_literal_inside_expression_reported():
+    (lint,) = _builtin_constant_lints("tau = 2 * 3.1415")
+    assert lint.code is LintCode.use_builtin_constant
+    assert "'pi'" in lint.message
+    assert [str(tok) for tok in lint.relevant_tokens] == ["3.1415"]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "q: quadrupole, k1 = 3.1415 * 2",  # element attribute expression
+        "q: quadrupole, tilt = 3.1416",  # element attribute literal
+        "q: quadrupole\nq[tilt] = 3.1416",  # parameter statement value
+    ],
+)
+def test_builtin_constant_in_attribute_value_reported(src):
+    (lint,) = _builtin_constant_lints(src)
+    assert lint.code is LintCode.use_builtin_constant
+    assert "'pi'" in lint.message
+
+
+def test_builtin_constant_tightened_rtol():
+    assert _builtin_constant_lints("my_pi = 3.14159", rtol=1e-12) == []
+
+
+def test_builtin_constant_rtol_from_config_via_lint_files():
+    import pathlib
+
+    from ..config import LatformProjectConfig
+
+    files = _files("my_pi = 3.14159\nq1: quadrupole, k1 = my_pi")
+    codes = {lint.code for _fn, lint in lint_files(files)}
+    assert LintCode.use_builtin_constant in codes
+
+    config = LatformProjectConfig(root=pathlib.Path("."), builtin_constant_rtol=1e-12)
+    codes = {lint.code for _fn, lint in lint_files(files, config=config)}
+    assert LintCode.use_builtin_constant not in codes
 
 
 def test_ignore_suppresses_by_code():

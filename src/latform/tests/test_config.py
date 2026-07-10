@@ -120,6 +120,23 @@ def test_invalid_min_name_length_raises(tmp_path: pathlib.Path, value: str):
         discover_config(tmp_path)
 
 
+def test_builtin_constant_rtol_default(project: pathlib.Path):
+    assert discover_config(project).builtin_constant_rtol == 1e-4
+
+
+@pytest.mark.parametrize("key", ["builtin-constant-rtol", "builtin_constant_rtol"])
+def test_builtin_constant_rtol_parsed(tmp_path: pathlib.Path, key: str):
+    (tmp_path / "latform.toml").write_text(f"[lint]\n{key} = 1e-9\n")
+    assert discover_config(tmp_path).builtin_constant_rtol == 1e-9
+
+
+@pytest.mark.parametrize("value", ["0", "-1e-6", "true", '"x"'])
+def test_invalid_builtin_constant_rtol_raises(tmp_path: pathlib.Path, value: str):
+    (tmp_path / "latform.toml").write_text(f"[lint]\nbuiltin-constant-rtol = {value}\n")
+    with pytest.raises(ConfigError):
+        discover_config(tmp_path)
+
+
 def test_invalid_case_value_raises(tmp_path: pathlib.Path):
     (tmp_path / "latform.toml").write_text('[format]\nname-case = "Upper"\n')
     with pytest.raises(ConfigError):

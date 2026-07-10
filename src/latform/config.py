@@ -15,6 +15,7 @@ Example ``latform.toml``::
     [lint]
     ignore = ["LF002"]
     min-name-length = 1
+    builtin-constant-rtol = 1e-4
 
     [lint.per-file-ignores]
     "legacy/*.bmad" = ["LF004", "LF006"]
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import math
 import pathlib
 from dataclasses import dataclass, field
 from typing import Any
@@ -94,6 +96,7 @@ class LatformProjectConfig:
     lint_ignore: list[str] = field(default_factory=list)
     per_file_ignores: dict[str, list[str]] = field(default_factory=dict)
     min_name_length: int = 1
+    builtin_constant_rtol: float = 1e-4
 
     @classmethod
     def empty(cls, root: pathlib.Path | None = None) -> LatformProjectConfig:
@@ -155,6 +158,18 @@ class LatformProjectConfig:
                 f"{path}: lint.min-name-length must be an integer >= 1, got {min_name_length!r}"
             )
         config.min_name_length = min_name_length
+
+        rtol = lint.get("builtin-constant-rtol", lint.get("builtin_constant_rtol", 1e-4))
+        if (
+            isinstance(rtol, bool)
+            or not isinstance(rtol, (int, float))
+            or not math.isfinite(rtol)
+            or rtol <= 0
+        ):
+            raise ConfigError(
+                f"{path}: lint.builtin-constant-rtol must be a positive number, got {rtol!r}"
+            )
+        config.builtin_constant_rtol = float(rtol)
 
         return config
 
