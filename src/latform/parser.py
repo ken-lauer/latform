@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import fnmatch
 import functools
 import logging
 import os.path
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import Generator, Sequence
+from typing import Generator, Iterable, Sequence
 
 from .attrs import element_key_to_attrs
 from .const import EQUALS
@@ -457,6 +458,67 @@ def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
     return named_items
 
 
+def target_selector_text(target: Token | Seq) -> str:
+    """Reconstruct the text of an attribute-set statement's target (case-normalized)."""
+    if isinstance(target, Token):
+        return str(target)
+    return str(target.to_token())
+
+
+def _selector_part_matches(pattern: str, name: str) -> bool:
+    """
+    Case-insensitive match of one selector part against a name.
+
+    ``*`` matches any run of characters and ``%`` a single character (Bmad's
+    convention, translated to fnmatch's ``?``).  Square brackets cannot occur
+    in a selector (they delimit the attribute part), so fnmatch character
+    classes cannot be formed.
+    """
+    return fnmatch.fnmatchcase(name.upper(), pattern.upper().replace("%", "?"))
+
+
+def match_element_selector(statements: Iterable[Statement], selector: str) -> list[Element] | None:
+    """
+    Elements matched by a Bmad element selector, in definition order.
+
+    Supported: ``*`` and ``%`` wildcards in the element name, and an optional
+    ``class::pattern`` prefix whose class part (which may also use wildcards)
+    is matched against each element's resolved type.  A plain name matches
+    exactly.  All matching is case-insensitive.
+
+    Returns None for selector syntax that is not supported yet:
+    ranges (``q1:q5``), branch qualifiers (``lat>>q1``), instance counts
+    (``q1##2``), and s-position selectors.
+    """
+    # TODO: branch qualifiers ("lat>>q1") and instance counts ("q1##2")
+    if ">>" in selector or "##" in selector:
+        return None
+
+    class_pattern: str | None
+    match selector.split("::"):
+        case [name_pattern]:
+            class_pattern = None
+        case [class_pattern, name_pattern]:
+            pass
+        case _:
+            return None
+    # TODO: ranges ("q1:q5") and s-position selectors
+    if ":" in (class_pattern or "") or ":" in name_pattern:
+        return None
+
+    matched = []
+    for st in statements:
+        if not isinstance(st, Element):
+            continue
+        if class_pattern is not None and (
+            st.element_type is None or not _selector_part_matches(class_pattern, st.element_type)
+        ):
+            continue
+        if _selector_part_matches(name_pattern, str(st.name)):
+            matched.append(st)
+    return matched
+
+
 def _iter_element_references(
     statements: Sequence[Statement],
 ) -> Generator[tuple[Statement, Token], None, None]:
@@ -725,6 +787,18 @@ class Files:
                 st.annotate(named=named)
             _resolve_element_types(statements, defined)
             _resolve_references(statements)
+
+    def match_elements(self, pattern: str) -> list[Element] | None:
+        """
+        Element definitions across all loaded files matching an element selector.
+
+        See `match_element_selector` for the supported syntax; returns None for
+        selector syntax that is not supported yet.
+        """
+        return match_element_selector(
+            (st for statements in self.by_filename.values() for st in statements),
+            pattern,
+        )
 
     def get_named_items(self) -> dict[Token, Statement]:
         """

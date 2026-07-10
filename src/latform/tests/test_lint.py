@@ -273,6 +273,50 @@ def test_attribute_override_not_reported(src):
     assert _override_lints(src) == []
 
 
+def test_attribute_override_class_selector_reported():
+    src = "rf1: rfcavity, voltage = 1e6\nrfcavity::*[voltage] = 3.7"
+    (lint,) = _override_lints(src)
+    assert lint.code is LintCode.attribute_override
+    assert "RFCAVITY::*" in lint.message
+    assert [str(tok).lower() for tok in lint.relevant_tokens] == ["voltage", "voltage"]
+
+
+def test_attribute_override_glob_selector_reports_all_matches():
+    src = "q1: quadrupole, k1 = 0\nq2: quadrupole, k1 = 0\nq*[k1] = 1"
+    (lint,) = _override_lints(src)
+    assert lint.code is LintCode.attribute_override
+    # Both matched definitions plus the overriding statement.
+    assert [str(tok).lower() for tok in lint.relevant_tokens] == ["k1", "k1", "k1"]
+
+
+def test_attribute_override_repeated_selector_reported():
+    src = "rf1: rfcavity\nrfcavity::*[voltage] = 1\nrfcavity::*[voltage] = 2"
+    (lint,) = _override_lints(src)
+    assert lint.code is LintCode.attribute_override
+    assert "already set" in lint.message
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "rf1: rfcavity\nrfcavity::*[voltage] = 3.7",  # matched, but not set in the definition
+        "q1: quadrupole, k1 = 0.5\nsbend::*[k1] = 1",  # selector matches nothing
+        "q1: quadrupole, k1 = 0.5\nq1:q5[k1] = 1",  # TODO: ranges are unsupported
+        "lat>>q1[k1] = 1\nlat>>q1[k1] = 2",  # TODO: branch qualifiers are unsupported
+        "q1##2[k1] = 1\nq1##2[k1] = 2",  # TODO: instance counts are unsupported
+    ],
+)
+def test_attribute_override_selector_not_reported(src):
+    assert _override_lints(src) == []
+
+
+def test_selector_targets_not_undefined_references():
+    src = "rf1: rfcavity\nrfcavity::*[voltage] = 3.7\nq*[k1] = 1\nlat>>q1[k1] = 1"
+    files = _files(src)
+    (statements,) = files.by_filename.values()
+    assert lint_undefined_references(statements, files.get_named_items()) == []
+
+
 def test_attribute_override_via_lint_statements():
     files = _files("q1: quadrupole, k1 = 0.\nq1[k1] = 1")
     codes = {lint.code for lint in _all_lints(files, assume_defined=True)}

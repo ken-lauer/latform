@@ -20,7 +20,7 @@ from .statements import (
     get_controller_variables,
 )
 from .token import Token
-from .types import Attribute
+from .types import Attribute, Seq
 from .walk import iter_tokens
 
 if typing.TYPE_CHECKING:
@@ -142,30 +142,54 @@ def lint_attribute_overrides(
     A parameter statement lints when the attribute was already set in the
     element's own definition, or by an earlier parameter statement for the same
     target and attribute (including builtin targets such as ``parameter``).
-    Overriding a value only set on a base element is fine, and names are
-    compared exactly (an abbreviation and its full attribute name are not
-    matched), consistent with `lint_duplicate_attributes`.
+    Element-set targets (``rfcavity::*[voltage]``, ``q*[k1]``) lint against
+    every matched element definition; two selectors are only considered
+    duplicates when their text is identical (overlap between different
+    selectors, e.g. ``q*`` vs ``q1``, is not detected).  Overriding a value
+    only set on a base element is fine, and names are compared exactly (an
+    abbreviation and its full attribute name are not matched), consistent with
+    `lint_duplicate_attributes`.
     """
+    from .parser import match_element_selector, target_selector_text
+
     seen: dict[tuple[str, str], Token] = {}
     lints = []
     for st in statements:
         if not isinstance(st, Parameter):
             continue
-        if not isinstance(st.target, Token) or not isinstance(st.name, Token):
+        if not isinstance(st.target, (Token, Seq)) or not isinstance(st.name, Token):
             continue
 
-        original = _defined_attribute_name(named.get(st.target.upper()), st.name)
-        if original is not None:
+        selector = target_selector_text(st.target)
+        if isinstance(st.target, Token) and not any(c in selector for c in "*%:>#"):
+            original = _defined_attribute_name(named.get(st.target.upper()), st.name)
+            originals = [original] if original is not None else []
             message = (
                 f"Attribute '{st.name}' of '{st.target}' overrides the value set in its definition"
             )
         else:
-            key = (str(st.target.upper()), str(st.name.upper()))
+            matched = match_element_selector(named.values(), selector)
+            if matched is None:
+                # TODO: unsupported selector syntax (ranges, branch qualifiers, ...)
+                continue
+            originals = [
+                name
+                for name in (_defined_attribute_name(element, st.name) for element in matched)
+                if name is not None
+            ]
+            message = (
+                f"Attribute '{st.name}' of elements matching '{selector}' overrides "
+                f"values set in their definitions"
+            )
+
+        if not originals:
+            key = (selector.upper(), str(st.name.upper()))
             original = seen.setdefault(key, st.name)
             if original is st.name:
                 continue
+            originals = [original]
             message = (
-                f"Attribute '{st.name}' of '{st.target}' was already set by an earlier statement"
+                f"Attribute '{st.name}' of '{selector}' was already set by an earlier statement"
             )
 
         lints.append(
@@ -173,7 +197,7 @@ def lint_attribute_overrides(
                 code=LintCode.attribute_override,
                 statement=st,
                 message=message,
-                relevant_tokens=[original, st.name],
+                relevant_tokens=[*originals, st.name],
             )
         )
     return lints

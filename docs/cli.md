@@ -238,6 +238,13 @@ Overriding an inherited attribute value (re-setting in a child element an
 attribute its base element also sets) is allowed and is not flagged as a
 duplicate.
 
+`LF008` also understands element-set targets: `rfcavity::*[voltage] = 3.7` and
+`q*[k1] = 1` lint against every matched element definition (`*` matches any run
+of characters, `%` a single character, and `class::pattern` matches against the
+element's resolved type). Ranges (`q1:q5`), branch qualifiers (`lat>>q1`),
+instance counts (`q1##2`), and s-position selectors are not supported yet and
+are skipped, as is overlap between different selectors (`q*` vs `q1`).
+
 ---
 
 ## latform-dump
