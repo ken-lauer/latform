@@ -101,7 +101,11 @@ def interpolate(
     contents: str,
     *,
     values: dict | None = None,
-    renames: dict[str, str] | None = None,
+    renames: dict | None = None,
+    prefix: dict[str, str] | None = None,
+    suffix: dict[str, str] | None = None,
+    parts: list[dict] | dict | None = None,
+    delimiters: str | list[str] | None = None,
     filename: str = "template.bmad",
     options: FormatOptions | None = None,
 ) -> str:
@@ -113,8 +117,18 @@ def interpolate(
         The template file contents (valid Bmad).
     values : dict, optional
         Overrides keyed by element/constant name. See :func:`apply_values`.
-    renames : dict[str, str], optional
-        Literal or regex rename rules, applied after values.
+    renames : dict, optional
+        Rename rules applied after values: either the flat shortcut form
+        (``{pattern: replacement}``, literal unless it contains ``* + ?``) or the
+        structured form (``{prefix: ..., suffix: ..., regex: ..., parts: ...}``).
+    prefix, suffix : dict[str, str], optional
+        Convenience ``{from: to}`` maps, equivalent to ``renames.prefix`` /
+        ``renames.suffix``.
+    parts : list[dict] | dict, optional
+        Convenience form equivalent to ``renames.parts`` — a list of
+        ``{delimiters, from, to}`` or a ``{from: to}`` map using ``delimiters``.
+    delimiters : str | list[str], optional
+        Default delimiter set for ``prefix``/``suffix``/``parts`` (default ``. _``).
     filename : str, optional
         Virtual filename used for source locations.
     options : FormatOptions, optional
@@ -135,8 +149,9 @@ def interpolate(
         # Role.name_ before renames run.
         files.annotate()
 
-    if renames:
-        _apply_renames(files, renames)
+    rules = _build_ruleset(renames, prefix, suffix, parts, _delim_set(delimiters))
+    if rules["literal"] or rules["regex"] or rules["parts"]:
+        _apply_renames(files, rules)
 
     files.reformat(options or FormatOptions())
     return files.formatted_contents
@@ -159,10 +174,6 @@ def _interpolate(text: str, instance: str) -> str:
     return _INTERP.sub(repl, text)
 
 
-def _resolve_renames(renames: dict[str, str], instance: str) -> dict[str, str]:
-    return {key: _interpolate(value, instance) for key, value in renames.items()}
-
-
 def _is_regex(pattern: str) -> bool:
     return any(char in pattern for char in "*+?")
 
@@ -178,29 +189,171 @@ def _collect_names(files: MemoryFiles) -> set[str]:
     return names
 
 
-def _expand_renames_over_names(renames: dict[str, str], names: set[str]) -> dict[str, str]:
-    """Resolve rules against the known name set into literal renames."""
-    literal = {name.lower(): value for name, value in renames.items() if not _is_regex(name)}
-    regexes = [
-        (re.compile(pattern, re.IGNORECASE), value)
-        for pattern, value in renames.items()
-        if _is_regex(pattern)
-    ]
+# A normalized set of rename rules. ``regex`` is ordered (first match wins):
+# explicit regex, then prefix-derived, then suffix-derived. ``literal`` (exact
+# name) is tried before any regex; ``parts`` (segment rewrite) is tried last.
+#   {"literal": {from_lower: to}, "regex": [(pattern, repl)], "parts": [(delims, from, to)]}
+_RESERVED_RENAME_KEYS = frozenset({"prefix", "suffix", "regex", "parts"})
+
+
+def _empty_ruleset() -> dict:
+    return {"literal": {}, "regex": [], "parts": []}
+
+
+def _delim_set(delimiters: str | list[str] | None) -> set[str]:
+    if delimiters is None:
+        return set("._")
+    if isinstance(delimiters, (list, tuple)):
+        return set("".join(delimiters))
+    return set(str(delimiters))
+
+
+def _prefix_to_regex(frm: str, to: str, delims: str | set[str] = "._") -> tuple[str, str]:
+    """Leading-anchored rule: ``FROM`` at the start, bounded by a delimiter/end."""
+    chars = "".join(re.escape(c) for c in delims)
+    if frm and frm[-1] in delims:  # delimiter already baked into FROM
+        pattern = rf"^{re.escape(frm)}(.*)"
+    else:
+        pattern = rf"^{re.escape(frm)}([{chars}].*|$)"
+    return pattern, f"{to}\\1"
+
+
+def _suffix_to_regex(frm: str, to: str, delims: str | set[str] = "._") -> tuple[str, str]:
+    """Trailing-anchored rule (mirror of prefix): ``FROM`` at the end, bounded."""
+    chars = "".join(re.escape(c) for c in delims)
+    if frm and frm[0] in delims:  # delimiter already baked into FROM
+        pattern = rf"(.*){re.escape(frm)}$"
+    else:
+        pattern = rf"(^|.*[{chars}]){re.escape(frm)}$"
+    return pattern, f"\\1{to}"
+
+
+def _normalize_renames(value: dict | None, default_delims: set[str] | None = None) -> dict:
+    """Turn a ``renames`` value (flat shortcut or structured) into a RuleSet.
+
+    ``default_delims`` is the delimiter set used by ``prefix``/``suffix`` and by
+    ``parts`` entries that do not specify their own (settable via a top-level
+    ``delimiters`` key). Defaults to ``. _``.
+    """
+    default_delims = default_delims if default_delims is not None else _delim_set(None)
+    rules = _empty_ruleset()
+    if not value:
+        return rules
+
+    if set(value) <= _RESERVED_RENAME_KEYS:  # structured form
+        for pattern, repl in (value.get("regex") or {}).items():
+            rules["regex"].append((pattern, repl))  # explicit regex: highest precedence
+        for frm, to in (value.get("prefix") or {}).items():
+            rules["regex"].append(_prefix_to_regex(frm, to, default_delims))
+        for frm, to in (value.get("suffix") or {}).items():
+            rules["regex"].append(_suffix_to_regex(frm, to, default_delims))
+        parts = value.get("parts") or []
+        if isinstance(parts, dict):  # {from: to} shorthand using the default delimiters
+            for frm, to in parts.items():
+                rules["parts"].append((default_delims, frm, to))
+        else:  # list of {delimiters, from, to}; per-entry delimiters override the default
+            for entry in parts:
+                delims = (
+                    _delim_set(entry["delimiters"])
+                    if entry.get("delimiters") is not None
+                    else default_delims
+                )
+                rules["parts"].append((delims, entry["from"], entry["to"]))
+    else:  # flat shortcut: literal-vs-regex autodetection
+        for pattern, repl in value.items():
+            if _is_regex(pattern):
+                rules["regex"].append((pattern, repl))
+            else:
+                rules["literal"][pattern.lower()] = repl
+    return rules
+
+
+def _merge_rulesets(base: dict, overriding: dict) -> dict:
+    """Merge two RuleSets; ``overriding`` takes precedence (tried first)."""
+    return {
+        "literal": {**base["literal"], **overriding["literal"]},
+        "regex": overriding["regex"] + base["regex"],
+        "parts": overriding["parts"] + base["parts"],
+    }
+
+
+def _build_ruleset(
+    renames: dict | None = None,
+    prefix: dict[str, str] | None = None,
+    suffix: dict[str, str] | None = None,
+    parts: list[dict] | dict | None = None,
+    default_delims: set[str] | None = None,
+) -> dict:
+    """Combine a ``renames`` value with convenience prefix/suffix/parts kwargs."""
+    base = _normalize_renames(renames, default_delims)
+    extra = _normalize_renames(
+        {"prefix": prefix or {}, "suffix": suffix or {}, "parts": parts or []}, default_delims
+    )
+    return _merge_rulesets(extra, base)  # explicit renames precede convenience kwargs
+
+
+def _interpolate_ruleset(rules: dict, instance: str) -> dict:
+    return {
+        "literal": {k: _interpolate(v, instance) for k, v in rules["literal"].items()},
+        "regex": [(pat, _interpolate(repl, instance)) for pat, repl in rules["regex"]],
+        "parts": [(d, frm, _interpolate(to, instance)) for d, frm, to in rules["parts"]],
+    }
+
+
+def _apply_part_rule(name: str, delims: set[str], frm: str, to: str) -> tuple[str, bool]:
+    """Rename whole delimiter-separated segments of ``name`` equal to ``frm``."""
+    out: list[str] = []
+    segment = ""
+    changed = False
+
+    def flush() -> None:
+        nonlocal segment, changed
+        if segment.lower() == frm.lower():
+            out.append(to)
+            changed = True
+        else:
+            out.append(segment)
+        segment = ""
+
+    for char in name:
+        if char in delims:
+            flush()
+            out.append(char)
+        else:
+            segment += char
+    flush()
+    return "".join(out), changed
+
+
+def _expand_ruleset_over_names(rules: dict, names: set[str]) -> dict[str, str]:
+    """Resolve a RuleSet against the known name set into literal renames."""
+    literal = rules["literal"]
+    regexes = [(re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in rules["regex"]]
+    parts = rules["parts"]
 
     expanded: dict[str, str] = {}
     for name in names:
         if name.lower() in literal:
             expanded[name] = literal[name.lower()]
             continue
-        for pattern, value in regexes:
+        matched = False
+        for pattern, repl in regexes:
             if pattern.search(name):
-                expanded[name] = pattern.sub(value, name)
+                expanded[name] = pattern.sub(repl, name)
+                matched = True
+                break
+        if matched:
+            continue
+        for delims, frm, to in parts:
+            new_name, changed = _apply_part_rule(name, delims, frm, to)
+            if changed:
+                expanded[name] = new_name
                 break
     return expanded
 
 
-def _apply_renames(files: MemoryFiles, renames: dict[str, str]) -> None:
-    expanded = _expand_renames_over_names(renames, _collect_names(files))
+def _apply_renames(files: MemoryFiles, rules: dict) -> None:
+    expanded = _expand_ruleset_over_names(rules, _collect_names(files))
     if expanded:
         files.rename(expanded)
 
@@ -291,7 +444,8 @@ def instantiate(
     ----------
     spec : dict
         Parsed instances file: ``template`` (list of ``{input, output}``),
-        optional global ``renames``, and ``instances`` (name -> overrides).
+        optional global ``renames``, optional ``delimiters`` (default delimiter
+        set for prefix/suffix/parts), and ``instances`` (name -> overrides).
     base_dir : pathlib.Path | str
         Directory the ``input`` paths are relative to.
     options : FormatOptions, optional
@@ -308,7 +462,8 @@ def instantiate(
     options = options or default_options
 
     template_files = spec["template"]
-    global_renames = spec.get("renames") or {}
+    default_delims = _delim_set(spec.get("delimiters"))
+    global_rules = _normalize_renames(spec.get("renames"), default_delims)
     instances = spec["instances"]
     context_files = spec.get("context") or []
 
@@ -338,9 +493,13 @@ def instantiate(
             _apply_inserts(files, overrides["insert"], options)
         files.annotate()
 
-        renames = _resolve_renames({**global_renames, **(overrides.get("renames") or {})}, name)
-        if renames:
-            _apply_renames(files, renames)
+        rules = _merge_rulesets(
+            global_rules, _normalize_renames(overrides.get("renames"), default_delims)
+        )
+        # Replace {instance} and similar in the rename rules
+        rules = _interpolate_ruleset(rules, name)
+        if rules["literal"] or rules["regex"] or rules["parts"]:
+            _apply_renames(files, rules)
 
         # Full output path per input (may include directories). Rewrite `call`
         # targets by resolving each against the transform set's input paths.
@@ -411,10 +570,17 @@ def _cmd_interpolate(parsed) -> None:
     contents = pathlib.Path(parsed.template).read_text()
     values = _load_yaml(parsed.values) if parsed.values else None
     renames = {old: new for old, new in parsed.rename} or None
+    prefix = {frm: to for frm, to in parsed.prefix} or None
+    suffix = {frm: to for frm, to in parsed.suffix} or None
+    parts = [{"delimiters": d, "from": frm, "to": to} for d, frm, to in parsed.parts] or None
     result = interpolate(
         contents,
         values=values,
         renames=renames,
+        prefix=prefix,
+        suffix=suffix,
+        parts=parts,
+        delimiters=parsed.delimiters,
         filename=parsed.template,
         options=default_options,
     )
@@ -471,6 +637,35 @@ def main(argv: list[str] | None = None) -> None:
         action="append",
         default=[],
         help="Rename rule (literal or regex); repeatable",
+    )
+    p_interp.add_argument(
+        "--prefix",
+        nargs=2,
+        metavar=("FROM", "TO"),
+        action="append",
+        default=[],
+        help="Leading-prefix rename (bounded by . or _); repeatable",
+    )
+    p_interp.add_argument(
+        "--suffix",
+        nargs=2,
+        metavar=("FROM", "TO"),
+        action="append",
+        default=[],
+        help="Trailing-suffix rename (bounded by . or _); repeatable",
+    )
+    p_interp.add_argument(
+        "--parts",
+        nargs=3,
+        metavar=("DELIMS", "FROM", "TO"),
+        action="append",
+        default=[],
+        help="Segment rename: rename whole DELIMS-separated parts equal to FROM; repeatable",
+    )
+    p_interp.add_argument(
+        "--delimiters",
+        default=None,
+        help="Default delimiter set for --prefix/--suffix (default: . and _)",
     )
     p_interp.add_argument("-o", "--output", help="Output file (default: stdout)")
     p_interp.set_defaults(func=_cmd_interpolate)

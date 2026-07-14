@@ -460,7 +460,8 @@ result to stdout (or `-o FILE`).
 
 ```
 latform-template interpolate TEMPLATE [--values VALUES.yaml]
-                 [--rename OLD NEW] [-o OUT]
+                 [--rename OLD NEW] [--prefix FROM TO] [--suffix FROM TO]
+                 [--parts DELIMS FROM TO] [--delimiters CHARS] [-o OUT]
 ```
 
 Given `quad.bmad`:
@@ -490,6 +491,23 @@ latform-template interpolate quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'
 # -> ARC_Q1: quadrupole, L=0.3, k1=0.0
 ```
 
+`--prefix`, `--suffix`, and `--parts` are the named rename forms (all repeatable):
+
+```bash
+# prefix: leading FROM only, bounded by . or _  (CX_A -> C1_A; O_CX_A untouched)
+latform-template interpolate lat.bmad --prefix CX C1
+
+# suffix: trailing FROM, bounded by . or _  (Q_XCR -> Q_HCOR)
+latform-template interpolate lat.bmad --suffix _XCR _HCOR
+
+# parts: rename whole segments anywhere, split on the given delimiters
+#        (CX_A -> C1_A and O_CX_A -> O_C1_A)
+latform-template interpolate lat.bmad --parts ._ CX C1
+
+# --delimiters sets the boundary chars for --prefix/--suffix (default . and _)
+latform-template interpolate lat.bmad --prefix CX C1 --delimiters _
+```
+
 ### instantiate
 
 Expand a template **set** across several instances, writing files under
@@ -510,13 +528,75 @@ template:
     output: "{instance}/{instance}.cor.bmad"
 
 renames:
-  "CX([_.].*|$)": "{instance:upper}\\1" # CX_BEN0 -> C1_BEN0, bare CX -> C1
+  "CX([_.].*|$)": "{instance:upper}\\1" # flat shortcut: literal unless it has * + ?
 
 instances:
   c1: {}
   c2:
     values: { CX_LINE_ROT: pi/2 } # per-instance overrides
 ```
+
+`renames` also accepts a **structured** form with any of `prefix`, `suffix`,
+`regex`, and `parts`, each usable globally (in place of the flat block above) or
+per instance. They are typically used one at a time — pick the form that fits.
+`{instance}`, `{instance:upper}`, and `{instance:lower}` interpolate in every
+replacement.
+
+#### Prefix / suffix renames
+
+`prefix` renames a leading `FROM` bounded by a delimiter (default `.` or `_`);
+`suffix` is the mirror for a trailing `FROM`. Both are `{from: to}` maps.
+
+```yaml
+renames:
+  prefix:
+    CX: "{instance:upper}" # CX_BEN0 -> C1_BEN0, CX.COL00 -> C1.COL00, bare CX -> C1
+    O_CX: "O_{instance:upper}" # embedded needs its own entry (prefix is leading-only)
+  suffix:
+    _XCR: _HCOR # A_XCR -> A_HCOR (trailing, bounded)
+```
+
+#### Regex renames
+
+`regex` is the escape hatch: raw `re.sub` per name, so you write your own
+backreferences. (Equivalent to the flat shortcut when the key contains `* + ?`.)
+
+```yaml
+renames:
+  regex:
+    "CX([_.].*|$)": "{instance:upper}\\1"
+```
+
+#### Parts renames
+
+`parts` renames whole delimiter-separated segments *anywhere* in a name — the one
+form that also rewrites embedded segments (e.g. `O_CX_BEN`), so a single rule
+covers leading, embedded, dotted, and bare occurrences.
+
+```yaml
+renames:
+  parts:
+    - delimiters: "._" # a string "._" or a list [".", "_"]
+      from: CX
+      to: "{instance:upper}"
+```
+
+Set a top-level `delimiters` to change the default delimiter set for `prefix`,
+`suffix`, and `parts`. With a default in place, `parts` may be written as a plain
+`{from: to}` map, matching the shape of `prefix`/`suffix`:
+
+```yaml
+delimiters: "._" # applies to prefix / suffix / parts (default: . and _)
+
+renames:
+  parts:
+    CX: "{instance:upper}" # uses the top-level delimiters
+```
+
+Per name, the first matching rule wins in the order
+`literal → regex → prefix → suffix → parts`. A plain `{from: to}` map with no
+`prefix`/`suffix`/`regex`/`parts` key is the flat shortcut shown earlier (today's
+literal-or-regex behavior).
 
 ```bash
 latform-template instantiate instances.yaml -d build/

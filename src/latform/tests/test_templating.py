@@ -227,3 +227,171 @@ def test_cli_instantiate_dry_run_writes_nothing(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "would write" in out
     assert not (tmp_path / "out").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Structured renames: prefix / suffix / regex / parts (+ shortcut)
+# --------------------------------------------------------------------------- #
+
+_NAMES_SRC = "\n".join(
+    [
+        "CX_BEN0: sbend",
+        "O_CX_BEN: overlay = {CX_BEN0[g]: g}, var={g}",
+        "CX.COL00: ecollimator",
+        "CXFOO: marker",
+        "CX: line=(CX_BEN0)",
+    ]
+)
+
+
+def test_prefix_leading_only():
+    out = interpolate(_NAMES_SRC, prefix={"CX": "C1"}).lower()
+    assert "c1_ben0" in out  # leading segment renamed (def + ref)
+    assert "c1.col00" in out  # dotted boundary
+    assert "c1:" in out  # bare line name
+    assert "o_cx_ben" in out  # embedded: NOT leading -> untouched
+    assert "cxfoo" in out  # not a bounded prefix -> untouched
+    assert "cx_ben0" not in out
+
+
+def test_prefix_second_entry_catches_embedded():
+    out = interpolate(_NAMES_SRC, prefix={"CX": "C1", "O_CX": "O_C1"}).lower()
+    assert "o_c1_ben" in out
+    assert "o_cx_ben" not in out
+
+
+def test_parts_renames_any_segment():
+    out = interpolate(_NAMES_SRC, parts=[{"delimiters": "._", "from": "CX", "to": "C1"}]).lower()
+    assert "c1_ben0" in out
+    assert "o_c1_ben" in out  # embedded segment renamed
+    assert "c1.col00" in out
+    assert "c1:" in out
+    assert "cxfoo" in out  # whole-segment match only
+    assert "cx_ben0" not in out
+
+
+def test_parts_delimiters_as_list():
+    out = interpolate(
+        _NAMES_SRC, parts=[{"delimiters": [".", "_"], "from": "CX", "to": "C1"}]
+    ).lower()
+    assert "o_c1_ben" in out and "c1.col00" in out
+
+
+_SUFFIX_SRC = "\n".join(
+    ["A_XCR: marker", "A.XCR: marker", "XCR: marker", "A_XCRB: marker", "FOOXCR: marker"]
+)
+
+
+def test_suffix_bare_bounded():
+    out = interpolate(_SUFFIX_SRC, suffix={"XCR": "HCOR"}).lower()
+    assert "a_hcor:" in out
+    assert "a.hcor:" in out
+    assert "hcor:" in out  # bare XCR at start-of-name
+    assert "a_xcrb:" in out  # XCR not at end -> untouched
+    assert "fooxcr:" in out  # no preceding boundary -> untouched
+    assert "a_xcr:" not in out
+
+
+def test_suffix_with_delimiter_in_from():
+    out = interpolate("Q_XCR: marker\nFOO_XCRB: marker", suffix={"_XCR": "_HCOR"}).lower()
+    assert "q_hcor:" in out
+    assert "foo_xcrb:" in out
+
+
+def test_structured_renames_via_dict():
+    out = interpolate(_NAMES_SRC, renames={"prefix": {"CX": "C1"}}).lower()
+    assert "c1_ben0" in out and "o_cx_ben" in out
+
+
+def test_structured_regex_equals_flat_regex():
+    flat = interpolate(_NAMES_SRC, renames={r"CX([_.].*|$)": r"C1\1"})
+    structured = interpolate(_NAMES_SRC, renames={"regex": {r"CX([_.].*|$)": r"C1\1"}})
+    assert flat == structured
+
+
+def test_shortcut_still_literal_or_regex():
+    # no * + ? -> literal exact-name match
+    out = interpolate("CX: marker\nCX_A: marker", renames={"CX": "C1"}).lower()
+    assert "c1: marker" in out
+    assert "cx_a: marker" in out  # not an exact match
+
+
+def test_explicit_regex_beats_prefix():
+    out = interpolate(
+        "CX_A: marker", renames={"regex": {"CX_A": "EXPLICIT"}, "prefix": {"CX": "C1"}}
+    ).lower()
+    assert "explicit" in out
+    assert "c1_a" not in out
+
+
+def test_global_and_instance_prefix_merge(tmp_path):
+    (tmp_path / "a.bmad").write_text("CX_Q: quadrupole\n")
+    spec = {
+        "template": [{"input": "a.bmad", "output": "{instance}.bmad"}],
+        "renames": {"prefix": {"CX": "G"}},  # global
+        "instances": {
+            "m1": {},  # uses global
+            "m2": {"renames": {"prefix": {"CX": "X2"}}},  # overrides global
+        },
+    }
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)
+    assert "G_Q" in res["m1"]["m1.bmad"]
+    assert "X2_Q" in res["m2"]["m2.bmad"]
+    assert "G_Q" not in res["m2"]["m2.bmad"]
+
+
+def test_cli_prefix_and_parts(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text("CX_Q: quadrupole\nO_CX_M: marker\n")
+    cli_main(["interpolate", str(tmp_path / "t.bmad"), "--prefix", "CX", "C1"])
+    out = capsys.readouterr().out.lower()
+    assert "c1_q" in out and "o_cx_m" in out  # prefix leaves embedded
+
+    cli_main(["interpolate", str(tmp_path / "t.bmad"), "--parts", "._", "CX", "C1"])
+    out = capsys.readouterr().out.lower()
+    assert "c1_q" in out and "o_c1_m" in out  # parts renames embedded
+
+
+def test_cli_suffix(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text("Q_XCR: marker\n")
+    cli_main(["interpolate", str(tmp_path / "t.bmad"), "--suffix", "_XCR", "_HCOR"])
+    assert "q_hcor" in capsys.readouterr().out.lower()
+
+
+def test_parts_as_dict_uses_default_delimiters():
+    out = interpolate(_NAMES_SRC, renames={"parts": {"CX": "C1"}}).lower()
+    assert "c1_ben0" in out and "o_c1_ben" in out and "c1.col00" in out
+    assert "cxfoo" in out  # still whole-segment only
+
+
+def test_top_level_delimiters_restrict_parts():
+    # only "_" is a delimiter -> "." is not, so CX.COL00 is one segment (untouched)
+    out = interpolate(_NAMES_SRC, renames={"parts": {"CX": "C1"}}, delimiters="_").lower()
+    assert "c1_ben0" in out  # "_" split still works
+    assert "cx.col00" in out  # "." not a delimiter -> whole segment "CX.COL00" != "CX"
+
+
+def test_top_level_delimiters_apply_to_prefix():
+    # with only "_" as delimiter, a dotted prefix boundary no longer matches
+    out = interpolate(_NAMES_SRC, renames={"prefix": {"CX": "C1"}}, delimiters="_").lower()
+    assert "c1_ben0" in out
+    assert "cx.col00" in out  # "." no longer a boundary -> untouched
+
+
+def test_instantiate_top_level_delimiters_and_parts_dict(tmp_path):
+    (tmp_path / "a.bmad").write_text("CX_Q: quadrupole\nO_CX_M: marker\n")
+    spec = {
+        "template": [{"input": "a.bmad", "output": "{instance}.bmad"}],
+        "delimiters": "._",
+        "renames": {"parts": {"CX": "{instance:upper}"}},  # dict form, default delimiters
+        "instances": {"c1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]["c1.bmad"]
+    assert "C1_Q" in out and "O_C1_M" in out
+
+
+def test_cli_delimiters_option(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text("CX_Q: quadrupole\nCX.COL: ecollimator\n")
+    cli_main(["interpolate", str(tmp_path / "t.bmad"), "--prefix", "CX", "C1", "--delimiters", "_"])
+    out = capsys.readouterr().out.lower()
+    assert "c1_q" in out
+    assert "cx.col" in out  # "." not a delimiter with --delimiters _
