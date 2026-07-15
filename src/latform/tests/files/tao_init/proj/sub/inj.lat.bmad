@@ -1,0 +1,3 @@
+INJ_B1: sbend, l = 0.3, angle = 0.1
+inj_line: line = (INJ_B1)
+use, inj_line

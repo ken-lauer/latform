@@ -53,6 +53,20 @@ def test_resolve_top_level(project: pathlib.Path):
     assert config.resolve_top_level() == [project / "lat/main.bmad"]
 
 
+@pytest.mark.parametrize("value", ['"tao.init"', '["a/tao.init", "b/tao.init"]'])
+def test_tao_init_parsed_and_resolved(tmp_path: pathlib.Path, value: str):
+    (tmp_path / "latform.toml").write_text(f"tao-init = {value}\n")
+    config = discover_config(tmp_path)
+    assert config.tao_init  # non-empty
+    assert config.resolve_tao_init() == [tmp_path / entry for entry in config.tao_init]
+
+
+def test_tao_init_invalid_type_raises(tmp_path: pathlib.Path):
+    (tmp_path / "latform.toml").write_text("tao-init = 123\n")
+    with pytest.raises(ConfigError):
+        discover_config(tmp_path)
+
+
 def test_ignores_for_merges_global_and_per_file(project: pathlib.Path):
     config = discover_config(project)
     assert config.ignores_for(project / "legacy" / "old.bmad") == {"LF002", "LF004", "LF006"}

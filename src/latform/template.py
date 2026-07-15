@@ -8,6 +8,7 @@ import sys
 
 from .parser import MemoryFiles, parse
 from .statements import Constant, Element
+from .tao import TaoInit
 from .token import Role, Token
 from .types import Attribute, FormatOptions, Seq
 from .walk import walk
@@ -424,6 +425,60 @@ def _rewrite_call_filenames(
                 item.replace(Token(new_target, role=Role.filename))
 
 
+def _split_namelist_key(key: str) -> tuple[str, int]:
+    """
+    Split a ``namelists`` override key into ``(name, index)``.
+
+    A trailing ``#N`` (1-based) targets the N-th group of a repeated name, e.g.
+    ``tao_d1_data#2`` -> ``("tao_d1_data", 1)``. A bare name targets the first.
+    """
+    if "#" in key:
+        name, _, suffix = key.rpartition("#")
+        return name, int(suffix) - 1
+    return key, 0
+
+
+def _instantiate_tao_init(
+    tao_init_spec: dict,
+    override: dict | None,
+    base_dir: pathlib.Path,
+    in_to_out: dict[str, str],
+    instance: str,
+) -> dict[str, str]:
+    """
+    Render one instance's ``tao.init`` from the template spec.
+
+    Rewrites ``design_lattice`` files to the instance's output lattice paths
+    (via ``in_to_out``, the same map used for ``call`` targets) and applies any
+    per-instance namelist add/update overrides.
+    """
+    input_rel = tao_init_spec["input"]
+    output_rel = _interpolate(tao_init_spec["output"], instance)
+    tao_init = TaoInit.from_file(base_dir / input_rel)
+
+    in_dir = posixpath.dirname(input_rel)
+    out_dir = posixpath.dirname(output_rel)
+    remapped: list[str] = []
+    changed = False
+    for entry in tao_init.lattice_files:
+        resolved_in = posixpath.normpath(posixpath.join(in_dir, entry))
+        mapped = in_to_out.get(resolved_in)
+        if mapped is None:
+            remapped.append(entry)
+        else:
+            remapped.append(posixpath.relpath(mapped, out_dir or "."))
+            changed = True
+    if changed:
+        tao_init.lattice_files = remapped
+
+    for name_key, assignments in ((override or {}).get("namelists") or {}).items():
+        name, index = _split_namelist_key(name_key)
+        interpolated = {k: _interpolate(str(v), instance) for k, v in assignments.items()}
+        tao_init.update_namelist(name, interpolated, index=index)
+
+    return {output_rel: tao_init.render()}
+
+
 def load_instances(path: pathlib.Path | str) -> dict:
     """Load an instances YAML file into a plain dict."""
     import yaml
@@ -445,7 +500,12 @@ def instantiate(
     spec : dict
         Parsed instances file: ``template`` (list of ``{input, output}``),
         optional global ``renames``, optional ``delimiters`` (default delimiter
-        set for prefix/suffix/parts), and ``instances`` (name -> overrides).
+        set for prefix/suffix/parts), optional ``tao_init`` (``{input, output}``
+        for a Tao ``tao.init`` whose ``design_lattice`` files are rewritten to
+        the generated lattices), and ``instances`` (name -> overrides). A
+        per-instance ``tao_init.namelists`` override (``{namelist: {key: value}}``,
+        with a ``name#N`` suffix to target the N-th repeated group) adds or
+        updates namelist sections.
     base_dir : pathlib.Path | str
         Directory the ``input`` paths are relative to.
     options : FormatOptions, optional
@@ -466,6 +526,7 @@ def instantiate(
     global_rules = _normalize_renames(spec.get("renames"), default_delims)
     instances = spec["instances"]
     context_files = spec.get("context") or []
+    tao_init_spec = spec.get("tao_init")
 
     contents = {
         (base_dir / tf["input"]).resolve(): (base_dir / tf["input"]).read_text()
@@ -508,9 +569,16 @@ def instantiate(
         in_to_out = {posixpath.normpath(input_basenames[p]): output_paths[p] for p in contents}
         _rewrite_call_filenames(files, transform_paths, in_to_out)
 
-        results[name] = {
+        instance_files = {
             output_paths[p]: format_statements(files.by_filename[p], options) for p in contents
         }
+        if tao_init_spec:
+            instance_files.update(
+                _instantiate_tao_init(
+                    tao_init_spec, overrides.get("tao_init"), base_dir, in_to_out, name
+                )
+            )
+        results[name] = instance_files
 
     return results
 

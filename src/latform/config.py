@@ -7,6 +7,8 @@ Settings may be provided in a standalone ``latform.toml`` or under
 Example ``latform.toml``::
 
     top-level = ["lat/main.bmad"]
+    # Or derive the lattice list from a Tao init file (filename fixed as tao.init):
+    tao-init = "tao.init"
 
     [format]
     line-length = 100
@@ -92,6 +94,7 @@ class LatformProjectConfig:
     root: pathlib.Path
     source: pathlib.Path | None = None
     top_level: list[str] = field(default_factory=list)
+    tao_init: list[str] = field(default_factory=list)
     format: dict[str, Any] = field(default_factory=dict)
     lint_ignore: list[str] = field(default_factory=list)
     per_file_ignores: dict[str, list[str]] = field(default_factory=dict)
@@ -118,6 +121,13 @@ class LatformProjectConfig:
         if top_level and not isinstance(top_level, list):
             raise ConfigError(f"{path}: top-level must be a list of paths")
         config.top_level = [str(entry) for entry in top_level]
+
+        tao_init = section.get("tao-init", section.get("tao_init", []))
+        if isinstance(tao_init, (str, pathlib.Path)):
+            tao_init = [tao_init]
+        if not isinstance(tao_init, list):
+            raise ConfigError(f"{path}: tao-init must be a path or list of paths")
+        config.tao_init = [str(entry) for entry in tao_init]
 
         raw_format = section.get("format", {})
         if not isinstance(raw_format, dict):
@@ -180,6 +190,10 @@ class LatformProjectConfig:
     def resolve_top_level(self) -> list[pathlib.Path]:
         """Return the ``top-level`` entries resolved against the config directory."""
         return [self.root / entry for entry in self.top_level]
+
+    def resolve_tao_init(self) -> list[pathlib.Path]:
+        """Return the ``tao-init`` entries resolved against the config directory."""
+        return [self.root / entry for entry in self.tao_init]
 
     def ignores_for(self, path: pathlib.Path | str) -> set[str]:
         """

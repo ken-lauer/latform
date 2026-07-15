@@ -28,6 +28,7 @@ from .statements import (
     annotate_controller_variables,
     get_call_filename,
 )
+from .tao import TaoInit, is_init_file
 from .token import Comments, Role, Token
 from .tokenizer import tokenize
 from .types import (
@@ -623,6 +624,21 @@ def is_call_statement(st: Statement) -> bool:
 implicit_location = Location(filename=pathlib.Path("<implicit>"))
 
 
+def _resolve_lattice_paths(filenames: Iterable[str], base: pathlib.Path) -> list[pathlib.Path]:
+    """Resolve ``tao.init`` lattice entries relative to ``base``.
+
+    Environment variables are expanded (matching ``call`` handling); relative
+    entries are joined to ``base`` and all results are resolved to absolute.
+    """
+    resolved: list[pathlib.Path] = []
+    for filename in filenames:
+        path = pathlib.Path(os.path.expandvars(str(filename)))
+        if not path.is_absolute():
+            path = base / path
+        resolved.append(path.resolve())
+    return resolved
+
+
 @dataclass
 class Files:
     """
@@ -637,6 +653,23 @@ class Files:
     blocks_by_filename: dict[pathlib.Path, list[Block]] = field(default_factory=dict)
     local_file_to_source_filename: dict[pathlib.Path, str] = field(default_factory=dict)
     filename_calls: dict[pathlib.Path, list[pathlib.Path]] = field(default_factory=dict)
+    # When the top files were derived from a Tao ``tao.init`` file, the parsed
+    # namelist model and its path are retained here for callers (e.g. templating).
+    tao_init: TaoInit | None = None
+    tao_init_path: pathlib.Path | None = None
+
+    @classmethod
+    def from_tao_init(cls, path: pathlib.Path | str) -> "Files":
+        """Build a :class:`Files` over the lattices listed in a ``tao.init``.
+
+        The ``design_lattice(i)%file`` entries of the ``&tao_design_lattice``
+        group become the top-level files, resolved (with environment-variable
+        expansion) relative to the ``tao.init`` file's directory.
+        """
+        path = pathlib.Path(path)
+        tao_init = TaoInit.from_file(path)
+        top_files = _resolve_lattice_paths(tao_init.lattice_files, path.parent)
+        return cls(top_files=top_files, tao_init=tao_init, tao_init_path=path.resolve())
 
     @property
     def main(self) -> pathlib.Path:
@@ -942,6 +975,48 @@ class MemoryFiles(Files):
         return cls(top_files=[path], initial_contents={path: contents})
 
     @classmethod
+    def from_tao_init_contents(
+        cls,
+        contents: str,
+        root_path: pathlib.Path | str,
+        lattice_contents: dict[pathlib.Path | str, str] | None = None,
+    ) -> MemoryFiles:
+        """
+        Create a MemoryFiles from in-memory ``tao.init`` contents.
+
+        Parameters
+        ----------
+        contents : str
+            The ``tao.init`` file contents.
+        root_path : pathlib.Path | str
+            The "virtual" path of the ``tao.init`` file; lattice entries resolve
+            relative to its parent directory.
+        lattice_contents : dict, optional
+            In-memory contents for referenced lattice files, keyed by path or
+            name (resolved the same way as the ``design_lattice`` entries). Any
+            lattice not provided here is read from disk when parsed.
+
+        Returns
+        -------
+        MemoryFiles
+            The initialized object (call .parse() on it next).
+        """
+        tao_path = pathlib.Path(root_path).resolve()
+        base = tao_path.parent
+        tao_init = TaoInit.parse(contents, filename=tao_path)
+        top_files = _resolve_lattice_paths(tao_init.lattice_files, base)
+        initial = {
+            _resolve_lattice_paths([key], base)[0]: text
+            for key, text in (lattice_contents or {}).items()
+        }
+        return cls(
+            top_files=top_files,
+            initial_contents=initial,
+            tao_init=tao_init,
+            tao_init_path=tao_path,
+        )
+
+    @classmethod
     def from_mapping(cls, contents: dict[pathlib.Path | str, str]) -> MemoryFiles:
         """
         Create a MemoryFiles instance from multiple in-memory files.
@@ -1030,6 +1105,8 @@ def build_files(
             )
             files.local_file_to_source_filename[fake_name] = STDIN_LABEL
             return files
+        if is_init_file(fn):
+            return Files.from_tao_init(fn)
         return Files(top_files=[pathlib.Path(fn)])
 
     if not combine:
@@ -1047,6 +1124,8 @@ def build_files(
             stdin_path = (root_path / STDIN_FAKE_NAME).resolve()
             top_files.append(stdin_path)
             initial_contents[stdin_path] = sys.stdin.read()
+        elif is_init_file(fn):
+            top_files.extend(Files.from_tao_init(fn).top_files)
         else:
             top_files.append(pathlib.Path(fn))
 

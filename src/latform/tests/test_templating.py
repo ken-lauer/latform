@@ -166,6 +166,47 @@ def test_call_target_directory_component_rewritten(tmp_path):
     assert "call, file=c1/foo/bar.bmad" in res["c1.bmad"]  # call path directory rewritten
 
 
+def test_instantiate_rewrites_tao_init(tmp_path):
+    """A tao_init spec rewrites design_lattice files and adds/updates namelists."""
+    (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'cx.lat.bmad'\n"
+        "/\n\n"
+        "&tao_params\n"
+        "  global%n_opti_cycles = 100\n"
+        "/\n"
+    )
+    spec = {
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "renames": {r"CX(_.*|$)": r"{instance:upper}\1"},
+        "tao_init": {"input": "tao.init", "output": "{instance}/tao.init"},
+        "instances": {
+            "c1": {},
+            "c2": {
+                "tao_init": {
+                    "namelists": {
+                        "tao_params": {"global%n_opti_cycles": "50"},
+                        "tao_beam_init": {"beam_init%n_particle": "5000"},
+                    }
+                }
+            },
+        },
+    }
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)
+
+    c1 = res["c1"]["c1/tao.init"]
+    # design_lattice rewritten to the generated lattice, relative to the output dir
+    assert "design_lattice(1)%file = '../c1.lat.bmad'" in c1
+    assert "global%n_opti_cycles = 100" in c1  # untouched for c1
+
+    c2 = res["c2"]["c2/tao.init"]
+    assert "design_lattice(1)%file = '../c2.lat.bmad'" in c2
+    assert "global%n_opti_cycles = 50" in c2  # updated
+    assert "&tao_beam_init" in c2  # section added
+    assert "beam_init%n_particle = 5000" in c2
+
+
 def test_write_instances_creates_parent_directories(tmp_path):
     """Output paths with not-yet-existing directories are created on write."""
     (tmp_path / "cx.bmad").write_text("CX_Q: quadrupole\n")

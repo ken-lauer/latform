@@ -5,6 +5,9 @@ import pathlib
 
 TEST_ROOT = pathlib.Path(__file__).resolve().parent
 LATTICE_ROOT = TEST_ROOT / "files"
+
+collect_ignore = ["other-repos"]
+
 LATTICE_FILES = [
     LATTICE_ROOT / "fodo.bmad",
     LATTICE_ROOT / "parse_test.bmad",

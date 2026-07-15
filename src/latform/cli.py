@@ -148,6 +148,10 @@ def resolve_input_files(
         return list(filenames), False
     if config.top_level:
         return [str(path) for path in config.resolve_top_level()], True
+    if config.tao_init:
+        # The tao.init paths are expanded to their lattice files downstream by
+        # ``build_files`` (any ``*.init`` argument is auto-expanded).
+        return [str(path) for path in config.resolve_tao_init()], True
     return [], False
 
 
