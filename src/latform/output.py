@@ -16,7 +16,7 @@ from .const import (
     OPEN_TO_CLOSE,
     SPACE,
 )
-from .statements import Line, Parameter, Simple, Statement
+from .statements import Line, Simple, Statement
 from .token import Comments, Role, Token
 from .types import (
     Attribute,
@@ -373,6 +373,7 @@ def _format(
     name_case = options.name_case
     kind_case = options.kind_case
     builtin_case = options.builtin_case
+    controller_variable_case = options.controller_variable_case
 
     def add_part_to_line(part: Token):
         role = part.role
@@ -394,6 +395,8 @@ def _format(
                 case = kind_case
             case Role.builtin:
                 case = builtin_case
+            case Role.controller_variable:
+                case = controller_variable_case
             case _:
                 case = "same"
 
@@ -626,7 +629,7 @@ def format_nodes(
 
 def format_statements(
     statements: Sequence[Statement] | Statement,
-    options: FormatOptions,
+    options: FormatOptions = default_options,
 ) -> str:
     """Format a statement and return the code string"""
     if isinstance(statements, Statement):
@@ -638,8 +641,6 @@ def format_statements(
         if res and not res[-1].parts:
             return
         res.append(OutputLine())
-
-    lower_renames = {from_.lower(): to for from_, to in options.renames.items()}
 
     last_statement = None
     for statement in statements:
@@ -660,18 +661,6 @@ def format_statements(
                 ):
                     maybe_add_blank_line()
 
-        if isinstance(statement, Parameter):
-            name = format_nodes([statement.target])[0].render(options)
-            if name.lower() in lower_renames:
-                new_name = lower_renames[name.lower()]
-                statement.target = Token(new_name, role=Role.name_)
-
-            # if "::" in name:
-            #     prefix, name = name.split("::", 1)
-            #     if name.lower() in lower_renames:
-            #         new_name = lower_renames[name.lower()]
-            #         statement.target = Token(f"{prefix}::{new_name}", role=Role.name_)
-
         for line in format_nodes(statement, options=options):
             if not line.parts and not line.comment:
                 maybe_add_blank_line()
@@ -679,20 +668,6 @@ def format_statements(
                 res.append(line)
 
         last_statement = statement
-
-    if options.renames:
-
-        def apply_rename(item: Token | str):
-            if not isinstance(item, Token):
-                return item
-
-            if item.lower() in lower_renames:
-                return lower_renames[item.lower()]
-
-            return item
-
-        for line in res:
-            line.parts = [apply_rename(part) for part in line.parts]
 
     while res and not res[0].parts and not res[0].comment:
         res = res[1:]

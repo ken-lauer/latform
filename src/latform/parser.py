@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import fnmatch
+import functools
 import logging
 import os.path
 import pathlib
+import re
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Generator, Iterable, Sequence
 
+from .attrs import element_key_to_attrs
 from .const import EQUALS
 from .exceptions import UnexpectedAssignment
 from .location import Location
 from .statements import (
+    BUILTIN_TARGETS,
     Assignment,
     Constant,
     Element,
@@ -20,6 +25,7 @@ from .statements import (
     Parameter,
     Simple,
     Statement,
+    annotate_controller_variables,
     get_call_filename,
 )
 from .token import Comments, Role, Token
@@ -38,6 +44,83 @@ from .util import partition_items
 from .walk import walk
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(eq=False)
+class _RenameContext:
+    lower_renames: dict[str, str]
+    regex_renames: dict[re.Pattern, str]
+    case_sensitive: bool
+    roles: frozenset[Role] = frozenset({Role.name_})
+    assume_defined: bool = True
+
+    @classmethod
+    def from_renames(
+        cls,
+        renames: dict[str, str],
+        case_sensitive: bool = False,
+        roles: set[Role] | None = None,
+        assume_defined: bool = True,
+    ):
+        if not roles:
+            roles = set({Role.name_})
+
+        flags = 0
+        if not case_sensitive:
+            flags |= re.IGNORECASE
+        return cls(
+            lower_renames={from_.lower(): to for from_, to in renames.items()},
+            regex_renames={
+                re.compile(from_, flags=flags): to
+                for from_, to in renames.items()
+                if "*" in from_ or "+" in from_ or "?" in from_
+            },
+            case_sensitive=case_sensitive,
+            roles=frozenset(roles),
+            assume_defined=assume_defined,
+        )
+
+    @functools.lru_cache(maxsize=None)
+    def apply_rename(self, tok: Token, allow_regex: bool = True):
+        lower = tok.lower()
+        renamed = None
+        try:
+            renamed = self.lower_renames[lower]
+        except KeyError:
+            if allow_regex:
+                for pat, to in self.regex_renames.items():
+                    if pat.match(lower):
+                        renamed = pat.sub(to, tok)
+                        break
+
+        if renamed:
+            return Token(renamed, role=tok.role)
+
+        return tok
+
+    def apply(self, statements: list[Statement]):
+        for item in walk(statements):
+            node = item.node
+            if not isinstance(node, Token):
+                continue
+
+            if node.role in self.roles:
+                renamed = self.apply_rename(node)
+            elif node.role is Role.controller_variable:
+                # Controller variables are element-scoped names; rename them on an
+                # exact match, but never via regex (a broad pattern shouldn't sweep
+                # up locally-scoped variables).
+                renamed = self.apply_rename(node, allow_regex=False)
+            elif self.assume_defined and node.role is None:
+                # A bare, unannotated token may be a reference to a name defined
+                # in a file that was not loaded; only literal matches are applied
+                # so broad regex patterns can't rewrite numbers/operators.
+                renamed = self.apply_rename(node, allow_regex=False)
+            else:
+                continue
+
+            if renamed is not node:
+                item.replace(renamed)
 
 
 def _make_attribute(item: Attribute | Token | Seq) -> Attribute:
@@ -375,8 +458,138 @@ def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
     return named_items
 
 
+def target_selector_text(target: Token | Seq) -> str:
+    """Reconstruct the text of an attribute-set statement's target (case-normalized)."""
+    if isinstance(target, Token):
+        return str(target)
+    return str(target.to_token())
+
+
+def _selector_part_matches(pattern: str, name: str) -> bool:
+    """
+    Case-insensitive match of one selector part against a name.
+
+    ``*`` matches any run of characters and ``%`` a single character (Bmad's
+    convention, translated to fnmatch's ``?``).  Square brackets cannot occur
+    in a selector (they delimit the attribute part), so fnmatch character
+    classes cannot be formed.
+    """
+    return fnmatch.fnmatchcase(name.upper(), pattern.upper().replace("%", "?"))
+
+
+def match_element_selector(statements: Iterable[Statement], selector: str) -> list[Element] | None:
+    """
+    Elements matched by a Bmad element selector, in definition order.
+
+    Supported: ``*`` and ``%`` wildcards in the element name, and an optional
+    ``class::pattern`` prefix whose class part (which may also use wildcards)
+    is matched against each element's resolved type.  A plain name matches
+    exactly.  All matching is case-insensitive.
+
+    Returns None for selector syntax that is not supported yet:
+    ranges (``q1:q5``), branch qualifiers (``lat>>q1``), instance counts
+    (``q1##2``), and s-position selectors.
+    """
+    # TODO: branch qualifiers ("lat>>q1") and instance counts ("q1##2")
+    if ">>" in selector or "##" in selector:
+        return None
+
+    class_pattern: str | None
+    match selector.split("::"):
+        case [name_pattern]:
+            class_pattern = None
+        case [class_pattern, name_pattern]:
+            pass
+        case _:
+            return None
+    # TODO: ranges ("q1:q5") and s-position selectors
+    if ":" in (class_pattern or "") or ":" in name_pattern:
+        return None
+
+    matched = []
+    for st in statements:
+        if not isinstance(st, Element):
+            continue
+        if class_pattern is not None and (
+            st.element_type is None or not _selector_part_matches(class_pattern, st.element_type)
+        ):
+            continue
+        if _selector_part_matches(name_pattern, str(st.name)):
+            matched.append(st)
+    return matched
+
+
+def _iter_element_references(
+    statements: Sequence[Statement],
+) -> Generator[tuple[Statement, Token], None, None]:
+    """Yield ``(statement, name_token)`` for every ``NAME[attr]`` reference."""
+    for item in walk(statements):
+        node = item.node
+        if not isinstance(node, Seq):
+            continue
+        for idx, sub in enumerate(node.items[:-1]):
+            nxt = node.items[idx + 1]
+            # Token[token...]
+            if (
+                isinstance(sub, Token)
+                and isinstance(nxt, Seq)
+                and nxt.opener == "["
+                and all(isinstance(inner, Token) for inner in nxt.items)
+            ):
+                yield item.statement, sub
+
+
+_ELEMENT_TYPE_NAMES = frozenset(k for k in element_key_to_attrs if not k.startswith("!"))
+
+
+def _expand_element_type(keyword: str) -> str | None:
+    """Resolve a (possibly abbreviated) type keyword to its canonical name."""
+    kw = keyword.upper()
+    if kw in _ELEMENT_TYPE_NAMES:
+        return kw
+    matches = [name for name in _ELEMENT_TYPE_NAMES if name.startswith(kw)]
+    # More than one match -> ambiguous
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resolve_element_types(
+    statements: Sequence[Statement], defined: dict[str, Element] | None = None
+) -> dict[str, Element]:
+    """Resolve each element's concrete type, following inheritance."""
+    if defined is None:
+        defined = {}
+
+    for statement in statements:
+        if not isinstance(statement, Element):
+            continue
+
+        base = defined.get(statement.keyword.upper())
+        if base is not None:
+            statement.base_element = base
+            statement.element_type = base.element_type
+        else:
+            statement.base_element = None
+            statement.element_type = _expand_element_type(statement.keyword)
+
+        defined[statement.name.upper()] = statement
+
+    return defined
+
+
+def _resolve_references(statements: Sequence[Statement]) -> None:
+    """Annotate ``NAME[attr]`` references as names (or builtins)."""
+    for _statement, name in _iter_element_references(statements):
+        name.role = Role.builtin if name.lower() in BUILTIN_TARGETS else Role.name_
+
+    for statement in statements:
+        if isinstance(statement, Element) and statement.is_controller:
+            annotate_controller_variables(statement)
+
+
 def parse(
-    contents: str, filename: pathlib.Path | str = "unset", annotate: bool = True
+    contents: str,
+    filename: pathlib.Path | str = "unset",
+    annotate: bool = True,
 ) -> Sequence[Statement]:
     blocks = tokenize(contents, filename)
     res = [block.parse() for block in blocks]
@@ -384,6 +597,8 @@ def parse(
         named = get_named_items(res)
         for st in res:
             st.annotate(named=named)
+        _resolve_element_types(res)
+        _resolve_references(res)
 
     return res
 
@@ -530,13 +745,19 @@ class Files:
                     ) from None
                 continue
 
-            if keep_blocks:
-                blocks = tokenize(contents=contents, filename=full_path)
-                self.blocks_by_filename[full_path] = blocks
-                statements: list[Statement] = [b.parse() for b in blocks]
-            else:
-                # We don't annotate individually here, we do it in bulk later
-                statements = list(parse(contents=contents, filename=full_path, annotate=False))
+            try:
+                if keep_blocks:
+                    blocks = tokenize(contents=contents, filename=full_path)
+                    self.blocks_by_filename[full_path] = blocks
+                    statements: list[Statement] = [b.parse() for b in blocks]
+                else:
+                    # We don't annotate individually here, we do it in bulk later
+                    statements = list(parse(contents=contents, filename=full_path, annotate=False))
+            except Exception as ex:
+                if hasattr(ex, "add_note"):  # py 3.11+
+                    ex.add_note(f"Exception ocurred while parsing {full_path}")
+                raise
+
             self.by_filename[full_path] = statements
 
             for st in statements:
@@ -560,9 +781,24 @@ class Files:
         Resolve named items across all parsed files.
         """
         named = self.get_named_items()
+        defined: dict[str, Element] = {}
         for statements in self.by_filename.values():
             for st in statements:
                 st.annotate(named=named)
+            _resolve_element_types(statements, defined)
+            _resolve_references(statements)
+
+    def match_elements(self, pattern: str) -> list[Element] | None:
+        """
+        Element definitions across all loaded files matching an element selector.
+
+        See `match_element_selector` for the supported syntax; returns None for
+        selector syntax that is not supported yet.
+        """
+        return match_element_selector(
+            (st for statements in self.by_filename.values() for st in statements),
+            pattern,
+        )
 
     def get_named_items(self) -> dict[Token, Statement]:
         """
@@ -610,6 +846,29 @@ class Files:
     def flatten_all(self, call: bool, inline: bool) -> dict[pathlib.Path, list[Statement]]:
         """Flatten each top-level file independently, keyed by its path."""
         return {top: self.flatten(call=call, inline=inline, top=top) for top in self.top_files}
+
+    def rename(
+        self,
+        renames: dict[str, str],
+        case_sensitive: bool = False,
+        only_name_role: bool = True,
+        assume_defined: bool = True,
+    ):
+        roles = (
+            {Role.name_}
+            if only_name_role
+            else {
+                Role.attribute_name,
+                Role.env_var,
+                Role.kind,
+            }
+        )
+        ctx = _RenameContext.from_renames(
+            renames, case_sensitive=case_sensitive, roles=roles, assume_defined=assume_defined
+        )
+
+        for statements in self.by_filename.values():
+            ctx.apply(statements)
 
     def reformat(self, options: FormatOptions) -> None:
         """

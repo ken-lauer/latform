@@ -1,0 +1,2 @@
+C1_XCR1: overlay = {C1_QUA2[hkick]}, var={kick}, kick=0
+C1_YCR1: overlay = {C1_QUA1[vkick]}, var={kick}, kick=0

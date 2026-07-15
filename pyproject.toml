@@ -12,7 +12,12 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Scientific/Engineering",
 ]
-dependencies = ["rich", 'typing_extensions; python_version < "3.11"']
+dependencies = [
+  "rich",
+  'typing_extensions; python_version < "3.11"',
+  'tomli; python_version < "3.11"',
+  "pyyaml",
+]
 description = "Bmad lattice parser/formatter tool"
 dynamic = ["version"]
 keywords = []
@@ -38,10 +43,12 @@ file = "LICENSE"
 
 [project.scripts]
 "latform" = "latform.main:cli_main"
+"latform-lint" = "latform.lint:cli_main"
 "latform-graph" = "latform.graph:cli_main"
 "latform-dump" = "latform.dump:cli_main"
 "latform-diff" = "latform.diff:cli_main"
 "latform-gitdiff" = "latform.diff:cli_main_gitdiff"
+"latform-template" = "latform.template:cli_main"
 
 [tool.ruff]
 # Reference and defaults: https://docs.astral.sh/ruff/configuration/

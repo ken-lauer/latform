@@ -260,7 +260,7 @@ def _annotate_names(items):
                 and nxt.opener == "["
                 and all(isinstance(inner, Token) for inner in nxt.items)
             ):
-                # item.role = Role.name_
+                item.role = Role.name_
                 nxt.items = nxt.with_(role=Role.attribute_name).items
 
 
@@ -458,6 +458,7 @@ class FormatOptions:
     attribute_case: NameCase = "lower"
     kind_case: NameCase = "lower"
     builtin_case: NameCase = "lower"
+    controller_variable_case: NameCase = "same"
     section_break_character: str = "-"
     section_break_width: int | None = None
     renames: dict[str, str] = field(default_factory=dict)
@@ -484,7 +485,7 @@ class OutputLine:
         if self.comment is None:
             return line
         comment_spaces = options.comment_col - len(line)
-        if comment_spaces < 0:
+        if comment_spaces <= 0:
             comment_spaces = 2
 
         return (" " * comment_spaces).join((line, self.comment))

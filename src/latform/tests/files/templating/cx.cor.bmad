@@ -1,0 +1,2 @@
+CX_XCR1: overlay = {CX_QUA2[hkick]}, var={kick}, kick=0, type=COR_TYPE_H
+CX_YCR1: overlay = {CX_QUA1[vkick]}, var={kick}, kick=0, type=COR_TYPE_V

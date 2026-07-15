@@ -39,7 +39,9 @@ from ..parser import (
     Simple,
     Token,
     UnexpectedAssignment,
+    match_element_selector,
     parse,
+    target_selector_text,
 )
 from ..token import Role
 from ..tokenizer import tokenize
@@ -3017,3 +3019,73 @@ print {string_}
 
     quoted = Token(string_).quoted()
     assert roundtrip_code == f"print {quoted}"
+
+
+_SELECTOR_LATTICE = """
+q1: quadrupole
+q2: quadrupole
+qf: quad
+rf1: rfcavity
+b1: sbend
+"""
+
+
+@pytest.mark.parametrize(
+    "selector, expected",
+    [
+        pytest.param("q1", ["q1"], id="exact-name"),
+        pytest.param("Q1", ["q1"], id="exact-name-case-insensitive"),
+        pytest.param("q*", ["q1", "q2", "qf"], id="glob"),
+        pytest.param("q%", ["q1", "q2", "qf"], id="single-char-wildcard"),
+        pytest.param("q%1", [], id="single-char-wildcard-no-match"),
+        pytest.param("*", ["q1", "q2", "qf", "rf1", "b1"], id="match-all"),
+        pytest.param("quadrupole::*", ["q1", "q2", "qf"], id="class-selector"),
+        pytest.param("rfcavity::*", ["rf1"], id="class-selector-glob"),
+        pytest.param("quad*::q%", ["q1", "q2", "qf"], id="class-glob"),
+        pytest.param("sbend::q*", [], id="class-and-name-must-both-match"),
+        pytest.param("nomatch", [], id="no-match"),
+    ],
+)
+def test_match_element_selector(selector: str, expected: list[str]) -> None:
+    statements = parse(_SELECTOR_LATTICE)
+    matched = match_element_selector(statements, selector)
+    assert [str(element.name) for element in matched] == expected
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        pytest.param("q1:q5", id="range"),
+        pytest.param("lat>>q1", id="branch-qualifier"),
+        pytest.param("q1##2", id="instance-count"),
+        pytest.param("a::b::c", id="double-class"),
+        pytest.param("quadrupole::q1:q5", id="class-with-range"),
+    ],
+)
+def test_match_element_selector_unsupported(selector: str) -> None:
+    assert match_element_selector(parse(_SELECTOR_LATTICE), selector) is None
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        pytest.param("rfcavity::*[voltage] = 3.7", "RFCAVITY::*", id="class-selector"),
+        pytest.param("q*[k1] = 1", "Q*", id="glob"),
+        pytest.param("q%1[k1] = 1", "q%1", id="single-token-wildcard"),
+        pytest.param("lat>>q1[k1] = 1", "lat>>q1", id="branch-qualifier"),
+    ],
+)
+def test_target_selector_text(src: str, expected: str) -> None:
+    (statement,) = parse(src)
+    assert isinstance(statement, Parameter)
+    assert target_selector_text(statement.target) == expected
+
+
+def test_files_match_elements() -> None:
+    from ..parser import MemoryFiles
+
+    files = MemoryFiles.from_contents(_SELECTOR_LATTICE, "test.bmad")
+    files.parse()
+    files.annotate()
+    assert [str(element.name) for element in files.match_elements("rfcavity::*")] == ["rf1"]
+    assert files.match_elements("q1:q5") is None

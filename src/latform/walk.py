@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generator
+from typing import Generator, Sequence
 
 from .statements import (
     Assignment,
@@ -24,8 +24,6 @@ WalkNode = Token | Seq | CallName | Attribute
 
 @dataclass
 class WalkItem:
-    """A node yielded during statement traversal, carrying its context."""
-
     node: Token | Seq | CallName | Attribute  # WalkNode
     statement: Statement
     attributes: tuple[Attribute, ...] = ()
@@ -36,9 +34,55 @@ class WalkItem:
         """The innermost containing Attribute, or None."""
         return self.attributes[-1] if self.attributes else None
 
+    def replace(self, new: WalkNode) -> None:
+        """Write ``new`` back into the container that holds ``node``."""
+        raise NotImplementedError(f"{type(self).__name__} does not support replacement")
+
+
+@dataclass
+class AttrItem(WalkItem):
+    """A node held as a named attribute of a container (dataclass field)."""
+
+    obj: object | None = None
+    attr: str = ""
+
+    def replace(self, new: WalkNode) -> None:
+        setattr(self.obj, self.attr, new)
+
+
+@dataclass
+class ListItem(WalkItem):
+    """A node held at an index within a list."""
+
+    container: list | None = None
+    index: int = 0
+
+    def replace(self, new: WalkNode) -> None:
+        self.container[self.index] = new
+
+
+def iter_tokens(node: WalkNode | None) -> Generator[Token, None, None]:
+    """Yield every `Token` nested within ``node`` (depth-first)."""
+    if node is None:
+        return
+
+    match node:
+        case Token():
+            yield node
+        case Seq():
+            for item in node.items:
+                yield from iter_tokens(item)
+        case Attribute():
+            yield from iter_tokens(node.name)
+            if node.value is not None:
+                yield from iter_tokens(node.value)
+        case CallName():
+            yield node.name
+            yield from iter_tokens(node.args)
+
 
 def walk(
-    statements: Statement | list[Statement],
+    statements: Statement | Sequence[Statement],
 ) -> Generator[WalkItem, None, None]:
     """
     Walk through statement trees, yielding each node with its context.
@@ -64,63 +108,69 @@ def _walk_statement(stmt: Statement) -> Generator[WalkItem, None, None]:
             return
 
         case Simple(statement=kw, arguments=args):
-            yield WalkItem(node=kw, statement=stmt)
-            for arg in args:
-                yield from _walk_part(arg, stmt, attributes=(), depth=0)
+            yield AttrItem(kw, stmt, obj=stmt, attr="statement")
+            for i, arg in enumerate(args):
+                yield from _walk_part(ListItem(arg, stmt, container=args, index=i))
 
         case Constant(name=name, value=value):
-            yield WalkItem(node=name, statement=stmt)
-            yield from _walk_part(value, stmt, attributes=(), depth=0)
+            yield AttrItem(name, stmt, obj=stmt, attr="name")
+            yield from _walk_part(AttrItem(value, stmt, obj=stmt, attr="value"))
 
         case Assignment(name=name, value=value):
-            yield from _walk_part(name, stmt, attributes=(), depth=0)
-            yield from _walk_part(value, stmt, attributes=(), depth=0)
+            yield from _walk_part(AttrItem(name, stmt, obj=stmt, attr="name"))
+            yield from _walk_part(AttrItem(value, stmt, obj=stmt, attr="value"))
 
         case Parameter(target=target, name=name, value=value):
-            yield from _walk_part(target, stmt, attributes=(), depth=0)
-            yield WalkItem(node=name, statement=stmt)
-            yield from _walk_part(value, stmt, attributes=(), depth=0)
+            yield from _walk_part(AttrItem(target, stmt, obj=stmt, attr="target"))
+            yield AttrItem(name, stmt, obj=stmt, attr="name")
+            yield from _walk_part(AttrItem(value, stmt, obj=stmt, attr="value"))
 
         case Line(name=name, elements=elements):
-            yield from _walk_part(name, stmt, attributes=(), depth=0)
-            yield from _walk_part(elements, stmt, attributes=(), depth=0)
+            yield from _walk_part(AttrItem(name, stmt, obj=stmt, attr="name"))
+            yield from _walk_part(AttrItem(elements, stmt, obj=stmt, attr="elements"))
 
         case ElementList(name=name, elements=elements):
-            yield WalkItem(node=name, statement=stmt)
-            yield from _walk_part(elements, stmt, attributes=(), depth=0)
+            yield AttrItem(name, stmt, obj=stmt, attr="name")
+            yield from _walk_part(AttrItem(elements, stmt, obj=stmt, attr="elements"))
 
         case Element(name=name, keyword=keyword, ele_list=ele_list, attributes=attrs):
-            yield WalkItem(node=name, statement=stmt)
-            yield WalkItem(node=keyword, statement=stmt)
+            yield AttrItem(name, stmt, obj=stmt, attr="name")
+            yield AttrItem(keyword, stmt, obj=stmt, attr="keyword")
             if ele_list is not None:
-                yield from _walk_part(ele_list, stmt, attributes=(), depth=0)
-            for attr in attrs:
-                yield from _walk_part(attr, stmt, attributes=(), depth=0)
+                yield from _walk_part(AttrItem(ele_list, stmt, obj=stmt, attr="ele_list"))
+            for i, attr in enumerate(attrs):
+                yield from _walk_part(ListItem(attr, stmt, container=attrs, index=i))
 
 
-def _walk_part(
-    node: WalkNode,
-    stmt: Statement,
-    attributes: tuple[Attribute, ...],
-    depth: int,
-) -> Generator[WalkItem, None, None]:
+def _walk_part(item: WalkItem) -> Generator[WalkItem, None, None]:
+    """Yield ``item`` and recurse into its children."""
+    node = item.node
+    stmt = item.statement
+    depth = item.depth
+
     match node:
         case Token():
-            yield WalkItem(node=node, statement=stmt, attributes=attributes, depth=depth)
+            yield item
 
         case Attribute(name=name, value=value):
-            nested = (*attributes, node)
-            yield WalkItem(node=node, statement=stmt, attributes=nested, depth=depth)
-            yield from _walk_part(name, stmt, attributes=nested, depth=depth + 1)
+            yield item
+            nested = (*item.attributes, node)
+            yield from _walk_part(AttrItem(name, stmt, nested, depth + 1, obj=node, attr="name"))
             if value is not None:
-                yield from _walk_part(value, stmt, attributes=nested, depth=depth + 1)
+                yield from _walk_part(
+                    AttrItem(value, stmt, nested, depth + 1, obj=node, attr="value")
+                )
 
         case CallName(name=name, args=args):
-            yield WalkItem(node=node, statement=stmt, attributes=attributes, depth=depth)
-            yield WalkItem(node=name, statement=stmt, attributes=attributes, depth=depth + 1)
-            yield from _walk_part(args, stmt, attributes=attributes, depth=depth + 1)
+            yield item
+            attrs = item.attributes
+            yield AttrItem(name, stmt, attrs, depth + 1, obj=node, attr="name")
+            yield from _walk_part(AttrItem(args, stmt, attrs, depth + 1, obj=node, attr="args"))
 
         case Seq(items=items):
-            yield WalkItem(node=node, statement=stmt, attributes=attributes, depth=depth)
-            for child in items:
-                yield from _walk_part(child, stmt, attributes=attributes, depth=depth + 1)
+            yield item
+            attrs = item.attributes
+            for i, child in enumerate(items):
+                yield from _walk_part(
+                    ListItem(child, stmt, attrs, depth + 1, container=items, index=i)
+                )

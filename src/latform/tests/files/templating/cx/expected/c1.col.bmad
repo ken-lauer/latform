@@ -1,0 +1,3 @@
+! minimal cx collimators (synthetic test fixture)
+C1.COL00: ecollimator, L=0.25
+C1_COL1: C1.COL00, superimpose, ref=C1_QUA1, offset=-1.3

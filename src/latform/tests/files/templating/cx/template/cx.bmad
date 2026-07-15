@@ -1,0 +1,19 @@
+! minimal cx line (synthetic test fixture)
+no_digested
+
+CX_LINE_ROT = 0
+
+CX_BEN0: sbend, l=0.5, ref_tilt=CX_LINE_ROT
+CX_BEN1: CX_BEN0, type=BEND_TYPE_A
+O_CX_BEN: overlay = {CX_BEN1[g]: g}, var={g}
+
+CX_QUA1: quadrupole, l=0.3
+CX_PIP5: pipe, l=1.0
+CX_PIP5[L] = 6.5
+
+CX: line=(CX_BEN1, CX_QUA1, CX_PIP5)
+
+call, file=cx.bpm.bmad
+call, file=cx.cor.bmad
+call, file=cx.col.bmad
+call, file=settings/settings.bmad

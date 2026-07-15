@@ -5,6 +5,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
+  - pyyaml
   - rich
   # For testing and documentation:
   - pytao

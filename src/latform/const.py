@@ -106,6 +106,9 @@ anomalous_mag_moment_He3 = -4.184153686
 
 named_physical_constants = {
     "pi": pi,
+    "pi/2": pi / 2,
+    "pi/4": pi / 4,
+    "pi/8": pi / 8,
     "twopi": twopi,
     "fourpi": fourpi,
     "e_log": 2.71828182845904523,
