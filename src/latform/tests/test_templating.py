@@ -5,7 +5,7 @@ import pathlib
 import pytest
 
 from ..output import default_options
-from ..templating import cli_main, instantiate, interpolate, load_instances, write_instances
+from ..template import cli_main, instantiate, interpolate, load_instances, write_instances
 
 FILES = pathlib.Path(__file__).resolve().parent / "files" / "templating"
 CX = FILES / "cx"
