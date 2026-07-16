@@ -21,7 +21,16 @@ __all__ = [
     "Assignment",
     "Namelist",
     "NamelistFile",
+    "is_namelist_file",
 ]
+
+_NAMELIST_SUFFIXES = frozenset({".init", ".nml"})
+
+
+def is_namelist_file(path: pathlib.Path | str) -> bool:
+    """Whether ``path`` names a Fortran-namelist file (``*.init`` or ``*.nml``)."""
+    return pathlib.Path(path).suffix.lower() in _NAMELIST_SUFFIXES
+
 
 if TYPE_CHECKING:
     try:

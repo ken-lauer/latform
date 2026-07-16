@@ -5,7 +5,9 @@ import pathlib
 import posixpath
 import re
 import sys
+from typing import Literal
 
+from ._namelist import NamelistFile, is_namelist_file
 from .parser import MemoryFiles, parse
 from .statements import Constant, Element
 from .tao import TaoInit
@@ -15,14 +17,19 @@ from .util import load_json_or_similar
 from .walk import walk
 
 __all__ = [
+    "FileFormat",
     "apply_values",
+    "apply_namelist_values",
     "interpolate",
+    "interpolate_namelist",
     "instantiate",
     "load_instances",
     "write_instances",
     "main",
     "cli_main",
 ]
+
+FileFormat = Literal["namelist", "bmad"]
 
 
 def _parse_value(text: str) -> Token | Seq:
@@ -99,6 +106,65 @@ def apply_values(files: MemoryFiles, values: dict) -> None:
                 target.value = _parse_value(str(override))
 
 
+def apply_namelist_values(nml_file: NamelistFile, values: dict) -> None:
+    """
+    Apply a values mapping to a parsed namelist file in place.
+
+    Parameters
+    ----------
+    nml_file : NamelistFile
+        A parsed namelist file.
+    values : dict
+        Keys are namelist group names, optionally with a ``name#N`` suffix (1-based)
+        to target the N-th of a repeated group.
+        Each value is a ``{key: value}`` mapping of raw assignment values;
+        existing keys are updated in place and
+        missing keys are appended.
+        A value of ``None`` removes that key.
+        A group named only for removals that does not exist is left uncreated.
+    """
+    for name_key, assignments in values.items():
+        name, index = _split_namelist_key(name_key)
+        removals = [key for key, value in assignments.items() if value is None]
+        settings = {key: str(value) for key, value in assignments.items() if value is not None}
+        if settings:
+            target = nml_file.update_namelist(name, settings, index=index)
+        else:
+            target = nml_file.get_namelist(name, index)
+        if target is not None:
+            for key in removals:
+                target.remove(key)
+
+
+def interpolate_namelist(
+    contents: str,
+    *,
+    values: dict | None = None,
+    filename: str = "tao.init",
+) -> str:
+    """
+    Interpolate a single namelist (``*.init``/``*.nml``) template file.
+
+    Parameters
+    ----------
+    contents : str
+        The namelist file contents.
+    values : dict, optional
+        Namelist overrides. See :func:`apply_namelist_values`.
+    filename : str, optional
+        Virtual filename used for source locations.
+
+    Returns
+    -------
+    str
+        The interpolated namelist file.
+    """
+    nml_file = NamelistFile.parse(contents, filename)
+    if values:
+        apply_namelist_values(nml_file, values)
+    return nml_file.render()
+
+
 def interpolate(
     contents: str,
     *,
@@ -110,37 +176,58 @@ def interpolate(
     delimiters: str | list[str] | None = None,
     filename: str = "template.bmad",
     options: FormatOptions | None = None,
+    file_format: FileFormat | None = None,
 ) -> str:
-    """Interpolate a single template file and return formatted Bmad.
+    """
+    Interpolate a single template file and return the formatted result.
+
+    Handles both Bmad lattice files and Fortran-namelist files (``*.init`` /
+    ``*.nml``). The format is chosen from ``file_format`` when given, otherwise
+    auto-detected from ``filename``'s extension.
 
     Parameters
     ----------
     contents : str
-        The template file contents (valid Bmad).
+        The template file contents (valid Bmad, or a namelist file).
     values : dict, optional
-        Overrides keyed by element/constant name. See :func:`apply_values`.
+        For Bmad, overrides keyed by element/constant name (see
+        :func:`apply_values`). For namelist files, overrides keyed by namelist
+        group name (see :func:`apply_namelist_values`).
     renames : dict, optional
         Rename rules applied after values: either the flat shortcut form
         (``{pattern: replacement}``, literal unless it contains ``* + ?``) or the
         structured form (``{prefix: ..., suffix: ..., regex: ..., parts: ...}``).
+        Bmad only.
     prefix, suffix : dict[str, str], optional
         Convenience ``{from: to}`` maps, equivalent to ``renames.prefix`` /
-        ``renames.suffix``.
+        ``renames.suffix``. Bmad only.
     parts : list[dict] | dict, optional
         Convenience form equivalent to ``renames.parts`` — a list of
         ``{delimiters, from, to}`` or a ``{from: to}`` map using ``delimiters``.
+        Bmad only.
     delimiters : str | list[str], optional
         Default delimiter set for ``prefix``/``suffix``/``parts`` (default ``. _``).
     filename : str, optional
-        Virtual filename used for source locations.
+        Virtual filename used for source locations and format auto-detection.
     options : FormatOptions, optional
-        Formatting options for the emitted output.
+        Formatting options for the emitted output. Bmad only.
+    file_format : {"bmad", "namelist"}, optional
+        Force the input format instead of auto-detecting from ``filename``.
 
     Returns
     -------
     str
-        The interpolated, formatted Bmad file.
+        The interpolated, formatted file.
     """
+    if file_format is None:
+        file_format = "namelist" if is_namelist_file(filename) else "bmad"
+    if file_format == "namelist":
+        if renames or prefix or suffix or parts:
+            raise ValueError("rename options are not supported for namelist files")
+        return interpolate_namelist(contents, values=values, filename=filename)
+    if file_format != "bmad":
+        raise ValueError(f"unknown file format {file_format!r} (expected 'bmad' or 'namelist')")
+
     files = MemoryFiles.from_contents(contents, filename)
     files.parse(recurse=False)
     files.annotate()
@@ -231,7 +318,8 @@ def _suffix_to_regex(frm: str, to: str, delims: str | set[str] = "._") -> tuple[
 
 
 def _normalize_renames(value: dict | None, default_delims: set[str] | None = None) -> dict:
-    """Turn a ``renames`` value (flat shortcut or structured) into a RuleSet.
+    """
+    Turn a ``renames`` value (flat shortcut or structured) into a RuleSet.
 
     ``default_delims`` is the delimiter set used by ``prefix``/``suffix`` and by
     ``parts`` entries that do not specify their own (settable via a top-level
@@ -622,14 +710,37 @@ Interpolate and instantiate Bmad lattice templates.
 
 The template is valid Bmad; a YAML sidecar supplies per-element/constant values
 and (for instancing) renames and per-file output paths. See docs/templating.md.
+
+'interpolate' also handles Fortran-namelist files (*.init/*.nml): overrides are
+keyed by namelist group (--values, or --set NAMELIST KEY VALUE).
 """
+
+
+def _merge_set_overrides(values: dict | None, sets: list[tuple[str, str, str]]) -> dict | None:
+    """
+    Fold ``--set NAMELIST KEY VALUE`` triples into a namelist ``values`` mapping.
+
+    Later triples win, and ``--set`` overrides values loaded from ``--values``.
+    """
+    if not sets:
+        return values
+    merged: dict = {k: dict(v) if isinstance(v, dict) else v for k, v in (values or {}).items()}
+    for namelist, key, value in sets:
+        merged.setdefault(namelist, {})[key] = value
+    return merged
 
 
 def _cmd_interpolate(parsed) -> None:
     from .output import default_options
 
     contents = pathlib.Path(parsed.template).read_text()
+    file_format = parsed.format or ("namelist" if is_namelist_file(parsed.template) else "bmad")
+
     values = load_json_or_similar(parsed.values) if parsed.values else None
+    if parsed.set_ and file_format != "namelist":
+        raise SystemExit("--set is only valid for namelist files (*.init, *.nml)")
+    values = _merge_set_overrides(values, parsed.set_)
+
     renames = {old: new for old, new in parsed.rename} or None
     prefix = {frm: to for frm, to in parsed.prefix} or None
     suffix = {frm: to for frm, to in parsed.suffix} or None
@@ -644,8 +755,12 @@ def _cmd_interpolate(parsed) -> None:
         delimiters=parsed.delimiters,
         filename=parsed.template,
         options=default_options,
+        file_format=file_format,
     )
-    if parsed.output:
+    if parsed.in_place:
+        pathlib.Path(parsed.template).write_text(result)
+        print(f"wrote: {parsed.template}")
+    elif parsed.output:
         pathlib.Path(parsed.output).write_text(result)
         print(f"wrote: {parsed.output}")
     else:
@@ -689,8 +804,26 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_interp = sub.add_parser("interpolate", help="Apply values/renames to a single template file")
-    p_interp.add_argument("template", help="Template file (valid Bmad)")
-    p_interp.add_argument("--values", help="YAML/JSON/TOML file of element/constant overrides")
+    p_interp.add_argument("template", help="Template file (Bmad, or a namelist *.init/*.nml file)")
+    p_interp.add_argument(
+        "--format",
+        choices=("bmad", "namelist"),
+        default=None,
+        help="Force input format (default: auto-detect from extension)",
+    )
+    p_interp.add_argument(
+        "--values",
+        help="YAML/JSON/TOML overrides (element/constant for Bmad; namelist groups for namelist)",
+    )
+    p_interp.add_argument(
+        "--set",
+        nargs=3,
+        metavar=("NAMELIST", "KEY", "VALUE"),
+        action="append",
+        default=[],
+        dest="set_",
+        help="Set a namelist KEY=VALUE in group NAMELIST (namelist files only); repeatable",
+    )
     p_interp.add_argument(
         "--rename",
         nargs=2,
@@ -728,7 +861,14 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Default delimiter set for --prefix/--suffix (default: . and _)",
     )
-    p_interp.add_argument("-o", "--output", help="Output file (default: stdout)")
+    out_group = p_interp.add_mutually_exclusive_group()
+    out_group.add_argument("-o", "--output", help="Output file (default: stdout)")
+    out_group.add_argument(
+        "-i",
+        "--in-place",
+        action="store_true",
+        help="Rewrite the template file in place",
+    )
     p_interp.set_defaults(func=_cmd_interpolate)
 
     p_inst = sub.add_parser("instantiate", help="Expand a template set across instances")

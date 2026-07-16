@@ -5,7 +5,14 @@ import pathlib
 import pytest
 
 from ..output import default_options
-from ..template import cli_main, instantiate, interpolate, load_instances, write_instances
+from ..template import (
+    cli_main,
+    instantiate,
+    interpolate,
+    interpolate_namelist,
+    load_instances,
+    write_instances,
+)
 
 FILES = pathlib.Path(__file__).resolve().parent / "files" / "templating"
 CX = FILES / "cx"
@@ -436,3 +443,133 @@ def test_cli_delimiters_option(tmp_path, capsys):
     out = capsys.readouterr().out.lower()
     assert "c1_q" in out
     assert "cx.col" in out  # "." not a delimiter with --delimiters _
+
+
+# --------------------------------------------------------------------------- #
+# Namelist interpolation (*.init / *.nml) and --in-place
+# --------------------------------------------------------------------------- #
+
+_NML_SRC = (
+    "&tao_design_lattice\n"
+    "  design_lattice(1)%file = 'lat.bmad'\n"
+    "/\n\n"
+    "&tao_params\n"
+    "  global%n_opti_cycles = 100\n"
+    "  global%plot_on = T\n"
+    "/\n"
+)
+
+
+def test_interpolate_namelist_updates_and_adds():
+    out = interpolate_namelist(
+        _NML_SRC,
+        values={
+            "tao_params": {"global%n_opti_cycles": 50},
+            "tao_beam_init": {"beam_init%n_particle": 5000},
+        },
+    )
+    assert "global%n_opti_cycles = 50" in out  # updated in place
+    assert "global%plot_on = T" in out  # untouched
+    assert "&tao_beam_init" in out  # new group added
+    assert "beam_init%n_particle = 5000" in out
+
+
+def test_interpolate_namelist_removal_via_null():
+    out = interpolate_namelist(_NML_SRC, values={"tao_params": {"global%plot_on": None}})
+    assert "global%plot_on" not in out
+    assert "global%n_opti_cycles = 100" in out
+
+
+def test_interpolate_namelist_removal_only_does_not_create_group():
+    out = interpolate_namelist(_NML_SRC, values={"nonexistent": {"foo": None}})
+    assert "&nonexistent" not in out
+
+
+def test_interpolate_namelist_repeated_group_index():
+    src = "&d\n a = 1\n/\n\n&d\n a = 2\n/\n"
+    out = interpolate_namelist(src, values={"d#2": {"a": 9}})
+    assert "a = 1" in out  # first group untouched
+    assert "a = 9" in out  # second group updated
+
+
+def test_interpolate_auto_detects_namelist_by_extension():
+    out = interpolate(_NML_SRC, values={"tao_params": {"global%plot_on": "F"}}, filename="tao.init")
+    assert "global%plot_on = F" in out
+
+
+def test_interpolate_format_override_forces_namelist():
+    out = interpolate(
+        _NML_SRC,
+        values={"tao_params": {"global%plot_on": "F"}},
+        filename="weird.txt",
+        file_format="namelist",
+    )
+    assert "global%plot_on = F" in out
+
+
+def test_interpolate_namelist_rejects_renames():
+    with pytest.raises(ValueError, match="rename options are not supported"):
+        interpolate(_NML_SRC, filename="tao.init", renames={"foo": "bar"})
+
+
+def test_cli_interpolate_namelist_set(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_NML_SRC)
+    cli_main(
+        [
+            "interpolate",
+            str(tmp_path / "tao.init"),
+            "--set",
+            "tao_params",
+            "global%n_opti_cycles",
+            "50",
+        ]
+    )
+    assert "global%n_opti_cycles = 50" in capsys.readouterr().out
+
+
+def test_cli_interpolate_set_overrides_values_file(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_NML_SRC)
+    (tmp_path / "v.yaml").write_text("tao_params:\n  global%n_opti_cycles: 20\n")
+    cli_main(
+        [
+            "interpolate",
+            str(tmp_path / "tao.init"),
+            "--values",
+            str(tmp_path / "v.yaml"),
+            "--set",
+            "tao_params",
+            "global%n_opti_cycles",
+            "77",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "global%n_opti_cycles = 77" in out  # --set wins over --values
+
+
+def test_cli_interpolate_set_on_bmad_errors(tmp_path):
+    (tmp_path / "t.bmad").write_text("Q1: quadrupole\n")
+    with pytest.raises(SystemExit):
+        cli_main(["interpolate", str(tmp_path / "t.bmad"), "--set", "a", "b", "c"])
+
+
+def test_cli_interpolate_in_place_namelist(tmp_path, capsys):
+    path = tmp_path / "tao.init"
+    path.write_text(_NML_SRC)
+    cli_main(["interpolate", str(path), "-i", "--set", "tao_params", "global%plot_on", "F"])
+    assert "global%plot_on = F" in path.read_text()
+    assert "wrote:" in capsys.readouterr().out
+
+
+def test_cli_interpolate_in_place_bmad(tmp_path):
+    path = tmp_path / "t.bmad"
+    path.write_text("CX_Q: quadrupole, k1=0.0\n")
+    cli_main(["interpolate", str(path), "-i", "--rename", r"CX(_.*|$)", r"C1\1"])
+    text = path.read_text()
+    assert "C1_Q" in text and "CX_Q" not in text
+
+
+def test_cli_interpolate_output_and_in_place_mutually_exclusive(tmp_path):
+    path = tmp_path / "tao.init"
+    path.write_text(_NML_SRC)
+    with pytest.raises(SystemExit):
+        cli_main(["interpolate", str(path), "-i", "-o", str(tmp_path / "out.init")])
