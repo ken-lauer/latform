@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 
 import pytest
@@ -16,18 +17,18 @@ PROJ_INIT = FILES / "proj" / "tao.init"
 CORPUS = [FEATURES, PROJ_INIT]
 
 # Local real-world tao.init files: drop symlinks to lattice repositories or
-# files themselves under files/tao_init/other/
+# files themselves under src/latform/tests/other-repos
 #
 # These are not version-controlled (.gitignore in 'other'), so the tests
 # parametrized over them skip cleanly when none are present.
-OTHER = MODULE_PATH / "other-repos"
+OTHER_REPOS = MODULE_PATH / "other-repos"
 
 
 def _discover_other_tao_inits() -> list[pathlib.Path]:
-    if not OTHER.is_dir():
+    if not OTHER_REPOS.is_dir():
         return []
     found: list[pathlib.Path] = []
-    for root, _dirs, files in OTHER.walk(follow_symlinks=True):
+    for root, _dirs, files in os.walk(OTHER_REPOS, followlinks=True):
         if "tao.init" in files:
             found.append(pathlib.Path(root) / "tao.init")
     return sorted(found)
@@ -43,12 +44,12 @@ def _other_params() -> list:
                 None,
                 id="none",
                 marks=pytest.mark.skip(
-                    reason="no user-provided tao.init under files/tao_init/other "
+                    reason="no user-provided tao.init under other-repos/ "
                     "(symlink a lattice repo there to exercise these)"
                 ),
             )
         ]
-    return [pytest.param(path, id=str(path.relative_to(OTHER))) for path in OTHER_TAO_INITS]
+    return [pytest.param(path, id=str(path.relative_to(OTHER_REPOS))) for path in OTHER_TAO_INITS]
 
 
 _corpus_params = [pytest.param(fn, id=fn.name) for fn in CORPUS]
