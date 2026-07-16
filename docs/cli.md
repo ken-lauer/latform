@@ -442,26 +442,20 @@ latform-graph -o deps.txt parse_test.bmad
 latform-graph -f mermaid -o deps.mmd parse_test.bmad
 ```
 
-## latform-template
-
-Fill in and instance Bmad lattice templates. Unlike jinja/cookiecutter, the
-template is itself valid Bmad — it parses, lints, and formats standalone — while
-a YAML sidecar supplies per-element values and (for instancing) renames and
-output paths. See [Templating](templating.md) for the design.
-
-```
-latform-template [-h] [-L {DEBUG,INFO,WARNING,CRITICAL}] {interpolate,instantiate} ...
-```
-
-### interpolate
+## latform-apply
 
 Apply value overrides and/or renames to a **single** template file and write the
-result to stdout (or `-o FILE`).
+result to stdout (`-o FILE`, or `-i`/`--in-place` to rewrite the input file). The
+file may be Bmad or a Fortran-namelist file (`*.init` / `*.nml`); the format is
+auto-detected from the extension and can be forced with `--format {bmad,namelist}`.
+Unlike jinja/cookiecutter, a Bmad template is itself valid Bmad — it parses, lints,
+and formats standalone — while a YAML sidecar supplies per-element values.
 
 ```
-latform-template interpolate TEMPLATE [--values VALUES.yaml]
-                 [--rename OLD NEW] [--prefix FROM TO] [--suffix FROM TO]
-                 [--parts DELIMS FROM TO] [--delimiters CHARS] [-o OUT]
+latform-apply TEMPLATE [--format {bmad,namelist}] [--values VALUES.yaml]
+              [--set NAMELIST KEY VALUE]
+              [--rename OLD NEW] [--prefix FROM TO] [--suffix FROM TO]
+              [--parts DELIMS FROM TO] [--delimiters CHARS] [-o OUT | -i]
 ```
 
 Given `quad.bmad`:
@@ -480,14 +474,17 @@ Q1:
 ```
 
 ```bash
-latform-template interpolate quad.bmad --values values.yaml
+latform-apply quad.bmad --values values.yaml
 # -> Q1: quadrupole, L=0.3, k1=1.523
+
+# --values - reads the overrides (YAML or JSON) from stdin, for programmatic use
+echo '{"Q1": {"k1": 1.523}}' | latform-apply quad.bmad --values -
 ```
 
 `--rename` is repeatable and accepts literal or regex rules:
 
 ```bash
-latform-template interpolate quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'
+latform-apply quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'
 # -> ARC_Q1: quadrupole, L=0.3, k1=0.0
 ```
 
@@ -495,27 +492,54 @@ latform-template interpolate quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'
 
 ```bash
 # prefix: leading FROM only, bounded by . or _  (CX_A -> C1_A; O_CX_A untouched)
-latform-template interpolate lat.bmad --prefix CX C1
+latform-apply lat.bmad --prefix CX C1
 
 # suffix: trailing FROM, bounded by . or _  (Q_XCR -> Q_HCOR)
-latform-template interpolate lat.bmad --suffix _XCR _HCOR
+latform-apply lat.bmad --suffix _XCR _HCOR
 
 # parts: rename whole segments anywhere, split on the given delimiters
 #        (CX_A -> C1_A and O_CX_A -> O_C1_A)
-latform-template interpolate lat.bmad --parts ._ CX C1
+latform-apply lat.bmad --parts ._ CX C1
 
 # --delimiters sets the boundary chars for --prefix/--suffix (default . and _)
-latform-template interpolate lat.bmad --prefix CX C1 --delimiters _
+latform-apply lat.bmad --prefix CX C1 --delimiters _
 ```
 
-### instantiate
+### Namelist files
 
-Expand a template **set** across several instances, writing files under
-`--output-dir` (default: current directory). Use `--dry-run` to list the files
-that would be written without writing them.
+For a namelist file (`*.init` / `*.nml`, e.g. a Tao `tao.init`), overrides are
+keyed by **namelist group** instead of by element. Renames do not apply. Each
+group maps to a `{key: value}` block; existing keys are updated in place, missing
+keys are appended, and a `null` value removes a key. A `name#N` suffix (1-based)
+targets the N-th of a repeated group.
+
+`values.yaml`:
+
+```yaml
+tao_params:
+  global%n_opti_cycles: 50 # update in place
+  global%plot_on: null # remove the key
+tao_beam_init:
+  beam_init%n_particle: 5000 # group appended if absent
+```
+
+```bash
+latform-apply tao.init --values values.yaml
+
+# --set NAMELIST KEY VALUE is the inline, repeatable equivalent (and wins over
+# --values); -i rewrites tao.init in place instead of printing to stdout.
+latform-apply tao.init --set tao_params global%n_opti_cycles 50 -i
+```
+
+## latform-template
+
+Expand a Bmad lattice template **set** across several instances, writing files
+under `--output-dir` (default: current directory). A YAML sidecar lists the
+template files and per-instance values, renames, and output paths. Use
+`--dry-run` to list the files that would be written without writing them.
 
 ```
-latform-template instantiate INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
+latform-template INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
 ```
 
 `instances.yaml` (paths are relative to the file's own directory):
@@ -599,13 +623,13 @@ Per name, the first matching rule wins in the order
 literal-or-regex behavior).
 
 ```bash
-latform-template instantiate instances.yaml -d build/
+latform-template instances.yaml -d build/
 # wrote: build/c1/c1.bmad
 # wrote: build/c1/c1.cor.bmad
 # wrote: build/c2/c2.bmad
 # ...
 
-latform-template instantiate instances.yaml -d build/ --dry-run
+latform-template instances.yaml -d build/ --dry-run
 # would write: build/c1/c1.bmad
 # ...
 ```

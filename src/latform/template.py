@@ -1,249 +1,41 @@
+"""
+Expand a Bmad lattice template set across instances.
+
+Builds on :mod:`latform.apply` (single-file value/rename application) to render a
+whole template set once per instance, rewriting ``call`` targets and Tao
+``tao.init`` ``design_lattice`` paths to the generated files.
+"""
+
 from __future__ import annotations
 
-import logging
 import pathlib
 import posixpath
 import re
-import sys
-from typing import Literal
 
-from ._namelist import NamelistFile, is_namelist_file
+from .apply import (
+    add_logging_argument,
+    apply_renames,
+    apply_values,
+    configure_logging,
+    delim_set,
+    merge_rulesets,
+    normalize_renames,
+    split_namelist_key,
+)
 from .parser import MemoryFiles, parse
-from .statements import Constant, Element
 from .tao import TaoInit
 from .token import Role, Token
-from .types import Attribute, FormatOptions, Seq
+from .types import FormatOptions
 from .util import load_json_or_similar
 from .walk import walk
 
 __all__ = [
-    "FileFormat",
-    "apply_values",
-    "apply_namelist_values",
-    "interpolate",
-    "interpolate_namelist",
     "instantiate",
     "load_instances",
     "write_instances",
     "main",
     "cli_main",
 ]
-
-FileFormat = Literal["namelist", "bmad"]
-
-
-def _parse_value(text: str) -> Token | Seq:
-    """Parse a scalar override into a value node (a ``Token`` or ``Seq``)."""
-    (statement,) = parse(f"__latform_value__ = {text}", "<templating-value>", annotate=False)
-    assert isinstance(statement, Constant)
-    return statement.value
-
-
-def _override_element_attribute(element: Element, attr_name: str, value: object) -> None:
-    parsed = _parse_value(str(value))
-    try:
-        attr = element.get_named_attribute(attr_name, partial_match=False)
-    except KeyError:
-        element.attributes.append(Attribute(name=Token(attr_name), value=parsed))
-    else:
-        attr.value = parsed
-
-
-def _remove_element_attribute(element: Element, attr_name: str) -> None:
-    """Drop an attribute from an element (no-op if it is not present)."""
-    element.attributes = [
-        attr
-        for attr in element.attributes
-        if not (isinstance(attr.name, Token) and str(attr.name).lower() == attr_name.lower())
-    ]
-
-
-def _resolve_targets(named: dict, key: str) -> list:
-    """Resolve a values key to target statements.
-
-    A ``/regex/`` key (slash-delimited) matches every named item whose name
-    matches; any other key is an exact, case-insensitive name.
-    """
-    if len(key) >= 2 and key.startswith("/") and key.endswith("/"):
-        pattern = re.compile(key[1:-1], re.IGNORECASE)
-        matches = [statement for name, statement in named.items() if pattern.search(str(name))]
-        if not matches:
-            raise KeyError(f"no element or constant matches {key!r}")
-        return matches
-    try:
-        return [named[key.upper()]]
-    except KeyError:
-        raise KeyError(f"template has no element or constant named {key!r}") from None
-
-
-def apply_values(files: MemoryFiles, values: dict) -> None:
-    """Apply a values mapping to the parsed template in place.
-
-    Parameters
-    ----------
-    files : MemoryFiles
-        A parsed, annotated file collection.
-    values : dict
-        Keys are element or constant names (or a ``/regex/`` matching several).
-        A ``dict`` value overrides element attributes (``{attr: value}``); an
-        attribute value of ``None`` removes that attribute; a scalar value
-        overrides a constant's value.
-    """
-    named = files.get_named_items()
-    for key, override in values.items():
-        for target in _resolve_targets(named, key):
-            if isinstance(override, dict):
-                if not isinstance(target, Element):
-                    raise TypeError(f"{key!r} is not an element; cannot set attributes on it")
-                for attr_name, attr_value in override.items():
-                    if attr_value is None:
-                        _remove_element_attribute(target, attr_name)
-                    else:
-                        _override_element_attribute(target, attr_name, attr_value)
-            else:
-                if not hasattr(target, "value"):
-                    raise TypeError(f"{key!r} cannot take a scalar override")
-                target.value = _parse_value(str(override))
-
-
-def apply_namelist_values(nml_file: NamelistFile, values: dict) -> None:
-    """
-    Apply a values mapping to a parsed namelist file in place.
-
-    Parameters
-    ----------
-    nml_file : NamelistFile
-        A parsed namelist file.
-    values : dict
-        Keys are namelist group names, optionally with a ``name#N`` suffix (1-based)
-        to target the N-th of a repeated group.
-        Each value is a ``{key: value}`` mapping of raw assignment values;
-        existing keys are updated in place and
-        missing keys are appended.
-        A value of ``None`` removes that key.
-        A group named only for removals that does not exist is left uncreated.
-    """
-    for name_key, assignments in values.items():
-        name, index = _split_namelist_key(name_key)
-        removals = [key for key, value in assignments.items() if value is None]
-        settings = {key: str(value) for key, value in assignments.items() if value is not None}
-        if settings:
-            target = nml_file.update_namelist(name, settings, index=index)
-        else:
-            target = nml_file.get_namelist(name, index)
-        if target is not None:
-            for key in removals:
-                target.remove(key)
-
-
-def interpolate_namelist(
-    contents: str,
-    *,
-    values: dict | None = None,
-    filename: str = "tao.init",
-) -> str:
-    """
-    Interpolate a single namelist (``*.init``/``*.nml``) template file.
-
-    Parameters
-    ----------
-    contents : str
-        The namelist file contents.
-    values : dict, optional
-        Namelist overrides. See :func:`apply_namelist_values`.
-    filename : str, optional
-        Virtual filename used for source locations.
-
-    Returns
-    -------
-    str
-        The interpolated namelist file.
-    """
-    nml_file = NamelistFile.parse(contents, filename)
-    if values:
-        apply_namelist_values(nml_file, values)
-    return nml_file.render()
-
-
-def interpolate(
-    contents: str,
-    *,
-    values: dict | None = None,
-    renames: dict | None = None,
-    prefix: dict[str, str] | None = None,
-    suffix: dict[str, str] | None = None,
-    parts: list[dict] | dict | None = None,
-    delimiters: str | list[str] | None = None,
-    filename: str = "template.bmad",
-    options: FormatOptions | None = None,
-    file_format: FileFormat | None = None,
-) -> str:
-    """
-    Interpolate a single template file and return the formatted result.
-
-    Handles both Bmad lattice files and Fortran-namelist files (``*.init`` /
-    ``*.nml``). The format is chosen from ``file_format`` when given, otherwise
-    auto-detected from ``filename``'s extension.
-
-    Parameters
-    ----------
-    contents : str
-        The template file contents (valid Bmad, or a namelist file).
-    values : dict, optional
-        For Bmad, overrides keyed by element/constant name (see
-        :func:`apply_values`). For namelist files, overrides keyed by namelist
-        group name (see :func:`apply_namelist_values`).
-    renames : dict, optional
-        Rename rules applied after values: either the flat shortcut form
-        (``{pattern: replacement}``, literal unless it contains ``* + ?``) or the
-        structured form (``{prefix: ..., suffix: ..., regex: ..., parts: ...}``).
-        Bmad only.
-    prefix, suffix : dict[str, str], optional
-        Convenience ``{from: to}`` maps, equivalent to ``renames.prefix`` /
-        ``renames.suffix``. Bmad only.
-    parts : list[dict] | dict, optional
-        Convenience form equivalent to ``renames.parts`` — a list of
-        ``{delimiters, from, to}`` or a ``{from: to}`` map using ``delimiters``.
-        Bmad only.
-    delimiters : str | list[str], optional
-        Default delimiter set for ``prefix``/``suffix``/``parts`` (default ``. _``).
-    filename : str, optional
-        Virtual filename used for source locations and format auto-detection.
-    options : FormatOptions, optional
-        Formatting options for the emitted output. Bmad only.
-    file_format : {"bmad", "namelist"}, optional
-        Force the input format instead of auto-detecting from ``filename``.
-
-    Returns
-    -------
-    str
-        The interpolated, formatted file.
-    """
-    if file_format is None:
-        file_format = "namelist" if is_namelist_file(filename) else "bmad"
-    if file_format == "namelist":
-        if renames or prefix or suffix or parts:
-            raise ValueError("rename options are not supported for namelist files")
-        return interpolate_namelist(contents, values=values, filename=filename)
-    if file_format != "bmad":
-        raise ValueError(f"unknown file format {file_format!r} (expected 'bmad' or 'namelist')")
-
-    files = MemoryFiles.from_contents(contents, filename)
-    files.parse(recurse=False)
-    files.annotate()
-
-    if values:
-        apply_values(files, values)
-        # Re-annotate so injected value tokens matching a defined name pick up
-        # Role.name_ before renames run.
-        files.annotate()
-
-    rules = _build_ruleset(renames, prefix, suffix, parts, _delim_set(delimiters))
-    if rules["literal"] or rules["regex"] or rules["parts"]:
-        _apply_renames(files, rules)
-
-    files.reformat(options or FormatOptions())
-    return files.formatted_contents
 
 
 _INTERP = re.compile(r"\{instance(?::(upper|lower))?\}")
@@ -263,189 +55,12 @@ def _interpolate(text: str, instance: str) -> str:
     return _INTERP.sub(repl, text)
 
 
-def _is_regex(pattern: str) -> bool:
-    return any(char in pattern for char in "*+?")
-
-
-def _collect_names(files: MemoryFiles) -> set[str]:
-    """All name-role token texts across the loaded files."""
-    names: set[str] = set()
-    for statements in files.by_filename.values():
-        for item in walk(statements):
-            node = item.node
-            if isinstance(node, Token) and node.role is Role.name_:
-                names.add(str(node))
-    return names
-
-
-# A normalized set of rename rules. ``regex`` is ordered (first match wins):
-# explicit regex, then prefix-derived, then suffix-derived. ``literal`` (exact
-# name) is tried before any regex; ``parts`` (segment rewrite) is tried last.
-#   {"literal": {from_lower: to}, "regex": [(pattern, repl)], "parts": [(delims, from, to)]}
-_RESERVED_RENAME_KEYS = frozenset({"prefix", "suffix", "regex", "parts"})
-
-
-def _empty_ruleset() -> dict:
-    return {"literal": {}, "regex": [], "parts": []}
-
-
-def _delim_set(delimiters: str | list[str] | None) -> set[str]:
-    if delimiters is None:
-        return set("._")
-    if isinstance(delimiters, (list, tuple)):
-        return set("".join(delimiters))
-    return set(str(delimiters))
-
-
-def _prefix_to_regex(frm: str, to: str, delims: str | set[str] = "._") -> tuple[str, str]:
-    """Leading-anchored rule: ``FROM`` at the start, bounded by a delimiter/end."""
-    chars = "".join(re.escape(c) for c in delims)
-    if frm and frm[-1] in delims:  # delimiter already baked into FROM
-        pattern = rf"^{re.escape(frm)}(.*)"
-    else:
-        pattern = rf"^{re.escape(frm)}([{chars}].*|$)"
-    return pattern, f"{to}\\1"
-
-
-def _suffix_to_regex(frm: str, to: str, delims: str | set[str] = "._") -> tuple[str, str]:
-    """Trailing-anchored rule (mirror of prefix): ``FROM`` at the end, bounded."""
-    chars = "".join(re.escape(c) for c in delims)
-    if frm and frm[0] in delims:  # delimiter already baked into FROM
-        pattern = rf"(.*){re.escape(frm)}$"
-    else:
-        pattern = rf"(^|.*[{chars}]){re.escape(frm)}$"
-    return pattern, f"\\1{to}"
-
-
-def _normalize_renames(value: dict | None, default_delims: set[str] | None = None) -> dict:
-    """
-    Turn a ``renames`` value (flat shortcut or structured) into a RuleSet.
-
-    ``default_delims`` is the delimiter set used by ``prefix``/``suffix`` and by
-    ``parts`` entries that do not specify their own (settable via a top-level
-    ``delimiters`` key). Defaults to ``. _``.
-    """
-    default_delims = default_delims if default_delims is not None else _delim_set(None)
-    rules = _empty_ruleset()
-    if not value:
-        return rules
-
-    if set(value) <= _RESERVED_RENAME_KEYS:  # structured form
-        for pattern, repl in (value.get("regex") or {}).items():
-            rules["regex"].append((pattern, repl))  # explicit regex: highest precedence
-        for frm, to in (value.get("prefix") or {}).items():
-            rules["regex"].append(_prefix_to_regex(frm, to, default_delims))
-        for frm, to in (value.get("suffix") or {}).items():
-            rules["regex"].append(_suffix_to_regex(frm, to, default_delims))
-        parts = value.get("parts") or []
-        if isinstance(parts, dict):  # {from: to} shorthand using the default delimiters
-            for frm, to in parts.items():
-                rules["parts"].append((default_delims, frm, to))
-        else:  # list of {delimiters, from, to}; per-entry delimiters override the default
-            for entry in parts:
-                delims = (
-                    _delim_set(entry["delimiters"])
-                    if entry.get("delimiters") is not None
-                    else default_delims
-                )
-                rules["parts"].append((delims, entry["from"], entry["to"]))
-    else:  # flat shortcut: literal-vs-regex autodetection
-        for pattern, repl in value.items():
-            if _is_regex(pattern):
-                rules["regex"].append((pattern, repl))
-            else:
-                rules["literal"][pattern.lower()] = repl
-    return rules
-
-
-def _merge_rulesets(base: dict, overriding: dict) -> dict:
-    """Merge two RuleSets; ``overriding`` takes precedence (tried first)."""
-    return {
-        "literal": {**base["literal"], **overriding["literal"]},
-        "regex": overriding["regex"] + base["regex"],
-        "parts": overriding["parts"] + base["parts"],
-    }
-
-
-def _build_ruleset(
-    renames: dict | None = None,
-    prefix: dict[str, str] | None = None,
-    suffix: dict[str, str] | None = None,
-    parts: list[dict] | dict | None = None,
-    default_delims: set[str] | None = None,
-) -> dict:
-    """Combine a ``renames`` value with convenience prefix/suffix/parts kwargs."""
-    base = _normalize_renames(renames, default_delims)
-    extra = _normalize_renames(
-        {"prefix": prefix or {}, "suffix": suffix or {}, "parts": parts or []}, default_delims
-    )
-    return _merge_rulesets(extra, base)  # explicit renames precede convenience kwargs
-
-
 def _interpolate_ruleset(rules: dict, instance: str) -> dict:
     return {
         "literal": {k: _interpolate(v, instance) for k, v in rules["literal"].items()},
         "regex": [(pat, _interpolate(repl, instance)) for pat, repl in rules["regex"]],
         "parts": [(d, frm, _interpolate(to, instance)) for d, frm, to in rules["parts"]],
     }
-
-
-def _apply_part_rule(name: str, delims: set[str], frm: str, to: str) -> tuple[str, bool]:
-    """Rename whole delimiter-separated segments of ``name`` equal to ``frm``."""
-    out: list[str] = []
-    segment = ""
-    changed = False
-
-    def flush() -> None:
-        nonlocal segment, changed
-        if segment.lower() == frm.lower():
-            out.append(to)
-            changed = True
-        else:
-            out.append(segment)
-        segment = ""
-
-    for char in name:
-        if char in delims:
-            flush()
-            out.append(char)
-        else:
-            segment += char
-    flush()
-    return "".join(out), changed
-
-
-def _expand_ruleset_over_names(rules: dict, names: set[str]) -> dict[str, str]:
-    """Resolve a RuleSet against the known name set into literal renames."""
-    literal = rules["literal"]
-    regexes = [(re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in rules["regex"]]
-    parts = rules["parts"]
-
-    expanded: dict[str, str] = {}
-    for name in names:
-        if name.lower() in literal:
-            expanded[name] = literal[name.lower()]
-            continue
-        matched = False
-        for pattern, repl in regexes:
-            if pattern.search(name):
-                expanded[name] = pattern.sub(repl, name)
-                matched = True
-                break
-        if matched:
-            continue
-        for delims, frm, to in parts:
-            new_name, changed = _apply_part_rule(name, delims, frm, to)
-            if changed:
-                expanded[name] = new_name
-                break
-    return expanded
-
-
-def _apply_renames(files: MemoryFiles, rules: dict) -> None:
-    expanded = _expand_ruleset_over_names(rules, _collect_names(files))
-    if expanded:
-        files.rename(expanded)
 
 
 def _statement_text(statement, options: FormatOptions) -> str:
@@ -514,19 +129,6 @@ def _rewrite_call_filenames(
                 item.replace(Token(new_target, role=Role.filename))
 
 
-def _split_namelist_key(key: str) -> tuple[str, int]:
-    """
-    Split a ``namelists`` override key into ``(name, index)``.
-
-    A trailing ``#N`` (1-based) targets the N-th group of a repeated name, e.g.
-    ``tao_d1_data#2`` -> ``("tao_d1_data", 1)``. A bare name targets the first.
-    """
-    if "#" in key:
-        name, _, suffix = key.rpartition("#")
-        return name, int(suffix) - 1
-    return key, 0
-
-
 def _instantiate_tao_init(
     tao_init_spec: dict,
     override: dict | None,
@@ -561,7 +163,7 @@ def _instantiate_tao_init(
         tao_init.lattice_files = remapped
 
     for name_key, assignments in ((override or {}).get("namelists") or {}).items():
-        name, index = _split_namelist_key(name_key)
+        name, index = split_namelist_key(name_key)
         interpolated = {k: _interpolate(str(v), instance) for k, v in assignments.items()}
         tao_init.update_namelist(name, interpolated, index=index)
 
@@ -609,8 +211,8 @@ def instantiate(
     options = options or default_options
 
     template_files = spec["template"]
-    default_delims = _delim_set(spec.get("delimiters"))
-    global_rules = _normalize_renames(spec.get("renames"), default_delims)
+    default_delims = delim_set(spec.get("delimiters"))
+    global_rules = normalize_renames(spec.get("renames"), default_delims)
     instances = spec["instances"]
     context_files = spec.get("context") or []
     tao_init_spec = spec.get("tao_init")
@@ -641,13 +243,13 @@ def instantiate(
             _apply_inserts(files, overrides["insert"], options)
         files.annotate()
 
-        rules = _merge_rulesets(
-            global_rules, _normalize_renames(overrides.get("renames"), default_delims)
+        rules = merge_rulesets(
+            global_rules, normalize_renames(overrides.get("renames"), default_delims)
         )
         # Replace {instance} and similar in the rename rules
         rules = _interpolate_ruleset(rules, name)
         if rules["literal"] or rules["regex"] or rules["parts"]:
-            _apply_renames(files, rules)
+            apply_renames(files, rules)
 
         # Full output path per input (may include directories). Rewrite `call`
         # targets by resolving each against the transform set's input paths.
@@ -705,66 +307,12 @@ def write_instances(
 # CLI
 # --------------------------------------------------------------------------- #
 
-_DESCRIPTION = """\
-Interpolate and instantiate Bmad lattice templates.
+_INSTANTIATE_DESCRIPTION = """\
+Expand a Bmad lattice template set across instances.
 
-The template is valid Bmad; a YAML sidecar supplies per-element/constant values
-and (for instancing) renames and per-file output paths. See docs/templating.md.
-
-'interpolate' also handles Fortran-namelist files (*.init/*.nml): overrides are
-keyed by namelist group (--values, or --set NAMELIST KEY VALUE).
+A YAML sidecar lists the template files and per-instance values, renames, and
+output paths. See docs/cli.md.
 """
-
-
-def _merge_set_overrides(values: dict | None, sets: list[tuple[str, str, str]]) -> dict | None:
-    """
-    Fold ``--set NAMELIST KEY VALUE`` triples into a namelist ``values`` mapping.
-
-    Later triples win, and ``--set`` overrides values loaded from ``--values``.
-    """
-    if not sets:
-        return values
-    merged: dict = {k: dict(v) if isinstance(v, dict) else v for k, v in (values or {}).items()}
-    for namelist, key, value in sets:
-        merged.setdefault(namelist, {})[key] = value
-    return merged
-
-
-def _cmd_interpolate(parsed) -> None:
-    from .output import default_options
-
-    contents = pathlib.Path(parsed.template).read_text()
-    file_format = parsed.format or ("namelist" if is_namelist_file(parsed.template) else "bmad")
-
-    values = load_json_or_similar(parsed.values) if parsed.values else None
-    if parsed.set_ and file_format != "namelist":
-        raise SystemExit("--set is only valid for namelist files (*.init, *.nml)")
-    values = _merge_set_overrides(values, parsed.set_)
-
-    renames = {old: new for old, new in parsed.rename} or None
-    prefix = {frm: to for frm, to in parsed.prefix} or None
-    suffix = {frm: to for frm, to in parsed.suffix} or None
-    parts = [{"delimiters": d, "from": frm, "to": to} for d, frm, to in parsed.parts] or None
-    result = interpolate(
-        contents,
-        values=values,
-        renames=renames,
-        prefix=prefix,
-        suffix=suffix,
-        parts=parts,
-        delimiters=parsed.delimiters,
-        filename=parsed.template,
-        options=default_options,
-        file_format=file_format,
-    )
-    if parsed.in_place:
-        pathlib.Path(parsed.template).write_text(result)
-        print(f"wrote: {parsed.template}")
-    elif parsed.output:
-        pathlib.Path(parsed.output).write_text(result)
-        print(f"wrote: {parsed.output}")
-    else:
-        sys.stdout.write(result)
 
 
 def _cmd_instantiate(parsed) -> None:
@@ -787,113 +335,34 @@ def _cmd_instantiate(parsed) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(
         prog="latform-template",
-        description=_DESCRIPTION,
+        description=_INSTANTIATE_DESCRIPTION,
         formatter_class=argparse.RawTextHelpFormatter,
     )
+    add_logging_argument(parser)
+    parser.add_argument("instances", help="Instances YAML file")
     parser.add_argument(
-        "--log",
-        "-L",
-        dest="log_level",
-        default="WARNING",
-        choices=("DEBUG", "INFO", "WARNING", "CRITICAL"),
-        help="Python logging level",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    p_interp = sub.add_parser("interpolate", help="Apply values/renames to a single template file")
-    p_interp.add_argument("template", help="Template file (Bmad, or a namelist *.init/*.nml file)")
-    p_interp.add_argument(
-        "--format",
-        choices=("bmad", "namelist"),
-        default=None,
-        help="Force input format (default: auto-detect from extension)",
-    )
-    p_interp.add_argument(
-        "--values",
-        help="YAML/JSON/TOML overrides (element/constant for Bmad; namelist groups for namelist)",
-    )
-    p_interp.add_argument(
-        "--set",
-        nargs=3,
-        metavar=("NAMELIST", "KEY", "VALUE"),
-        action="append",
-        default=[],
-        dest="set_",
-        help="Set a namelist KEY=VALUE in group NAMELIST (namelist files only); repeatable",
-    )
-    p_interp.add_argument(
-        "--rename",
-        nargs=2,
-        metavar=("OLD", "NEW"),
-        action="append",
-        default=[],
-        help="Rename rule (literal or regex); repeatable",
-    )
-    p_interp.add_argument(
-        "--prefix",
-        nargs=2,
-        metavar=("FROM", "TO"),
-        action="append",
-        default=[],
-        help="Leading-prefix rename (bounded by . or _); repeatable",
-    )
-    p_interp.add_argument(
-        "--suffix",
-        nargs=2,
-        metavar=("FROM", "TO"),
-        action="append",
-        default=[],
-        help="Trailing-suffix rename (bounded by . or _); repeatable",
-    )
-    p_interp.add_argument(
-        "--parts",
-        nargs=3,
-        metavar=("DELIMS", "FROM", "TO"),
-        action="append",
-        default=[],
-        help="Segment rename: rename whole DELIMS-separated parts equal to FROM; repeatable",
-    )
-    p_interp.add_argument(
-        "--delimiters",
-        default=None,
-        help="Default delimiter set for --prefix/--suffix (default: . and _)",
-    )
-    out_group = p_interp.add_mutually_exclusive_group()
-    out_group.add_argument("-o", "--output", help="Output file (default: stdout)")
-    out_group.add_argument(
-        "-i",
-        "--in-place",
-        action="store_true",
-        help="Rewrite the template file in place",
-    )
-    p_interp.set_defaults(func=_cmd_interpolate)
-
-    p_inst = sub.add_parser("instantiate", help="Expand a template set across instances")
-    p_inst.add_argument("instances", help="Instances YAML file")
-    p_inst.add_argument(
         "-d",
         "--output-dir",
         default=".",
         help="Base directory for generated files (default: current directory)",
     )
-    p_inst.add_argument(
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Do not write files; list what would be written",
     )
-    p_inst.set_defaults(func=_cmd_instantiate)
 
     parsed = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    logging.basicConfig(level=parsed.log_level)
-    logging.getLogger("latform").setLevel(parsed.log_level)
-    parsed.func(parsed)
+    configure_logging(parsed.log_level)
+    _cmd_instantiate(parsed)
 
 
 def cli_main(argv: list[str] | None = None) -> None:
-    """CLI entrypoint for ``latform-template``."""
+    """CLI entrypoint for ``latform-template`` (instantiate a template set)."""
     main(argv)
 
 

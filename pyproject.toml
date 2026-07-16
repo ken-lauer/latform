@@ -49,6 +49,7 @@ file = "LICENSE"
 "latform-diff" = "latform.diff:cli_main"
 "latform-gitdiff" = "latform.diff:cli_main_gitdiff"
 "latform-template" = "latform.template:cli_main"
+"latform-apply" = "latform.apply:cli_main_apply"
 
 [tool.ruff]
 # Reference and defaults: https://docs.astral.sh/ruff/configuration/
