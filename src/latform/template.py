@@ -11,6 +11,7 @@ from .statements import Constant, Element
 from .tao import TaoInit
 from .token import Role, Token
 from .types import Attribute, FormatOptions, Seq
+from .util import load_json_or_similar
 from .walk import walk
 
 __all__ = [
@@ -480,10 +481,8 @@ def _instantiate_tao_init(
 
 
 def load_instances(path: pathlib.Path | str) -> dict:
-    """Load an instances YAML file into a plain dict."""
-    import yaml
-
-    return yaml.safe_load(pathlib.Path(path).read_text())
+    """Load an instances YAML/etc file into a plain dict."""
+    return load_json_or_similar(path)
 
 
 def instantiate(
