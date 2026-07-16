@@ -10,9 +10,7 @@ from __future__ import annotations
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import cast
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, cast
 
 from .location import Location
 from .token import Token
@@ -24,6 +22,12 @@ __all__ = [
     "Namelist",
     "NamelistFile",
 ]
+
+if TYPE_CHECKING:
+    try:
+        from typing import Self
+    except ImportError:
+        from typing_extensions import Self
 
 _RE_GROUP_OPEN = re.compile(r"\s*&(\w+)")
 _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")

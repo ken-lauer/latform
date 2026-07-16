@@ -3,20 +3,21 @@ from __future__ import annotations
 import pathlib
 import typing
 from dataclasses import dataclass, field
+from typing import Literal
 
 from .const import COMMA, EQUALS, SPACE
 from .exceptions import UnexpectedCallName
 from .token import Comments, Delimiter, Location, Role, Token
 from .util import delimit, flatten, partition_items, split_items
 
-try:
-    from typing import Literal, Self
-except ImportError:
-    from typing_extensions import Literal, Self
-
 if typing.TYPE_CHECKING:
     from .output import FormatOptions
     from .statements import Statement
+
+    try:
+        from typing import Self
+    except ImportError:
+        from typing_extensions import Self
 
 
 def _flatten_blocks(
