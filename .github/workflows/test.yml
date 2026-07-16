@@ -23,9 +23,8 @@ jobs:
       - name: Run unit tests
         shell: bash -l -e -o pipefail {0}
         run: |
-          set -e -o pipefail
           echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
-          pytest -v --cov=src/ 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          pytest --cov=src/ 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   pytest-pip:
@@ -52,5 +51,5 @@ jobs:
         shell: bash -l -e -o pipefail {0}
         run: |
           echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
-          pytest -v --cov=src/ 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          pytest --cov=src/ 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
