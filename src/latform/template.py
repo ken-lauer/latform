@@ -625,17 +625,11 @@ and (for instancing) renames and per-file output paths. See docs/templating.md.
 """
 
 
-def _load_yaml(path: pathlib.Path | str) -> dict:
-    import yaml
-
-    return yaml.safe_load(pathlib.Path(path).read_text())
-
-
 def _cmd_interpolate(parsed) -> None:
     from .output import default_options
 
     contents = pathlib.Path(parsed.template).read_text()
-    values = _load_yaml(parsed.values) if parsed.values else None
+    values = load_json_or_similar(parsed.values) if parsed.values else None
     renames = {old: new for old, new in parsed.rename} or None
     prefix = {frm: to for frm, to in parsed.prefix} or None
     suffix = {frm: to for frm, to in parsed.suffix} or None
@@ -661,7 +655,7 @@ def _cmd_interpolate(parsed) -> None:
 def _cmd_instantiate(parsed) -> None:
     from .output import default_options
 
-    spec = _load_yaml(parsed.instances)
+    spec = load_json_or_similar(parsed.instances)
     base_dir = pathlib.Path(parsed.instances).resolve().parent
     results = instantiate(spec, base_dir=base_dir, options=default_options)
 
@@ -696,7 +690,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p_interp = sub.add_parser("interpolate", help="Apply values/renames to a single template file")
     p_interp.add_argument("template", help="Template file (valid Bmad)")
-    p_interp.add_argument("--values", help="YAML file of element/constant overrides")
+    p_interp.add_argument("--values", help="YAML/JSON/TOML file of element/constant overrides")
     p_interp.add_argument(
         "--rename",
         nargs=2,
