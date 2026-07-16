@@ -635,7 +635,10 @@ def cli_main(args: list[str] | None = None) -> None:
         raise SystemExit(1) from None
 
     for files_obj in files_sets:
-        files_obj.parse(recurse=recursive, raise_if_missing=parsed.error_if_missing)
+        files_obj.parse(
+            recurse=recursive or files_obj.tao_init is not None,
+            raise_if_missing=parsed.error_if_missing,
+        )
         files_obj.annotate()
         for fn, lint in lint_files(
             files_obj,
