@@ -11,6 +11,7 @@ import pathlib
 import re
 from dataclasses import dataclass, field
 from functools import cached_property
+from itertools import groupby
 from typing import TYPE_CHECKING, ClassVar, NamedTuple, cast
 
 from .location import Location
@@ -19,12 +20,7 @@ from .types import NamelistFormatOptions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from typing import Literal
-
-    try:
-        from typing import Self
-    except ImportError:
-        from typing_extensions import Self
+    from typing import Literal, Self
 
 
 __all__ = [
@@ -68,12 +64,26 @@ _RE_VALUE_FIELD = re.compile(
 _INLINE_COMMENT_GAP = 2
 
 
+def _field_value_span(text: str) -> tuple[int, int, int]:
+    """
+    ``(start, end, count)`` of the value within one raw field.
+
+    A Fortran repeat-count prefix (``3*0``) sets ``count`` and is excluded
+    from the span; otherwise the span is the whole field and ``count`` is 1.
+    """
+    if "*" in text:
+        match = _RE_VALUE_FIELD.fullmatch(text)
+        if match is not None and match["count"]:
+            start, end = match.span("value")
+            return start, end, int(match["count"])
+    return 0, len(text), 1
+
+
 def _find_comment_index(line: str) -> int | None:
     """
-    Index of the comment character that starts a trailing comment, or ``None``.
+    Index of the ``!`` that starts a trailing comment, or ``None``.
 
-    Quoted strings and escaped characters are respected, so a ``comment_char``
-    inside quotes does not start a comment.
+    A ``!`` inside a quoted string does not start a comment.
     """
     first = line.find("!")
     if first < 0:
@@ -82,15 +92,10 @@ def _find_comment_index(line: str) -> int | None:
     if "'" not in prefix and '"' not in prefix:
         return first
 
-    # (ref cppbmad codegen.struct_parser.util.split_comment)
     in_single_quote = False
     in_double_quote = False
-    escape_next = False
-
     for i, char in enumerate(line):
-        if escape_next:
-            escape_next = False
-        elif char == "'" and not in_double_quote:
+        if char == "'" and not in_double_quote:
             in_single_quote = not in_single_quote
         elif char == '"' and not in_single_quote:
             in_double_quote = not in_double_quote
@@ -103,26 +108,13 @@ def _split_comment(line: str) -> tuple[str, str]:
     """
     Split a line into its code part and its comment part (comment ``!`` dropped).
 
-    Quoted strings and escape characters are respected. Neither part is
-    stripped; the comment part is empty when the line has no comment.
+    Quote-aware; neither part is stripped. The comment part is empty when the
+    line has no comment.
     """
     idx = _find_comment_index(line)
     if idx is None:
         return line, ""
     return line[:idx], line[idx + 1 :]
-
-
-def _split_field_comment(line: str) -> tuple[str, str]:
-    """
-    Split a line into its code part and its whole trailing comment.
-
-    The returned comment keeps its leading ``!`` and is right-stripped; it is
-    empty when the line has no comment.
-    """
-    idx = _find_comment_index(line)
-    if idx is None:
-        return line, ""
-    return line[:idx], line[idx:].rstrip()
 
 
 def _apply_field_case(key: str, case: str) -> str:
@@ -153,7 +145,7 @@ class _FieldRecord:
         """The rendered rows, without trailing comments."""
         first = f"{indent}{self.key.ljust(self.key_width)} = {self.chunks[0]}"
         # Continuation values align under the first value character.
-        continuation = " " * (len(indent) + max(len(self.key), self.key_width) + 3)
+        continuation = " " * (len(first) - len(self.chunks[0]))
         return [first, *(f"{continuation}{chunk}" for chunk in self.chunks[1:])]
 
     def render_row(self, index: int, indent: str) -> str:
@@ -188,7 +180,6 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
     anchors: dict[int, list[tuple[_FieldRecord, int]]] = {}
     line_rows: dict[int, tuple[_FieldRecord, int]] = {}
     consumed: set[int] = set()
-    records: list[_FieldRecord] = []
 
     for assignment in scan.assignments:
         start = assignment.span.line  # base_line=0: locations are line indices
@@ -204,12 +195,12 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
                 if rest.startswith(","):
                     part += ","
             chunks.append(part)
+        chunks = chunks or [""]
         record = _FieldRecord(
             key=_apply_field_case(assignment.key, options.field_case),
-            chunks=chunks or [""],
-            comments=[""] * max(len(chunks), 1),
+            chunks=chunks,
+            comments=[""] * len(chunks),
         )
-        records.append(record)
         anchors.setdefault(start, []).append((record, 0))
         line_rows[start] = (record, 0)
         for row, ln in enumerate(chunk_lines):
@@ -219,10 +210,10 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
         consumed.update(range(assignment.span.line, assignment.span.end_line + 1))
 
     for index, line in enumerate(lines):
-        _, comment = _split_field_comment(line)
-        comment = comment.strip()
-        if not comment:
+        comment_index = _find_comment_index(line)
+        if comment_index is None:
             continue
+        comment = line[comment_index:].strip()
         owner = line_rows.get(index)
         if owner is not None:
             record, row = owner
@@ -524,8 +515,8 @@ def _build_assignment(
             text = lines[first.line][first.column : last.end_column]
         else:
             parts: list[str] = []
-            for index in dict.fromkeys(token.line for token in fields):
-                row = [token for token in fields if token.line == index]
+            for index, group in groupby(fields, key=lambda token: token.line):
+                row = list(group)
                 parts.append(lines[index][row[0].column : row[-1].end_column])
             text = "\n".join(parts)
         value = Token(
@@ -694,7 +685,7 @@ class KeyComponent:
         return self.name if self.index_text is None else f"{self.name}({self.index_text})"
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class KeyPath:
     """A decomposed derived-type assignment key, e.g. ``foo(3)%bar(2)%val``."""
 
@@ -702,7 +693,7 @@ class KeyPath:
 
     @classmethod
     def parse(cls, key: str) -> KeyPath:
-        normalized = re.sub(r"\s+", "", key)
+        normalized = _RE_NORMALIZE_KEY.sub("", key)
         components: list[KeyComponent] = []
         for part in normalized.split("%"):
             match = _RE_COMPONENT.fullmatch(part)
@@ -719,14 +710,6 @@ class KeyPath:
 
     def __str__(self) -> str:
         return "%".join(str(component) for component in self.components)
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, KeyPath):
-            return self.components == other.components
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self.components)
 
 
 @dataclass
@@ -774,15 +757,7 @@ class Assignment:
         values: list[Token] = []
         for token in self.field_tokens:
             text = token.text
-            if "*" not in text:  # no repeat-count prefix to strip (the common case)
-                start, end, count = 0, len(text), 1
-            else:
-                match = _RE_VALUE_FIELD.fullmatch(text)
-                if match is None:
-                    start, end, count = 0, len(text), 1
-                else:
-                    start, end = match.span("value")
-                    count = int(match["count"]) if match["count"] else 1
+            start, end, count = _field_value_span(text)
             loc = Location(
                 filename=filename,
                 line=base_line + token.line,
@@ -790,10 +765,7 @@ class Assignment:
                 end_line=base_line + token.line,
                 end_column=token.column + end,
             )
-            if count == 1:
-                values.append(Token(text[start:end], loc=loc))
-            else:
-                values.extend(Token(text[start:end], loc=loc) for _ in range(count))
+            values.extend(Token(text[start:end], loc=loc) for _ in range(count))
         return values
 
     @property
@@ -822,15 +794,14 @@ class Namelist:
     Attributes
     ----------
     lines : list[str]
-        The verbatim source lines of the block (including the ``&name``
-        opener and ``/`` terminator) and are the source of truth for rendering.
+        The verbatim source lines of the block, including the ``&name``
+        opener and ``/`` terminator; the source of truth for rendering.
     assignments : list[Assignment]
         Derived from ``lines`` and refreshed after every edit.
     filename : pathlib.Path or None
         The source filename, if applicable.
     start_line : int
-        The absolute, 0-indexed line of the ``&name`` opener in the source
-        file) anchor.
+        The absolute, 0-indexed line of the ``&name`` opener in the source file.
     """
 
     name: str
@@ -999,24 +970,20 @@ class NamelistFile:
                 current = None
 
         for idx, line in enumerate(text.split("\n")):
-            stripped = line.lstrip()
             if current is None:
-                if stripped.startswith("&"):
-                    flush_raw()
-                    name = _RE_GROUP_OPEN.match(line).group(1)  # type: ignore[union-attr]
-                    current = Namelist(name=name, lines=[line], filename=path, start_line=idx)
-                else:
+                match = _RE_GROUP_OPEN.match(line)
+                if match is None:
                     raw.append(line)
                     continue
+                flush_raw()
+                current = Namelist(name=match.group(1), lines=[line], filename=path, start_line=idx)
             else:
                 current.lines.append(line)
             # '/' terminates the group anywhere outside a quoted string, even
             # on the opener line; anything after it on the line stays verbatim.
             if _find_terminator(line) is not None:
                 close()
-        if current is not None:
-            current._reparse()
-            items.append(current)
+        close()
         flush_raw()
         return cls(items=items, filename=path)
 
@@ -1026,23 +993,24 @@ class NamelistFile:
         return cls.parse(path.read_text(), filename=path)
 
     def _render_with_options(self, options: NamelistFormatOptions) -> str:
-        out = []
+        out: list[str] = []
         for index, item in enumerate(self.items):
-            is_namelist = isinstance(item, Namelist)
-            if is_namelist:
-                lines = item.render(options).split("\n")
-            else:
-                lines = item.split("\n")
-                after_group = index > 0 and isinstance(self.items[index - 1], Namelist)
-                if options.blank_line_after_group and after_group:
-                    # The single separating blank is re-added below; drop the
-                    # source's own leading blanks so runs collapse to one.
-                    while lines and not lines[0].strip():
-                        lines.pop(0)
+            if isinstance(item, Namelist):
+                out.append(item.render(options))
+                if options.blank_line_after_group and index < len(self.items) - 1:
+                    out.append("")
+                continue
+            lines = item.split("\n")
+            if (
+                options.blank_line_after_group
+                and index > 0
+                and isinstance(self.items[index - 1], Namelist)
+            ):
+                # The separating blank was just added above; drop the source's
+                # own leading blanks so runs collapse to one.
+                while lines and not lines[0].strip():
+                    lines.pop(0)
             out.extend(lines)
-            last = index == len(self.items) - 1
-            if options.blank_line_after_group and is_namelist and not last:
-                out.append("")
         return "\n".join(out)
 
     def render(self, options: NamelistFormatOptions | None = None) -> str:
@@ -1054,14 +1022,9 @@ class NamelistFile:
         options.
         """
         if options is None:
-            out: list[str] = []
-            for item in self.items:
-                if isinstance(item, Namelist):
-                    out.extend(item.lines)
-                else:
-                    out.extend(item.split("\n"))
-            return "\n".join(out)
-
+            return "\n".join(
+                item.render() if isinstance(item, Namelist) else item for item in self.items
+            )
         return self._render_with_options(options)
 
     @property
@@ -1244,13 +1207,13 @@ class NamelistArrayGroup:
                     entry_for(index, index).components[field_name] = value
                 continue
 
-            # Single element (``name(i)``), a section that names one index, or a
-            # non-enumerable/positional subscript.
+            # Single element (``name(i)`` or a one-index section), else a
+            # non-enumerable subscript (or none) keyed by its raw text.
             if indices is not None and len(indices) == 1:
                 key = index = indices[0]
             else:
-                index = component.index
-                key = component.index if component.index is not None else component.index_text
+                index = None
+                key = component.index_text
             entry = entry_for(key, index)
             if len(path.components) == 1:
                 entry.positional = list(assignment.values)
