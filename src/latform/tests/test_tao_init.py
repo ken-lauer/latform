@@ -111,6 +111,22 @@ def test_keypath_range_index_is_none():
     assert path.components[0].index_text == "1:8"
 
 
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("var(3)%ele_name", [3]),
+        ("var(1 : 6)%ele_name", [1, 2, 3, 4, 5, 6]),
+        ("var(1:6: 2)%ele_name", [1, 3, 5]),
+        ("var(-2:1)%ele_name", [-2, -1, 0, 1]),
+        ("var%ele_name", None),  # no subscript
+        ("var(N)%ele_name", None),  # named/non-integer bound
+        ("var(1:6:0)%ele_name", None),  # non-positive stride
+    ],
+)
+def test_keycomponent_indices(key: str, expected: list[int] | None):
+    assert KeyPath.parse(key).components[0].indices == expected
+
+
 def test_nested_key_edits_and_round_trips():
     group = Namelist(name="t", lines=["&t", "  foo(3)%bar(2)%val = 1.5", "/"])
     assignment = group.get("foo(3)%bar(2)%val")
@@ -247,6 +263,10 @@ def test_is_init_file(name: str, expected: bool):
         ('"quoted value" bare', ['"quoted value"', "bare"]),
         ("", []),
         ("'unterminated", ["'unterminated"]),
+        # Fortran repeat counts expand to r copies of the constant.
+        ("6*'beginning'", ["'beginning'"] * 6),
+        ("3*0 1e1", ["0", "0", "0", "1e1"]),
+        ("2*'a', 'b'", ["'a'", "'a'", "'b'"]),
     ],
 )
 def test_split_values(text: str, expected: list[str]):
@@ -350,6 +370,85 @@ def test_variables_parsed():
     assert variables[0].weight == "1e2"
     assert variables[0].step == "1e-4"
     assert variables[1].ele_name == "Q2"
+
+
+def test_variable_slice_assignment_distributes_values():
+    tao = TaoInit.parse(
+        "&tao_var\n"
+        "  v1_var%name = 'twiss'\n"
+        "  var(1:6)%ele_name  = 'beginning', 'beginning', 'beginning', "
+        "'beginning', 'beginning', 'beginning'\n"
+        "  var(1:6)%attribute = 'beta_a', 'alpha_a', 'beta_b', 'alpha_b', "
+        "'eta_x', 'etap_x'\n"
+        "/\n"
+    )
+    (v1,) = tao.variables
+    variables = v1.variables
+    assert [v.index for v in variables] == [1, 2, 3, 4, 5, 6]
+    assert [v.ele_name for v in variables] == ["beginning"] * 6
+    assert [v.attribute for v in variables] == [
+        "beta_a",
+        "alpha_a",
+        "beta_b",
+        "alpha_b",
+        "eta_x",
+        "etap_x",
+    ]
+
+
+def test_slice_assignment_repeat_count():
+    tao = TaoInit.parse(
+        "&tao_var\n"
+        "  var(1:6)%ele_name  = 6*'beginning'\n"
+        "  var(1:6)%attribute = 'beta_a', 'alpha_a', 'beta_b', 'alpha_b', "
+        "'eta_x', 'etap_x'\n"
+        "/\n"
+    )
+    (v1,) = tao.variables
+    assert [v.ele_name for v in v1.variables] == ["beginning"] * 6
+    assert v1.variables[2].attribute == "beta_b"
+
+
+def test_slice_assignment_shortfall_and_scalar_merge():
+    tao = TaoInit.parse(
+        "&tao_var\n"
+        "  var(1:4)%ele_name  = 'A', 'B'\n"  # fewer values than the 1:4 section
+        "  var(2)%attribute   = 'k1'\n"  # scalar merges into the slice-made entry
+        "/\n"
+    )
+    (v1,) = tao.variables
+    variables = v1.variables
+    # Only indices that received a value exist; 3 and 4 are not conjured.
+    assert [v.index for v in variables] == [1, 2]
+    assert variables[0].ele_name == "A"
+    assert variables[1].ele_name == "B"
+    assert variables[1].attribute == "k1"
+
+
+def test_slice_whitespace_and_empty_section():
+    # Whitespace inside a subscript is fine (keys are whitespace-normalized),
+    # and an ascending a:b with a > b is an empty section that assigns nothing.
+    tao = TaoInit.parse(
+        "&tao_var\n  var(1 : 3)%ele_name = 'A', 'B', 'C'\n  var(5 : 3)%ele_name = 'X', 'Y'\n/\n"
+    )
+    (v1,) = tao.variables
+    assert [v.index for v in v1.variables] == [1, 2, 3]
+    assert [v.ele_name for v in v1.variables] == ["A", "B", "C"]
+
+
+def test_datum_slice_assignment_distributes_values():
+    tao = TaoInit.parse(
+        "&tao_d1_data\n"
+        "  d1_data%name = 'x'\n"
+        "  datum(1:3)%data_type = 'orbit.x', 'orbit.y', 'orbit.z'\n"
+        "  datum(1:3)%ele_name  = 3*'END'\n"
+        "/\n"
+    )
+    (d1,) = tao.d1_data
+    datums = d1.datums
+    assert [d.index for d in datums] == [1, 2, 3]
+    assert [d.data_type for d in datums] == ["orbit.x", "orbit.y", "orbit.z"]
+    assert [d.ele_name for d in datums] == ["END", "END", "END"]
 
 
 def test_tao_start_file_properties():

@@ -44,6 +44,9 @@ if TYPE_CHECKING:
 _RE_GROUP_OPEN = re.compile(r"\s*&(\w+)")
 _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")
 _RE_NORMALIZE_KEY = re.compile(r"\s+")
+_RE_INT = re.compile(r"-?\d+")
+_RE_SLICE = re.compile(r"(-?\d+):(-?\d+)(?::(-?\d+))?")
+_RE_REPEAT = re.compile(r"(\d+)\*")
 
 
 def _split_comment(line: str, comment_char: str = "!", escape_char: str = "\\") -> tuple[str, str]:
@@ -101,35 +104,56 @@ def split_values(value: Token) -> list[Token]:
     An anonymous derived-type assignment such as
     ``datum(1) = 'orbit.x' '' '' 'R0\\2' 'target' 0 1e1`` packs several field
     values onto the right-hand side. Split them while keeping quoted strings
-    (including empty ``''``) intact, carrying a source `Location` for
-    each field derived from ``value``'s own location.
+    (including empty ``''``) intact, carrying a source `Location` for each field
+    derived from ``value``'s own location. A Fortran repeat count ``r*c`` (e.g.
+    ``6*'beginning'`` or ``3*0``) expands to ``r`` copies of the constant.
     """
     text = str(value)
     loc = value.loc
     tokens: list[Token] = []
     i, n = 0, len(text)
+
+    def token_for(start: int, end: int) -> Token:
+        return Token(
+            text[start:end],
+            loc=Location(
+                filename=loc.filename,
+                line=loc.line,
+                column=loc.column + start,
+                end_line=loc.line,
+                end_column=loc.column + end,
+            ),
+        )
+
+    def read_one(start: int) -> int:
+        """Return the index just past a single value beginning at ``start``."""
+        if start >= n:
+            return start
+        if text[start] in "'\"":
+            quote = text[start]
+            j = start + 1
+            while j < n and text[j] != quote:
+                j += 1
+            return min(j + 1, n)  # include the closing quote, if present
+        j = start
+        while j < n and text[j] not in " \t,'\"":
+            j += 1
+        return j
+
     while i < n:
-        char = text[i]
-        if char in " \t,":
+        if text[i] in " \t,":
             i += 1
             continue
+        repeat = _RE_REPEAT.match(text, i)
+        if repeat:
+            count = int(repeat[1])
+            value_start = repeat.end()
+            i = read_one(value_start)
+            tokens.extend(token_for(value_start, i) for _ in range(count))
+            continue
         start = i
-        if char in "'\"":
-            i += 1
-            while i < n and text[i] != char:
-                i += 1
-            i = min(i + 1, n)  # include the closing quote, if present
-        else:
-            while i < n and text[i] not in " \t,'\"":
-                i += 1
-        field_loc = Location(
-            filename=loc.filename,
-            line=loc.line,
-            column=loc.column + start,
-            end_line=loc.line,
-            end_column=loc.column + i,
-        )
-        tokens.append(Token(text[start:i], loc=field_loc))
+        i = read_one(i)
+        tokens.append(token_for(start, i))
     return tokens
 
 
@@ -146,6 +170,31 @@ class KeyComponent:
         if self.index_text is not None and self.index_text.isdigit():
             return int(self.index_text)
         return None
+
+    @property
+    def indices(self) -> list[int] | None:
+        """
+        The explicit integer indices this component designates.
+
+        ``[i]`` for a single subscript ``name(i)``; the expanded, ``stop``-
+        inclusive range for a Fortran array section ``name(a:b)`` or
+        ``name(a:b:step)``. ``None`` when there is no subscript or it cannot be
+        enumerated (open-ended range, non-integer bound, a named parameter,
+        non-positive stride, ...).
+        """
+        text = self.index_text
+        if text is None:
+            return None
+        if _RE_INT.fullmatch(text):
+            return [int(text)]
+        match = _RE_SLICE.fullmatch(text)
+        if match is None:
+            return None
+        start, stop = int(match[1]), int(match[2])
+        step = int(match[3]) if match[3] else 1
+        if step <= 0:
+            return None
+        return list(range(start, stop + 1, step))
 
     def __str__(self) -> str:
         return self.name if self.index_text is None else f"{self.name}({self.index_text})"
@@ -542,15 +591,20 @@ class NamelistArrayGroup:
         return assignment.value.strip().remove_quotes() if assignment is not None else None
 
     def _entries(self, array_name: str, entry_cls: type[NamelistArrayEntry]) -> list:
-        """Parse ``array_name(i)`` positional/component assignments into entries."""
+        """
+        Parse ``array_name(i)`` positional/component assignments into entries.
+
+        A Fortran array-section component assignment,
+        ``array_name(a:b)%field = v_a, v_b, ...``, is expanded: the values are
+        distributed across ``field`` of entries ``a`` through ``b`` in order.
+        """
         array_name = array_name.lower()
         by_index: dict[object, NamelistArrayEntry] = {}
 
-        def entry_for(component) -> NamelistArrayEntry:
-            key = component.index if component.index is not None else component.index_text
+        def entry_for(key: object, index: int | None) -> NamelistArrayEntry:
             existing = by_index.get(key)
             if existing is None:
-                existing = entry_cls(index=component.index)
+                existing = entry_cls(index=index)
                 by_index[key] = existing
             return existing
 
@@ -558,7 +612,30 @@ class NamelistArrayGroup:
             path = assignment.path
             if path.names[0] != array_name:
                 continue
-            entry = entry_for(path.components[0])
+            component = path.components[0]
+            indices = component.indices
+
+            # An empty array section (e.g. an ascending ``5:3`` slice) designates
+            # no elements, so the assignment is a no-op.
+            if indices is not None and not indices:
+                continue
+
+            # Array-section component assignment: distribute the values across
+            # the designated indices (e.g. ``var(1:6)%ele_name = a, b, ...``).
+            if len(path.components) > 1 and indices is not None and len(indices) > 1:
+                field_name = path.names[1]
+                for value, index in zip(split_values(assignment.value), indices):
+                    entry_for(index, index).components[field_name] = value
+                continue
+
+            # Single element (``name(i)``), a section that names one index, or a
+            # non-enumerable/positional subscript.
+            if indices is not None and len(indices) == 1:
+                key = index = indices[0]
+            else:
+                index = component.index
+                key = component.index if component.index is not None else component.index_text
+            entry = entry_for(key, index)
             if len(path.components) == 1:
                 entry.positional = split_values(assignment.value)
                 entry.comment = assignment.comment
