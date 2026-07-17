@@ -42,7 +42,7 @@ class LintCode(str, enum.Enum):
     undefined_reference = "LF002"
     unknown_element_type = "LF003"
     unknown_attribute = "LF004"
-    controller_default_missing = "LF005"
+    controller_all_zero_defaults = "LF005"
     duplicate_attribute = "LF006"
     unused_constant = "LF007"
     attribute_override = "LF008"
@@ -453,6 +453,17 @@ def _is_known_attribute(name: str, element_type: str) -> bool:
     return upper in _acceptable_attribute_names(element_type)
 
 
+def _is_zero_like_token(item: Token | Seq | None):
+    if item is None:
+        return True
+    if isinstance(item, Seq):
+        return False
+    try:
+        return int(item) == 0
+    except ValueError:
+        return False
+
+
 def lint_element_attributes(element: Element) -> list[Lint]:
     """
     Flag attributes that are not defined for an element's type.
@@ -462,7 +473,7 @@ def lint_element_attributes(element: Element) -> list[Lint]:
 
     element_type = str(element.element_type)
     controller_vars: set[Token] = {var.lower() for var in get_controller_variables(element)}
-    controller_defaults_set: set[Token] = set()
+    controller_values: dict[Token, Token | Seq | None] = {}
 
     lints = []
     for attr in element.attributes:
@@ -472,8 +483,7 @@ def lint_element_attributes(element: Element) -> list[Lint]:
             continue
         name = attr.name
         if name.lower() in controller_vars:
-            # Default definition
-            controller_defaults_set.add(name.lower())
+            controller_values[name] = attr.value
             continue
         if not _is_known_attribute(str(name), element_type):
             lints.append(
@@ -488,14 +498,17 @@ def lint_element_attributes(element: Element) -> list[Lint]:
                 )
             )
 
-    missing_defaults = controller_vars - controller_defaults_set
-    for missing in missing_defaults:
+    if len(controller_values) > 1 and all(
+        _is_zero_like_token(val) for val in controller_values.values()
+    ):
+        toks = typing.cast(list[Token], list(controller_values.values()))
+        vars = ", ".join(controller_values)
         lints.append(
             Lint(
-                code=LintCode.controller_default_missing,
+                code=LintCode.controller_all_zero_defaults,
                 context=element,
-                message=(f"Controller variable '{missing}' does not have a default set"),
-                relevant_tokens=[missing],
+                message=f"Controller variable values are all set to 0, which is the Bmad implicit default. Variables: {vars}",
+                relevant_tokens=toks,
             )
         )
 

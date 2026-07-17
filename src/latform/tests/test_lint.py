@@ -184,11 +184,13 @@ def test_unknown_type_skips_attribute_lint():
     assert lint_element_attributes(element) == []
 
 
-def test_controller_default_missing_reported():
-    (statements,) = _files("o1: overlay = {q1[k1]}, var = {x, y}, x = 0").by_filename.values()
+def test_controller_all_zero():
+    (statements,) = _files(
+        "o1: overlay = {q1[k1]}, var = {x, y}, x = 0, y = 0"
+    ).by_filename.values()
     (element,) = statements
     lints = lint_element_attributes(element)
-    assert [lint.code for lint in lints] == [LintCode.controller_default_missing]
+    assert [lint.code for lint in lints] == [LintCode.controller_all_zero_defaults]
     assert "y" in lints[0].message
 
 
