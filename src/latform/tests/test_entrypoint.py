@@ -181,6 +181,45 @@ def test_cli_combine_outputs_both_files(tmp_path: pathlib.Path, capsys: pytest.C
     assert "QB: drift, L=2" in captured.out
 
 
+def _make_tao_init_set(tmp_path: pathlib.Path) -> pathlib.Path:
+    (tmp_path / "cx.lat.bmad").write_text("Q1: quadrupole, L=0.3, k1=1.0\ncl: line=(Q1)\nuse, cl\n")
+    init = tmp_path / "tao.init"
+    init.write_text(
+        "&tao_design_lattice\n"
+        "      design_lattice(1)%file = 'cx.lat.bmad'\n"
+        "/\n\n\n"
+        "&tao_params\n"
+        "        global%n_opti_cycles = 100\n"
+        "/\n"
+    )
+    return init
+
+
+def test_cli_tao_init_formatted_by_default(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture):
+    init = _make_tao_init_set(tmp_path)
+    cli_main([str(init)])
+    out = capsys.readouterr().out
+    assert "Q1: quadrupole" in out  # the referenced lattice is formatted too
+    assert "\n  design_lattice(1)%file = 'cx.lat.bmad'\n" in out  # init re-indented to 2
+    assert "/\n\n&tao_params" in out  # collapsed to a single blank line
+
+
+def test_cli_tao_init_no_format_namelist(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture):
+    init = _make_tao_init_set(tmp_path)
+    cli_main([str(init), "--no-format-namelist"])
+    out = capsys.readouterr().out
+    assert "\n      design_lattice(1)%file = 'cx.lat.bmad'\n" in out  # 6-space indent preserved
+    assert "/\n\n\n&tao_params" in out  # source blank lines preserved
+
+
+def test_cli_tao_init_in_place_rewrites_init(tmp_path: pathlib.Path):
+    init = _make_tao_init_set(tmp_path)
+    cli_main([str(init), "--in-place"])
+    text = init.read_text()
+    assert "\n  design_lattice(1)%file = 'cx.lat.bmad'\n" in text
+    assert "/\n\n&tao_params" in text
+
+
 def test_load_renames(tmp_path: pathlib.Path):
     rename_file = tmp_path / "renames.csv"
     rename_file.write_text("A,B\nC,D")

@@ -25,7 +25,7 @@ from .apply import (
 from .parser import MemoryFiles, parse
 from .tao import TaoInit
 from .token import Role, Token
-from .types import FormatOptions
+from .types import FormatOptions, NamelistFormatOptions
 from .util import load_json_or_similar
 from .walk import walk
 
@@ -135,6 +135,7 @@ def _instantiate_tao_init(
     base_dir: pathlib.Path,
     in_to_out: dict[str, str],
     instance: str,
+    options: NamelistFormatOptions | None = None,
 ) -> dict[str, str]:
     """
     Render one instance's ``tao.init`` from the template spec.
@@ -167,7 +168,7 @@ def _instantiate_tao_init(
         interpolated = {k: _interpolate(str(v), instance) for k, v in assignments.items()}
         tao_init.update_namelist(name, interpolated, index=index)
 
-    return {output_rel: tao_init.render()}
+    return {output_rel: tao_init.render(options)}
 
 
 def load_instances(path: pathlib.Path | str) -> dict:
@@ -180,6 +181,7 @@ def instantiate(
     *,
     base_dir: pathlib.Path | str,
     options: FormatOptions | None = None,
+    format_namelist: bool = True,
 ) -> dict[str, dict[str, str]]:
     """
     Expand a template set across instances.
@@ -199,6 +201,11 @@ def instantiate(
         Directory the ``input`` paths are relative to.
     options : FormatOptions, optional
         Formatting options for emitted files.
+    format_namelist : bool, optional
+        Reformat the emitted ``tao.init`` namelist (field indentation and a
+        blank line after each group) using ``options``. On by default; set False
+        to preserve the template's namelist layout. Bmad lattice files are always
+        reformatted regardless.
 
     Returns
     -------
@@ -264,7 +271,12 @@ def instantiate(
         if tao_init_spec:
             instance_files.update(
                 _instantiate_tao_init(
-                    tao_init_spec, overrides.get("tao_init"), base_dir, in_to_out, name
+                    tao_init_spec,
+                    overrides.get("tao_init"),
+                    base_dir,
+                    in_to_out,
+                    name,
+                    options.namelist if format_namelist else None,
                 )
             )
         results[name] = instance_files
@@ -316,11 +328,20 @@ output paths. See docs/cli.md.
 
 
 def _cmd_instantiate(parsed) -> None:
+    import dataclasses
+
+    from . import cli
     from .output import default_options
 
     spec = load_json_or_similar(parsed.instances)
     base_dir = pathlib.Path(parsed.instances).resolve().parent
-    results = instantiate(spec, base_dir=base_dir, options=default_options)
+    options = dataclasses.replace(default_options, namelist=cli.build_namelist_options(parsed))
+    results = instantiate(
+        spec,
+        base_dir=base_dir,
+        options=options,
+        format_namelist=parsed.format_namelist,
+    )
 
     output_dir = pathlib.Path(parsed.output_dir)
     if parsed.dry_run:
@@ -355,6 +376,10 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Do not write files; list what would be written",
     )
+
+    from . import cli
+
+    cli.add_namelist_format_arguments(parser)
 
     parsed = parser.parse_args(argv if argv is not None else sys.argv[1:])
     configure_logging(parsed.log_level)

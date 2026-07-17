@@ -6,6 +6,7 @@ import pytest
 
 from ..apply import cli_main_apply, interpolate, interpolate_namelist
 from ..output import default_options
+from ..types import NamelistFormatOptions
 
 FILES = pathlib.Path(__file__).resolve().parent / "files" / "templating"
 
@@ -298,6 +299,152 @@ def test_interpolate_format_override_forces_namelist():
 def test_interpolate_namelist_rejects_renames():
     with pytest.raises(ValueError, match="rename options are not supported"):
         interpolate(_NML_SRC, filename="tao.init", renames={"foo": "bar"})
+
+
+_MESSY_NML = "\n".join(
+    (
+        "&group1",
+        "      X = 1",
+        "  y=2   ! comment",
+        "/",
+        "",
+        "",
+        "&group2",
+        "        Z = 3",
+        "/",
+        "",
+    )
+)
+
+# Differing key lengths + comments, for alignment tests.
+_ALIGN_NML = "&g\n a = 1 ! one\n bbbb = 2 ! two\n/\n"
+
+
+def test_interpolate_namelist_verbatim_by_default():
+    out = interpolate_namelist(_MESSY_NML)
+    assert out == _MESSY_NML
+
+
+def test_interpolate_namelist_reindents_and_lowercases_fields():
+    out = interpolate_namelist(_MESSY_NML, options=NamelistFormatOptions())
+    assert "\n  x = 1\n" in out  # re-indented to 2, X -> x
+    assert "\n  z = 3\n" in out
+    assert "\n  y = 2  ! comment\n" in out  # spacing normalized, comment aligned
+
+
+def test_interpolate_namelist_configurable_indent():
+    out = interpolate_namelist(_MESSY_NML, options=NamelistFormatOptions(indent_size=4))
+    assert "\n    x = 1\n" in out
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [("lower", "\n  x = 1\n"), ("upper", "\n  X = 1\n"), ("same", "\n  X = 1\n")],
+)
+def test_interpolate_namelist_field_case(case, expected):
+    out = interpolate_namelist(_MESSY_NML, options=NamelistFormatOptions(field_case=case))
+    assert expected in out
+
+
+def test_interpolate_namelist_align_equals():
+    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions(align_equals=True))
+    assert "\n  a    = 1  ! one\n" in out
+    assert "\n  bbbb = 2  ! two\n" in out
+
+
+def test_interpolate_namelist_no_align_equals_by_default():
+    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions())
+    assert "\n  a = 1" in out  # equals not aligned
+    assert "\n  bbbb = 2" in out
+
+
+def test_interpolate_namelist_aligns_comments_by_default():
+    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions())
+    assert "\n  a = 1     ! one\n" in out  # '!' padded to a common column
+    assert "\n  bbbb = 2  ! two\n" in out
+
+
+def test_interpolate_namelist_align_comments_can_be_disabled():
+    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions(align_comments=False))
+    assert "\n  a = 1 ! one\n" in out
+    assert "\n  bbbb = 2 ! two\n" in out
+
+
+def test_interpolate_namelist_alignment_resets_across_blank_lines():
+    src = "&g\n a = 1\n bbbb = 2\n\n c = 3\n dd = 4\n/\n"
+    out = interpolate_namelist(src, options=NamelistFormatOptions(align_equals=True))
+    assert "\n  a    = 1\n  bbbb = 2\n" in out  # first run aligned to width 4
+    assert "\n  c  = 3\n  dd = 4\n" in out  # second run aligned to width 2
+
+
+def test_interpolate_namelist_single_blank_line_after_group():
+    out = interpolate_namelist(_MESSY_NML, options=NamelistFormatOptions())
+    assert "/\n\n&group2" in out  # collapsed the two blank lines to one
+    assert "/\n\n\n" not in out
+
+
+def test_interpolate_namelist_blank_line_can_be_disabled():
+    out = interpolate_namelist(
+        "&a\n x=1\n/\n&b\n y=2\n/\n",
+        options=NamelistFormatOptions(blank_line_after_group=False),
+    )
+    assert "/\n&b" in out
+
+
+def test_interpolate_namelist_format_is_idempotent():
+    options = NamelistFormatOptions(align_equals=True, field_case="upper")
+    once = interpolate_namelist(_MESSY_NML, options=options)
+    twice = interpolate_namelist(once, options=options)
+    assert once == twice
+
+
+def test_interpolate_formats_namelist_by_default():
+    out = interpolate(_MESSY_NML, filename="tao.init")
+    assert "\n  x = 1\n" in out
+    assert "/\n\n&group2" in out
+
+
+def test_interpolate_format_namelist_can_be_disabled():
+    out = interpolate(_MESSY_NML, filename="tao.init", format_namelist=False)
+    assert out == _MESSY_NML
+
+
+def test_cli_interpolate_formats_namelist_by_default(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_MESSY_NML)
+    cli_main_apply([str(tmp_path / "tao.init")])
+    out = capsys.readouterr().out
+    assert "\n  x = 1\n" in out
+    assert "/\n\n&group2" in out
+
+
+def test_cli_interpolate_namelist_indent(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_MESSY_NML)
+    cli_main_apply([str(tmp_path / "tao.init"), "--namelist-indent", "3"])
+    assert "\n   x = 1\n" in capsys.readouterr().out
+
+
+def test_cli_interpolate_namelist_field_case(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_MESSY_NML)
+    cli_main_apply([str(tmp_path / "tao.init"), "--namelist-field-case", "upper"])
+    assert "\n  X = 1\n" in capsys.readouterr().out
+
+
+def test_cli_interpolate_namelist_align_equals(tmp_path, capsys):
+    (tmp_path / "a.nml").write_text(_ALIGN_NML)
+    cli_main_apply([str(tmp_path / "a.nml"), "--namelist-align-equals"])
+    assert "\n  a    = 1  ! one\n" in capsys.readouterr().out
+
+
+def test_cli_interpolate_no_namelist_align_comments(tmp_path, capsys):
+    (tmp_path / "a.nml").write_text(_ALIGN_NML)
+    cli_main_apply([str(tmp_path / "a.nml"), "--no-namelist-align-comments"])
+    assert "\n  a = 1 ! one\n" in capsys.readouterr().out
+
+
+def test_cli_interpolate_no_format_namelist(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_MESSY_NML)
+    cli_main_apply([str(tmp_path / "tao.init"), "--no-format-namelist"])
+    assert capsys.readouterr().out == _MESSY_NML
 
 
 def test_cli_interpolate_namelist_set(tmp_path, capsys):

@@ -19,7 +19,7 @@ from ._namelist import NamelistFile, is_namelist_file
 from .parser import MemoryFiles, parse
 from .statements import Constant, Element
 from .token import Role, Token
-from .types import Attribute, FormatOptions, Seq
+from .types import Attribute, FormatOptions, NamelistFormatOptions, Seq
 from .util import load_json_or_similar
 from .walk import walk
 
@@ -160,6 +160,7 @@ def interpolate_namelist(
     *,
     values: dict | None = None,
     filename: str = "tao.init",
+    options: NamelistFormatOptions | None = None,
 ) -> str:
     """
     Interpolate a single namelist (``*.init``/``*.nml``) template file.
@@ -172,6 +173,10 @@ def interpolate_namelist(
         Namelist overrides. See :func:`apply_namelist_values`.
     filename : str, optional
         Virtual filename used for source locations.
+    options : NamelistFormatOptions, optional
+        When given, re-format the output (field indentation, case, and
+        alignment). When ``None`` (default), the source layout is preserved
+        verbatim aside from the applied value edits.
 
     Returns
     -------
@@ -181,7 +186,7 @@ def interpolate_namelist(
     nml_file = NamelistFile.parse(contents, filename)
     if values:
         apply_namelist_values(nml_file, values)
-    return nml_file.render()
+    return nml_file.render(options)
 
 
 def interpolate(
@@ -196,6 +201,7 @@ def interpolate(
     filename: str = "template.bmad",
     options: FormatOptions | None = None,
     file_format: FileFormat | None = None,
+    format_namelist: bool = True,
 ) -> str:
     """
     Interpolate a single template file and return the formatted result.
@@ -229,9 +235,14 @@ def interpolate(
     filename : str, optional
         Virtual filename used for source locations and format auto-detection.
     options : FormatOptions, optional
-        Formatting options for the emitted output. Bmad only.
+        Formatting options for the emitted output. For Bmad, always applied.
+        For namelist files, applied only when ``format_namelist`` is set.
     file_format : {"bmad", "namelist"}, optional
         Force the input format instead of auto-detecting from ``filename``.
+    format_namelist : bool, optional
+        Reformat namelist output (field indentation and a blank line after each
+        group) using ``options``. On by default; set False to preserve the
+        source layout verbatim aside from the applied value edits.
 
     Returns
     -------
@@ -243,7 +254,15 @@ def interpolate(
     if file_format == "namelist":
         if renames or prefix or suffix or parts:
             raise ValueError("rename options are not supported for namelist files")
-        return interpolate_namelist(contents, values=values, filename=filename)
+        nml_options = None
+        if format_namelist:
+            nml_options = (options or FormatOptions()).namelist
+        return interpolate_namelist(
+            contents,
+            values=values,
+            filename=filename,
+            options=nml_options,
+        )
     if file_format != "bmad":
         raise ValueError(f"unknown file format {file_format!r} (expected 'bmad' or 'namelist')")
 
@@ -506,10 +525,15 @@ def _merge_set_overrides(values: dict | None, sets: list[tuple[str, str, str]]) 
 
 
 def _cmd_apply(parsed) -> None:
+    import dataclasses
+
+    from . import cli
     from .output import default_options
 
     contents = pathlib.Path(parsed.template).read_text()
     file_format = parsed.format or ("namelist" if is_namelist_file(parsed.template) else "bmad")
+
+    options = dataclasses.replace(default_options, namelist=cli.build_namelist_options(parsed))
 
     values = _load_values(parsed.values) if parsed.values else None
     if parsed.set_ and file_format != "namelist":
@@ -529,8 +553,9 @@ def _cmd_apply(parsed) -> None:
         parts=parts,
         delimiters=parsed.delimiters,
         filename=parsed.template,
-        options=default_options,
+        options=options,
         file_format=file_format,
+        format_namelist=parsed.format_namelist,
     )
     if parsed.in_place:
         pathlib.Path(parsed.template).write_text(result)
@@ -611,6 +636,11 @@ def main_apply(argv: list[str] | None = None) -> None:
         default=None,
         help="Default delimiter set for --prefix/--suffix (default: . and _)",
     )
+
+    from . import cli
+
+    cli.add_namelist_format_arguments(parser)
+
     out_group = parser.add_mutually_exclusive_group()
     out_group.add_argument("-o", "--output", help="Output file (default: stdout)")
     out_group.add_argument(

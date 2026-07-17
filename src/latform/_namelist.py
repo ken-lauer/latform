@@ -14,6 +14,14 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from .location import Location
 from .token import Token
+from .types import NamelistFormatOptions
+
+if TYPE_CHECKING:
+    try:
+        from typing import Self
+    except ImportError:
+        from typing_extensions import Self
+
 
 __all__ = [
     "Assignment",
@@ -35,41 +43,31 @@ def is_namelist_file(path: pathlib.Path | str) -> bool:
     return pathlib.Path(path).suffix.lower() in _NAMELIST_SUFFIXES
 
 
-if TYPE_CHECKING:
-    try:
-        from typing import Self
-    except ImportError:
-        from typing_extensions import Self
-
 _RE_GROUP_OPEN = re.compile(r"\s*&(\w+)")
 _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")
 _RE_NORMALIZE_KEY = re.compile(r"\s+")
 _RE_INT = re.compile(r"-?\d+")
 _RE_SLICE = re.compile(r"(-?\d+):(-?\d+)(?::(-?\d+))?")
-_RE_REPEAT = re.compile(r"(\d+)\*")
+# A namelist value field is a quoted string or a bare token; fields are
+# separated by whitespace/commas, which fall between the matches.
+_SINGLE_QUOTED = r"'[^']*'?"  # trailing '? tolerates a missing closing quote
+_DOUBLE_QUOTED = r'"[^"]*"?'
+_BARE_TOKEN = r"""[^ \t,'"]+"""  # runs until a separator or quote
+_REPEAT_COUNT = r"(?:(?P<count>\d+)\*)?"  # optional Fortran repeat: 3*0 -> 0 0 0
+_RE_VALUE_FIELD = re.compile(
+    rf"{_REPEAT_COUNT}(?P<value>{_SINGLE_QUOTED}|{_DOUBLE_QUOTED}|{_BARE_TOKEN})"
+)
+
+# Spaces between the longest field in a run and its aligned inline comment.
+_INLINE_COMMENT_GAP = 2
 
 
-def _split_comment(line: str, comment_char: str = "!", escape_char: str = "\\") -> tuple[str, str]:
+def _find_comment_index(line: str, comment_char: str = "!", escape_char: str = "\\") -> int | None:
     """
-    Splits a line into code and comment parts based on the specified comment character,
-    while respecting quoted strings and escape characters.
+    Index of the comment character that starts a trailing comment, or ``None``.
 
-    Parameters
-    ----------
-    line : str
-        The input string to split.
-    comment_char : str, optional
-        The character indicating the start of a comment (default is '!').
-    escape_char : str, optional
-        The character used to escape other characters (default is '\\').
-
-    Returns
-    -------
-    tuple[str, str]
-        A tuple containing two strings:
-        - The first element is the code part of the line, with leading and trailing whitespace removed.
-        - The second element is the comment part of the line, with leading and trailing whitespace removed.
-          If no comment is found, the second element is an empty string.
+    Quoted strings and escaped characters are respected, so a ``comment_char``
+    inside quotes does not start a comment.
     """
     # (ref cppbmad codegen.struct_parser.util.split_comment)
     in_single_quote = False
@@ -86,15 +84,126 @@ def _split_comment(line: str, comment_char: str = "!", escape_char: str = "\\") 
         elif char == '"' and not in_single_quote:
             in_double_quote = not in_double_quote
         elif char == comment_char and not in_single_quote and not in_double_quote:
-            # Found comment char outside of quotes
-            return (line[:i], line[i + 1 :])
+            return i
+    return None
 
-    return line, ""
+
+def _split_comment(line: str, comment_char: str = "!", escape_char: str = "\\") -> tuple[str, str]:
+    """
+    Split a line into its code part and its comment part (comment ``!`` dropped).
+
+    Quoted strings and escape characters are respected. Neither part is
+    stripped; the comment part is empty when the line has no comment.
+    """
+    idx = _find_comment_index(line, comment_char, escape_char)
+    if idx is None:
+        return line, ""
+    return line[:idx], line[idx + 1 :]
+
+
+def _split_field_comment(line: str) -> tuple[str, str]:
+    """
+    Split a line into its code part and its whole trailing comment.
+
+    The returned comment keeps its leading ``!`` and is right-stripped; it is
+    empty when the line has no comment.
+    """
+    idx = _find_comment_index(line)
+    if idx is None:
+        return line, ""
+    return line[:idx], line[idx:].rstrip()
+
+
+def _apply_field_case(key: str, case: str) -> str:
+    """Case a namelist field name per ``case`` (``"lower"``/``"upper"``/other)."""
+    if case == "lower":
+        return key.lower()
+    if case == "upper":
+        return key.upper()
+    return key
 
 
 def _normalize_key(key: str) -> str:
     """Whitespace-insensitive, case-insensitive key form used for lookups."""
     return _RE_NORMALIZE_KEY.sub("", key).lower()
+
+
+@dataclass(slots=True)
+class _FieldLine:
+    """A ``key = value  ! comment`` field line awaiting run-level alignment."""
+
+    key: str
+    value: str
+    comment: str
+    key_width: int = 0
+    comment_column: int = 0
+
+    def code(self, indent: str) -> str:
+        """The ``indent + key = value`` part of the line (no trailing comment)."""
+        return f"{indent}{self.key.ljust(self.key_width)} = {self.value}"
+
+    def render(self, indent: str) -> str:
+        code = self.code(indent)
+        if not self.comment:
+            return code.rstrip()
+        padded = code.ljust(self.comment_column) if self.comment_column else f"{code} "
+        return f"{padded}{self.comment}"
+
+
+def _parse_group_line(line: str, indent: str, options: NamelistFormatOptions) -> str | _FieldLine:
+    """A finished output line, or a `_FieldLine` still awaiting alignment."""
+    stripped = line.strip()
+    if not stripped:
+        return ""
+    if stripped[0] in "&/":  # opener and terminator stay at column zero
+        return stripped
+    if stripped[0] != "!":
+        code, comment = _split_field_comment(line)
+        key_part, sep, value_part = code.partition("=")
+        key = _RE_NORMALIZE_KEY.sub("", key_part)
+        if sep and key:
+            key = _apply_field_case(key, options.field_case)
+            return _FieldLine(key, value_part.strip(), comment)
+    # Comment-only and unparsable lines are indented as-is.
+    return f"{indent}{stripped}"
+
+
+def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> list[str]:
+    """
+    Format the source lines of one ``&name ... /`` group.
+
+    ``key = value`` fields are re-indented, their names cased per
+    ``options.field_case``, and the spacing around ``=`` normalized. Within each
+    blank-line-delimited run of fields, the ``=`` (when ``align_equals``) and the
+    trailing ``!`` comments (when ``align_comments``) are padded into columns.
+    The opener and terminator stay at column zero, blank lines stay empty, and
+    comment-only lines are indented but do not participate in a run's alignment.
+    """
+    indent = options.indent_char * options.indent_size
+    parsed = [_parse_group_line(line, indent, options) for line in lines]
+
+    # A run is a maximal group of field lines uninterrupted by a blank line;
+    # comment-only and unparsable lines neither join nor break it.
+    runs: list[list[_FieldLine]] = [[]]
+    for item in parsed:
+        if isinstance(item, _FieldLine):
+            runs[-1].append(item)
+        elif not item:
+            runs.append([])
+
+    for run in runs:
+        if not run:
+            continue
+        if options.align_equals:
+            width = max(len(f.key) for f in run)
+            for f in run:
+                f.key_width = width
+        if options.align_comments:
+            column = max(len(f.code(indent)) for f in run) + _INLINE_COMMENT_GAP
+            for f in run:
+                f.comment_column = column
+
+    return [item if isinstance(item, str) else item.render(indent) for item in parsed]
 
 
 def split_values(value: Token) -> list[Token]:
@@ -108,52 +217,24 @@ def split_values(value: Token) -> list[Token]:
     derived from ``value``'s own location. A Fortran repeat count ``r*c`` (e.g.
     ``6*'beginning'`` or ``3*0``) expands to ``r`` copies of the constant.
     """
-    text = str(value)
     loc = value.loc
     tokens: list[Token] = []
-    i, n = 0, len(text)
-
-    def token_for(start: int, end: int) -> Token:
-        return Token(
-            text[start:end],
-            loc=Location(
-                filename=loc.filename,
-                line=loc.line,
-                column=loc.column + start,
-                end_line=loc.line,
-                end_column=loc.column + end,
-            ),
+    for match in _RE_VALUE_FIELD.finditer(str(value)):
+        start, end = match.span("value")
+        count = int(match["count"]) if match["count"] else 1
+        tokens.extend(
+            Token(
+                match["value"],
+                loc=Location(
+                    filename=loc.filename,
+                    line=loc.line,
+                    column=loc.column + start,
+                    end_line=loc.line,
+                    end_column=loc.column + end,
+                ),
+            )
+            for _ in range(count)
         )
-
-    def read_one(start: int) -> int:
-        """Return the index just past a single value beginning at ``start``."""
-        if start >= n:
-            return start
-        if text[start] in "'\"":
-            quote = text[start]
-            j = start + 1
-            while j < n and text[j] != quote:
-                j += 1
-            return min(j + 1, n)  # include the closing quote, if present
-        j = start
-        while j < n and text[j] not in " \t,'\"":
-            j += 1
-        return j
-
-    while i < n:
-        if text[i] in " \t,":
-            i += 1
-            continue
-        repeat = _RE_REPEAT.match(text, i)
-        if repeat:
-            count = int(repeat[1])
-            value_start = repeat.end()
-            i = read_one(value_start)
-            tokens.extend(token_for(value_start, i) for _ in range(count))
-            continue
-        start = i
-        i = read_one(i)
-        tokens.append(token_for(start, i))
     return tokens
 
 
@@ -395,8 +476,16 @@ class Namelist:
         del self.lines[self._line_of(existing)]
         self._reparse()
 
-    def render(self) -> str:
-        return "\n".join(self.lines)
+    def render(self, options: NamelistFormatOptions | None = None) -> str:
+        """
+        Render the group's source lines.
+
+        With ``options`` given, fields are re-indented, cased, and aligned per
+        those options; otherwise the verbatim source lines are returned.
+        """
+        if options is None:
+            return "\n".join(self.lines)
+        return "\n".join(_format_group_lines(self.lines, options))
 
 
 @dataclass
@@ -446,14 +535,44 @@ class NamelistFile:
         path = pathlib.Path(path)
         return cls.parse(path.read_text(), filename=path)
 
-    def render(self) -> str:
-        out: list[str] = []
-        for item in self.items:
-            if isinstance(item, Namelist):
-                out.extend(item.lines)
+    def _render_with_options(self, options: NamelistFormatOptions) -> str:
+        out = []
+        for index, item in enumerate(self.items):
+            is_namelist = isinstance(item, Namelist)
+            if is_namelist:
+                lines = item.render(options).split("\n")
             else:
-                out.extend(item.split("\n"))
+                lines = item.split("\n")
+                after_group = index > 0 and isinstance(self.items[index - 1], Namelist)
+                if options.blank_line_after_group and after_group:
+                    # The single separating blank is re-added below; drop the
+                    # source's own leading blanks so runs collapse to one.
+                    while lines and not lines[0].strip():
+                        lines.pop(0)
+            out.extend(lines)
+            last = index == len(self.items) - 1
+            if options.blank_line_after_group and is_namelist and not last:
+                out.append("")
         return "\n".join(out)
+
+    def render(self, options: NamelistFormatOptions | None = None) -> str:
+        """
+        Render the whole Namelist file.
+
+        Without ``options`` the source is reproduced verbatim. When specified,
+        the output Namelist file will be formatted according to the provided
+        options.
+        """
+        if options is None:
+            out: list[str] = []
+            for item in self.items:
+                if isinstance(item, Namelist):
+                    out.extend(item.lines)
+                else:
+                    out.extend(item.split("\n"))
+            return "\n".join(out)
+
+        return self._render_with_options(options)
 
     @property
     def namelists(self) -> list[Namelist]:
