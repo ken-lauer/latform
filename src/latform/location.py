@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import pathlib
-from dataclasses import dataclass
+from typing import NamedTuple
 
 
-@dataclass(frozen=True, slots=True)
-class Location:
+class Location(NamedTuple):
     filename: pathlib.Path | None = None
     # Internally, 0 indexed.  Inclusive end_column.
     # In repr, 1 indexed as all editors start from line 1, col 1. Inclusive end_column.
