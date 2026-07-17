@@ -89,7 +89,7 @@ All formatting behavior is controlled through the `FormatOptions` dataclass.
 The defaults match the `latform` CLI defaults:
 
 ```python
-from latform.types import FormatOptions
+from latform.types import FormatOptions, NamelistFormatOptions
 
 options = FormatOptions(
     line_length=100,             # target line length
@@ -110,8 +110,34 @@ options = FormatOptions(
     flatten_inline=False,        # inline call:: arguments
     strip_comments=False,        # remove all comments
     newline_at_eof=True,         # ensure trailing newline
+    namelist=NamelistFormatOptions(),  # tao.init / namelist formatting (see below)
 )
 ```
+
+### NamelistFormatOptions
+
+Formatting of Fortran-namelist files (`*.init` / `*.nml`, e.g. a Tao `tao.init`)
+is controlled by the nested `FormatOptions.namelist` dataclass. It applies only
+to the field section between a `&name` opener and its `/` terminator; values are
+never modified.
+
+```python
+from latform.types import NamelistFormatOptions
+
+namelist = NamelistFormatOptions(
+    indent_size=2,               # spaces per field indent
+    indent_char=" ",             # indentation character
+    blank_line_after_group=True, # one blank line after each group's "/"
+    field_case="lower",          # field names: "upper", "lower", "same"
+    align_equals=False,          # line up "=" within a run of fields
+    align_comments=True,         # line up trailing "!" comments
+)
+```
+
+Alignment is scoped to contiguous runs of fields (it resets at blank lines).
+Rendering with these options is opt-in: `Namelist.render()` /
+`NamelistFile.render()` reproduce the source verbatim when passed `None`, and
+apply this formatting when given a `NamelistFormatOptions`.
 
 ## Statement Types
 
