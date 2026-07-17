@@ -656,7 +656,6 @@ class Files:
     # When the top files were derived from a Tao ``tao.init`` file, the parsed
     # namelist model and its path are retained here for callers (e.g. templating).
     tao_init: TaoInit | None = None
-    tao_init_path: pathlib.Path | None = None
 
     @classmethod
     def from_tao_init(cls, path: pathlib.Path | str) -> "Files":
@@ -669,7 +668,7 @@ class Files:
         path = pathlib.Path(path)
         tao_init = TaoInit.from_file(path)
         top_files = _resolve_lattice_paths(tao_init.lattice_files, path.parent)
-        return cls(top_files=top_files, tao_init=tao_init, tao_init_path=path.resolve())
+        return cls(top_files=top_files, tao_init=tao_init)
 
     @property
     def main(self) -> pathlib.Path:
@@ -1013,7 +1012,6 @@ class MemoryFiles(Files):
             top_files=top_files,
             initial_contents=initial,
             tao_init=tao_init,
-            tao_init_path=tao_path,
         )
 
     @classmethod

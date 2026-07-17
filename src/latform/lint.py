@@ -640,7 +640,7 @@ def lint_files(
             yield fn, lint
 
     if files_obj.tao_init:
-        init_path = files_obj.tao_init_path or pathlib.Path("<tao.init>")
+        init_path = files_obj.tao_init.filename or pathlib.Path("<tao.init>")
         for lint in lint_datums(files_obj, named):
             yield (init_path, lint)
 
