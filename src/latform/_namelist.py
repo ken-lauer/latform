@@ -10,16 +10,18 @@ from __future__ import annotations
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from .location import Location
 from .token import Token
 
 __all__ = [
+    "Assignment",
     "KeyComponent",
     "KeyPath",
-    "Assignment",
     "Namelist",
+    "NamelistArrayEntry",
+    "NamelistArrayGroup",
     "NamelistFile",
     "is_namelist_file",
     "split_values",
@@ -463,3 +465,107 @@ class NamelistFile:
         for key, value in assignments.items():
             target.set(key, value)
         return target
+
+
+@dataclass
+class NamelistArrayEntry:
+    """
+    One indexed entry of a namelist array-of-derived-type.
+
+    Tao packs an array such as ``datum`` or ``var`` two ways, and both are
+    merged here:
+
+    * anonymously/positionally --- ``datum(1) = 'orbit.x' '' '' 'END\\2' ...``,
+      whose values fill :data:`FIELDS` in declaration order;
+    * by component --- ``datum(1)%ele_name = 'END\\2'``.
+
+    An explicit component takes precedence over the same positional slot.
+
+    Attributes
+    ----------
+    index : int or None
+        The ``i`` in ``name(i)``. ``0`` is the conventional slot Tao reads for
+        ``SEARCH:``/``SAME:`` element specifications; ``None`` for a
+        non-integer subscript (e.g. a range).
+    positional : list[Token]
+        Values from an anonymous ``name(i) = ...`` assignment, in field order.
+    components : dict[str, Token]
+        Values from ``name(i)%field = ...`` assignments, keyed by field name.
+    comment : str
+        Trailing comment on the anonymous assignment, if any.
+    """
+
+    #: Component names, in declaration order, that a positional assignment fills.
+    FIELDS: ClassVar[tuple[str, ...]] = ()
+
+    index: int | None
+    positional: list[Token] = field(default_factory=list)
+    components: dict[str, Token] = field(default_factory=dict)
+    comment: str = ""
+
+    def get(self, name: str) -> Token | None:
+        """The raw (quoted, if a string) value token for ``name``, or ``None``."""
+        name = name.lower()
+        if name in self.components:
+            return self.components[name]
+        if name in self.FIELDS:
+            position = self.FIELDS.index(name)
+            if position < len(self.positional):
+                return self.positional[position]
+        return None
+
+    def value(self, name: str) -> Token | None:
+        """
+        The value token for ``name``, unquoted.
+
+        ``None`` if unset; an empty (``''``) token if explicitly blank. The
+        returned token keeps its source `Location`.
+        """
+        token = self.get(name)
+        return token.strip().remove_quotes() if token is not None else None
+
+
+@dataclass
+class NamelistArrayGroup:
+    """
+    Base for a namelist group that carries an indexed array of derived types.
+
+    Subclasses wrap a single `latform._namelist.Namelist` (e.g. a
+    ``&tao_d1_data`` or ``&tao_var`` block), exposing its scalar settings and
+    the parsed array entries.
+    """
+
+    namelist: Namelist
+
+    def _scalar(self, key: str) -> Token | None:
+        assignment = self.namelist.get(key)
+        return assignment.value.strip().remove_quotes() if assignment is not None else None
+
+    def _entries(self, array_name: str, entry_cls: type[NamelistArrayEntry]) -> list:
+        """Parse ``array_name(i)`` positional/component assignments into entries."""
+        array_name = array_name.lower()
+        by_index: dict[object, NamelistArrayEntry] = {}
+
+        def entry_for(component) -> NamelistArrayEntry:
+            key = component.index if component.index is not None else component.index_text
+            existing = by_index.get(key)
+            if existing is None:
+                existing = entry_cls(index=component.index)
+                by_index[key] = existing
+            return existing
+
+        for assignment in self.namelist.assignments:
+            path = assignment.path
+            if path.names[0] != array_name:
+                continue
+            entry = entry_for(path.components[0])
+            if len(path.components) == 1:
+                entry.positional = split_values(assignment.value)
+                entry.comment = assignment.comment
+            else:
+                entry.components[path.names[1]] = assignment.value
+
+        def sort_key(key: object) -> tuple[int, object]:
+            return (0, key) if isinstance(key, int) else (1, str(key))
+
+        return [by_index[key] for key in sorted(by_index, key=sort_key)]

@@ -1008,6 +1008,7 @@ class MemoryFiles(Files):
             _resolve_lattice_paths([key], base)[0]: text
             for key, text in (lattice_contents or {}).items()
         }
+        tao_init.load_sources(base=base, reader=initial.get)
         return cls(
             top_files=top_files,
             initial_contents=initial,

@@ -320,6 +320,126 @@ def test_no_d1_data():
     assert TaoInit.from_file(PROJ_INIT).d1_data == []
 
 
+def test_datum_value_token_keeps_location():
+    source = "&tao_d1_data\n  datum(1) = 'orbit.x' '' '' 'END\\2' 'target'\n/"
+    tao = TaoInit.parse(source)
+    (datum,) = tao.d1_data[0].datums
+    ele = datum.ele_name
+    assert isinstance(ele, Token)
+    assert ele == "END\\2"
+    # The unquoted token still carries a source location pointing at the field.
+    assert ele.loc.get_string(source) == "'END\\2'"
+
+
+def test_variables_parsed():
+    tao = TaoInit.parse(
+        "&tao_var\n"
+        "  v1_var%name = 'quad_k1'\n"
+        "  default_attribute = 'k1'\n"
+        "  var(1) = 'Q1' 'k1' '' 1e2 1e-4\n"
+        "  var(2)%ele_name = 'Q2'\n"
+        "/\n"
+    )
+    (v1,) = tao.variables
+    assert v1.name == "quad_k1"
+    assert v1.default_attribute == "k1"
+    variables = v1.variables
+    assert [v.index for v in variables] == [1, 2]
+    assert variables[0].ele_name == "Q1"
+    assert variables[0].attribute == "k1"
+    assert variables[0].weight == "1e2"
+    assert variables[0].step == "1e-4"
+    assert variables[1].ele_name == "Q2"
+
+
+def test_tao_start_file_properties():
+    tao = TaoInit.parse(
+        "&tao_start\n"
+        "  n_universes = 1\n"
+        "  plot_file    = '$KYBER/tao_plot.init '\n"
+        "  data_file = 'xA.dat.bmad'\n"
+        "  var_file = 'xA.var.bmad'\n"
+        "/\n"
+    )
+    assert tao.data_file == "xA.dat.bmad"
+    assert tao.var_file == "xA.var.bmad"
+    assert tao.n_universes == "1"
+    assert tao.beam_file is None
+    # Note the intentional space suffix:
+    assert tao.plot_file == "$KYBER/tao_plot.init "
+
+
+def test_source_for_falls_back_to_self():
+    tao = TaoInit.parse(
+        "&tao_d1_data\n  d1_data%name = 'x'\n  datum(1) = 'orbit.x' '' '' 'END' 'target'\n/\n"
+    )
+    # No &tao_start data_file → the category is read from the tao.init itself.
+    assert tao._source_for("tao_d1_data") is tao
+    (d1,) = tao.d1_data
+    assert d1.name == "x"
+
+
+def test_load_sources_reads_split_data_and_vars(tmp_path):
+    (tmp_path / "d.dat").write_text(
+        "&tao_d1_data\n  d1_data%name = 'x'\n  datum(1) = 'orbit.x' '' '' 'END' 'target' 0 1e1\n/\n"
+    )
+    (tmp_path / "v.var").write_text(
+        "&tao_var\n  v1_var%name = 'q'\n  var(1) = 'Q1' 'k1' '' 1e2 1e-4\n/\n"
+    )
+    tao = TaoInit.parse(
+        "&tao_start\n  data_file = 'd.dat'\n  var_file = 'v.var'\n/\n",
+        filename=tmp_path / "tao.init",
+    )
+    tao.load_sources()
+
+    assert tao._source_for("tao_d1_data") is not tao
+    (d1,) = tao.d1_data
+    assert d1.name == "x"
+    assert d1.datums[0].ele_name == "END"
+
+    (v1,) = tao.variables
+    assert v1.name == "q"
+    assert v1.variables[0].ele_name == "Q1"
+    assert v1.variables[0].attribute == "k1"
+
+
+def test_load_sources_skips_missing_aux_file(tmp_path):
+    tao = TaoInit.parse(
+        "&tao_start\n  data_file = 'nope.dat'\n/\n",
+        filename=tmp_path / "tao.init",
+    )
+    tao.load_sources()
+    # A named-but-missing file is skipped; the category falls back to self.
+    assert "data_file" not in tao.sources
+    assert tao._source_for("tao_d1_data") is tao
+    assert tao.d1_data == []
+
+
+def test_memory_files_split_data_file():
+    contents = (
+        "&tao_design_lattice\n  design_lattice(1)%file = 'mem.lat.bmad'\n/\n"
+        "&tao_start\n  data_file = 'd.dat.bmad'\n/\n"
+    )
+    root = FILES / "virtual" / "tao.init"
+    files = MemoryFiles.from_tao_init_contents(
+        contents,
+        root,
+        lattice_contents={
+            "mem.lat.bmad": "M_Q: quadrupole, l = 1\nml: line = (M_Q)\nuse, ml\n",
+            "d.dat.bmad": (
+                "&tao_d1_data\n"
+                "  d1_data%name = 'x'\n"
+                "  datum(1) = 'orbit.x' '' '' 'M_Q' 'target'\n"
+                "/\n"
+            ),
+        },
+    )
+    assert files.tao_init is not None
+    (d1,) = files.tao_init.d1_data
+    assert d1.name == "x"
+    assert d1.datums[0].ele_name == "M_Q"
+
+
 def test_blank_tao_init():
     init = TaoInit()
     assert init.lattice_files == []
