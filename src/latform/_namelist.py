@@ -68,18 +68,18 @@ _RE_VALUE_FIELD = re.compile(
 _INLINE_COMMENT_GAP = 2
 
 
-def _find_comment_index(line: str, comment_char: str = "!", escape_char: str = "\\") -> int | None:
+def _find_comment_index(line: str) -> int | None:
     """
     Index of the comment character that starts a trailing comment, or ``None``.
 
     Quoted strings and escaped characters are respected, so a ``comment_char``
     inside quotes does not start a comment.
     """
-    first = line.find(comment_char)
+    first = line.find("!")
     if first < 0:
         return None
     prefix = line[:first]
-    if "'" not in prefix and '"' not in prefix and escape_char not in prefix:
+    if "'" not in prefix and '"' not in prefix:
         return first
 
     # (ref cppbmad codegen.struct_parser.util.split_comment)
@@ -90,25 +90,23 @@ def _find_comment_index(line: str, comment_char: str = "!", escape_char: str = "
     for i, char in enumerate(line):
         if escape_next:
             escape_next = False
-        elif char == escape_char:
-            escape_next = True
         elif char == "'" and not in_double_quote:
             in_single_quote = not in_single_quote
         elif char == '"' and not in_single_quote:
             in_double_quote = not in_double_quote
-        elif char == comment_char and not in_single_quote and not in_double_quote:
+        elif char == "!" and not in_single_quote and not in_double_quote:
             return i
     return None
 
 
-def _split_comment(line: str, comment_char: str = "!", escape_char: str = "\\") -> tuple[str, str]:
+def _split_comment(line: str) -> tuple[str, str]:
     """
     Split a line into its code part and its comment part (comment ``!`` dropped).
 
     Quoted strings and escape characters are respected. Neither part is
     stripped; the comment part is empty when the line has no comment.
     """
-    idx = _find_comment_index(line, comment_char, escape_char)
+    idx = _find_comment_index(line)
     if idx is None:
         return line, ""
     return line[:idx], line[idx + 1 :]
