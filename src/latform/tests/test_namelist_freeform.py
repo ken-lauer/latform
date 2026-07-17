@@ -32,6 +32,42 @@ def test_find_terminator(line: str, expected: int | None):
     assert _find_terminator(line) == expected
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "  datum(1) = 'orbit.x' '' '' 'END\\2' 'target' 0 1e1",
+        "  var(1 : 6)%ele_name = 'a', 'b'",
+        "  datum (1) = 'x'",
+        "  a % b = 1",
+        "  a %b = 1  c% d = 2",
+        "  x = 6*'beginning' 3*0 2*'a','b'",
+        "  x = a(1/2) / ignored",
+        "  s = 'it''s' \"d\"\"q\" 'unterminated",
+        "  file='sub/c.lat.bmad'",
+        "&g x = 1 /",
+        "  x = 1, 2,",
+        "      3",
+        "  a*'q' 12* 'q' -1.5e-3",
+        "",
+        "   ",
+        "  x = (1.0, 2.0)",
+    ],
+)
+def test_lex_line_matches_scan_line(code: str):
+    from .._namelist import _lex_line, _scan_line
+
+    assert _lex_line(code) == list(_scan_line(code))
+
+
+def test_lex_line_matches_scan_line_on_corpus():
+    from .._namelist import _lex_line, _scan_line, _split_comment
+
+    for path in FILES.glob("**/*.init"):
+        for line in path.read_text().splitlines():
+            code, _ = _split_comment(line)
+            assert _lex_line(code) == list(_scan_line(code)), line
+
+
 def test_scan_multiple_pairs_per_line():
     scan = _scan_namelist(["&g", "  y = 2  z = 3", "/"])
     assert [(a.key, str(a.value)) for a in scan.assignments] == [("y", "2"), ("z", "3")]

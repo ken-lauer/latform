@@ -10,7 +10,8 @@ from __future__ import annotations
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, cast
+from functools import cached_property
+from typing import TYPE_CHECKING, ClassVar, NamedTuple, cast
 
 from .location import Location
 from .token import Token
@@ -326,8 +327,7 @@ _RE_REPEAT_PREFIX = re.compile(r"\d+\*")
 _RE_PLAIN_FIELD = re.compile(r"""[^ \t,=/()'"]+""")
 
 
-@dataclass(frozen=True, slots=True)
-class _ScanToken:
+class _ScanToken(NamedTuple):
     """One lexical token of a group's comment-stripped source lines."""
 
     kind: Literal["open", "eq", "slash", "field"]
@@ -427,6 +427,56 @@ def _scan_line(code: str) -> Iterator[tuple[str, int, int]]:
             i = end
 
 
+# One coarse lexical token: a quoted string, a bare run, or an '='/'/'.
+# Separators fall between matches. This deliberately ignores the stateful
+# rules (paren depth, designator blanks, repeat merges); `_lex_line` detects
+# those cases and defers to `_scan_line`.
+_RE_LEX = re.compile(r"""'(?:''|[^'])*'?|"(?:""|[^"])*"?|[^ \t,=/'"]+|[=/]""")
+
+
+def _lex_line(code: str) -> list[tuple[str, int, int]]:
+    """
+    ``(kind, start, end)`` lexical tokens of one comment-stripped line.
+
+    A regex pass covers the common shapes; a line whose bare tokens show signs
+    of the stateful constructs (a blank inside ``(...)`` or around ``%``) is
+    re-lexed with the character scanner, so the result is always identical to
+    ``_scan_line``'s.
+    """
+    tokens: list[tuple[str, int, int]] = []
+    matches = list(_RE_LEX.finditer(code))
+    index = 0
+    total = len(matches)
+    while index < total:
+        match = matches[index]
+        text = match[0]
+        first = text[0]
+        if first == "=":
+            tokens.append(("eq", match.start(), match.end()))
+        elif first == "/":
+            tokens.append(("slash", match.start(), match.end()))
+            return tokens
+        elif first in "'\"":
+            tokens.append(("field", match.start(), match.end()))
+        else:
+            # Signs that the stateful rules apply: a token split inside
+            # parens, or a designator blank ("datum (1)", "a % b").
+            if first in "(%" or text[-1] == "%":
+                return list(_scan_line(code))
+            if "(" in text and text.count("(") != text.count(")"):
+                return list(_scan_line(code))
+            end = match.end()
+            if text[-1] == "*" and _RE_REPEAT_PREFIX.fullmatch(text):
+                # Repeat count directly followed by a quote: 6*'x' is one field.
+                nxt = matches[index + 1] if index + 1 < total else None
+                if nxt is not None and nxt.start() == end and nxt[0][0] in "'\"":
+                    end = nxt.end()
+                    index += 1
+            tokens.append(("field", match.start(), end))
+        index += 1
+    return tokens
+
+
 def _find_terminator(line: str) -> int | None:
     """Column of a group-terminating ``/`` on this line, or ``None``.
 
@@ -436,7 +486,7 @@ def _find_terminator(line: str) -> int | None:
     if "/" not in line:
         return None
     code, _ = _split_comment(line)
-    for kind, start, _end in _scan_line(code):
+    for kind, start, _end in _lex_line(code):
         if kind == "slash":
             return start
     return None
@@ -452,7 +502,7 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
     first = True
     for index, line in enumerate(lines):
         code, _ = _split_comment(line)
-        for kind, start, end in _scan_line(code):
+        for kind, start, end in _lex_line(code):
             if kind == "field" and first and code[start] == "&":
                 kind = "open"
             first = False
@@ -470,30 +520,6 @@ def _build_assignment(
     base_line: int,
 ) -> Assignment:
     """Assemble an `Assignment` from its key/``=``/value tokens."""
-    values: list[Token] = []
-    for token in fields:
-        text = token.text
-        if "*" not in text:  # no repeat-count prefix to strip (the common case)
-            start, end, count = 0, len(text), 1
-        else:
-            match = _RE_VALUE_FIELD.fullmatch(text)
-            if match is None:
-                start, end, count = 0, len(text), 1
-            else:
-                start, end = match.span("value")
-                count = int(match["count"]) if match["count"] else 1
-        loc = Location(
-            filename=filename,
-            line=base_line + token.line,
-            column=token.column + start,
-            end_line=base_line + token.line,
-            end_column=token.column + end,
-        )
-        if count == 1:
-            values.append(Token(text[start:end], loc=loc))
-        else:
-            values.extend(Token(text[start:end], loc=loc) for _ in range(count))
-
     if fields:
         first, last = fields[0], fields[-1]
         if first.line == last.line:
@@ -526,10 +552,12 @@ def _build_assignment(
         )
         value = Token("", loc=loc)
 
+    key_text = key.text
+    if " " in key_text or "\t" in key_text:
+        key_text = _RE_NORMALIZE_KEY.sub("", key_text)
     return Assignment(
-        key=_RE_NORMALIZE_KEY.sub("", key.text),
+        key=key_text,
         value=value,
-        values=values,
         key_loc=Location(
             filename=filename,
             line=base_line + key.line,
@@ -537,6 +565,8 @@ def _build_assignment(
             end_line=base_line + key.line,
             end_column=key.end_column,
         ),
+        field_tokens=tuple(fields),
+        base_line=base_line,
     )
 
 
@@ -722,7 +752,8 @@ class Assignment:
         ``str(value) == value.loc.get_string(source)`` exactly.
     values : list[Token]
         The individual value fields with per-field source locations; Fortran
-        repeat counts (``3*0``) are expanded.
+        repeat counts (``3*0``) are expanded. Derived lazily from the scanned
+        field tokens.
     comment : str
         Trailing ``!`` comments on the lines the assignment spans.
     key_loc : Location or None
@@ -731,9 +762,41 @@ class Assignment:
 
     key: str
     value: Token
-    values: list[Token] = field(default_factory=list)
     comment: str = ""
     key_loc: Location | None = None
+    # Raw value-field tokens (group-relative lines) that back ``values``.
+    field_tokens: tuple[_ScanToken, ...] = field(default=(), repr=False)
+    base_line: int = 0
+
+    @cached_property
+    def values(self) -> list[Token]:
+        """The value fields, repeat counts expanded, with per-field locations."""
+        filename = self.value.loc.filename
+        base_line = self.base_line
+        values: list[Token] = []
+        for token in self.field_tokens:
+            text = token.text
+            if "*" not in text:  # no repeat-count prefix to strip (the common case)
+                start, end, count = 0, len(text), 1
+            else:
+                match = _RE_VALUE_FIELD.fullmatch(text)
+                if match is None:
+                    start, end, count = 0, len(text), 1
+                else:
+                    start, end = match.span("value")
+                    count = int(match["count"]) if match["count"] else 1
+            loc = Location(
+                filename=filename,
+                line=base_line + token.line,
+                column=token.column + start,
+                end_line=base_line + token.line,
+                end_column=token.column + end,
+            )
+            if count == 1:
+                values.append(Token(text[start:end], loc=loc))
+            else:
+                values.extend(Token(text[start:end], loc=loc) for _ in range(count))
+        return values
 
     @property
     def loc(self) -> Location:
@@ -806,7 +869,8 @@ class Namelist:
         """Return the assignment matching ``key`` (case/space-insensitive)."""
         target = _normalize_key(key)
         for assignment in self.assignments:
-            if _normalize_key(assignment.key) == target:
+            # Assignment keys are whitespace-normalized at parse time.
+            if assignment.key.lower() == target:
                 return assignment
         return None
 
