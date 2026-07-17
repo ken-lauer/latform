@@ -553,7 +553,7 @@ def _split_element_name(name):
     if not name:
         return
 
-    name = name.split("#", 1)[0]
+    name = name.split("##", 1)[0]
 
     for part in name.split("\\"):
         try:
