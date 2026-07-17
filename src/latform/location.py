@@ -4,7 +4,7 @@ import pathlib
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Location:
     filename: pathlib.Path | None = None
     # Internally, 0 indexed.  Inclusive end_column.
