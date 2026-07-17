@@ -74,6 +74,13 @@ def _find_comment_index(line: str, comment_char: str = "!", escape_char: str = "
     Quoted strings and escaped characters are respected, so a ``comment_char``
     inside quotes does not start a comment.
     """
+    first = line.find(comment_char)
+    if first < 0:
+        return None
+    prefix = line[:first]
+    if "'" not in prefix and '"' not in prefix and escape_char not in prefix:
+        return first
+
     # (ref cppbmad codegen.struct_parser.util.split_comment)
     in_single_quote = False
     in_double_quote = False
@@ -314,6 +321,9 @@ def split_values(value: Token) -> list[Token]:
 
 
 _RE_REPEAT_PREFIX = re.compile(r"\d+\*")
+# Fast path for `_read_field`: a bare run with none of the characters that
+# need the stateful scan (separators, '=', '/', parens, quotes).
+_RE_PLAIN_FIELD = re.compile(r"""[^ \t,=/()'"]+""")
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,6 +364,23 @@ def _read_field(code: str, start: int) -> int:
     """
     if code[start] in "'\"":
         return _read_quoted(code, start)
+
+    match = _RE_PLAIN_FIELD.match(code, start)
+    if match is not None:
+        end = match.end()
+        follow = code[end : end + 1]
+        if follow in ",=/" or not follow:
+            return end
+        if follow in " \t" and code[end - 1] != "%":
+            # Only a designator continuation ("name (1)", "a % b") reads past
+            # the blank; otherwise the token ends here.
+            j = end + 1
+            while j < len(code) and code[j] in " \t":
+                j += 1
+            if j >= len(code) or code[j] not in "(%":
+                return end
+        # Parens, quotes, or a designator continuation: take the stateful scan.
+
     depth = 0
     i = start
     while i < len(code):
@@ -406,6 +433,8 @@ def _find_terminator(line: str) -> int | None:
     Comment- and quote-aware: a ``/`` inside a string or after a ``!`` does
     not terminate.
     """
+    if "/" not in line:
+        return None
     code, _ = _split_comment(line)
     for kind, start, _end in _scan_line(code):
         if kind == "slash":
@@ -443,12 +472,16 @@ def _build_assignment(
     """Assemble an `Assignment` from its key/``=``/value tokens."""
     values: list[Token] = []
     for token in fields:
-        match = _RE_VALUE_FIELD.fullmatch(token.text)
-        if match is None:
-            start, end, count = 0, len(token.text), 1
+        text = token.text
+        if "*" not in text:  # no repeat-count prefix to strip (the common case)
+            start, end, count = 0, len(text), 1
         else:
-            start, end = match.span("value")
-            count = int(match["count"]) if match["count"] else 1
+            match = _RE_VALUE_FIELD.fullmatch(text)
+            if match is None:
+                start, end, count = 0, len(text), 1
+            else:
+                start, end = match.span("value")
+                count = int(match["count"]) if match["count"] else 1
         loc = Location(
             filename=filename,
             line=base_line + token.line,
@@ -456,16 +489,23 @@ def _build_assignment(
             end_line=base_line + token.line,
             end_column=token.column + end,
         )
-        values.extend(Token(token.text[start:end], loc=loc) for _ in range(count))
+        if count == 1:
+            values.append(Token(text[start:end], loc=loc))
+        else:
+            values.extend(Token(text[start:end], loc=loc) for _ in range(count))
 
     if fields:
         first, last = fields[0], fields[-1]
-        parts: list[str] = []
-        for index in dict.fromkeys(token.line for token in fields):
-            row = [token for token in fields if token.line == index]
-            parts.append(lines[index][row[0].column : row[-1].end_column])
+        if first.line == last.line:
+            text = lines[first.line][first.column : last.end_column]
+        else:
+            parts: list[str] = []
+            for index in dict.fromkeys(token.line for token in fields):
+                row = [token for token in fields if token.line == index]
+                parts.append(lines[index][row[0].column : row[-1].end_column])
+            text = "\n".join(parts)
         value = Token(
-            "\n".join(parts),
+            text,
             loc=Location(
                 filename=filename,
                 line=base_line + first.line,
@@ -550,17 +590,26 @@ def _scan_namelist(
             break
     finalize()
 
-    for index, line in enumerate(lines):
-        _, comment = _split_comment(line)
-        comment = comment.strip()
-        if not comment:
-            continue
-        absolute = base_line + index
-        for assignment in reversed(assignments):
-            span = assignment.span
-            if span.line <= absolute <= span.end_line:
-                assignment.comment = f"{assignment.comment} {comment}".strip()
-                break
+    if assignments:
+        # (start line, end line) span bounds, avoiding Location construction.
+        bounds = [
+            (a.key_loc.line if a.key_loc is not None else a.value.loc.line, a.value.loc.end_line)
+            for a in assignments
+        ]
+        for index, line in enumerate(lines):
+            if "!" not in line:
+                continue
+            _, comment = _split_comment(line)
+            comment = comment.strip()
+            if not comment:
+                continue
+            absolute = base_line + index
+            for position in range(len(assignments) - 1, -1, -1):
+                start, end = bounds[position]
+                if start <= absolute <= end:
+                    assignment = assignments[position]
+                    assignment.comment = f"{assignment.comment} {comment}".strip()
+                    break
 
     return _GroupScan(assignments=assignments, terminator=terminator)
 
