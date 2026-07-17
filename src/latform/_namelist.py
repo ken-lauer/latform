@@ -17,6 +17,9 @@ from .token import Token
 from .types import NamelistFormatOptions
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from typing import Literal
+
     try:
         from typing import Self
     except ImportError:
@@ -48,11 +51,13 @@ _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")
 _RE_NORMALIZE_KEY = re.compile(r"\s+")
 _RE_INT = re.compile(r"-?\d+")
 _RE_SLICE = re.compile(r"(-?\d+):(-?\d+)(?::(-?\d+))?")
+_RE_OPEN_SLICE = re.compile(r"(-?\d+):")
 # A namelist value field is a quoted string or a bare token; fields are
-# separated by whitespace/commas, which fall between the matches.
-_SINGLE_QUOTED = r"'[^']*'?"  # trailing '? tolerates a missing closing quote
-_DOUBLE_QUOTED = r'"[^"]*"?'
-_BARE_TOKEN = r"""[^ \t,'"]+"""  # runs until a separator or quote
+# separated by whitespace/commas, which fall between the matches. Fortran
+# escapes a quote inside a string by doubling it ('it''s').
+_SINGLE_QUOTED = r"'(?:''|[^'])*'?"  # trailing '? tolerates a missing closing quote
+_DOUBLE_QUOTED = r'"(?:""|[^"])*"?'
+_BARE_TOKEN = r"""[^ \t\r\n,'"]+"""  # runs until a separator or quote
 _REPEAT_COUNT = r"(?:(?P<count>\d+)\*)?"  # optional Fortran repeat: 3*0 -> 0 0 0
 _RE_VALUE_FIELD = re.compile(
     rf"{_REPEAT_COUNT}(?P<value>{_SINGLE_QUOTED}|{_DOUBLE_QUOTED}|{_BARE_TOKEN})"
@@ -129,81 +134,147 @@ def _normalize_key(key: str) -> str:
 
 
 @dataclass(slots=True)
-class _FieldLine:
-    """A ``key = value  ! comment`` field line awaiting run-level alignment."""
+class _FieldRecord:
+    """A ``key = value`` record being formatted, possibly spanning lines."""
 
     key: str
-    value: str
-    comment: str
+    chunks: list[str]  # value text per rendered row; chunks[0] follows "key = "
+    comments: list[str]  # trailing comment per rendered row ("" when none)
     key_width: int = 0
     comment_column: int = 0
 
-    def code(self, indent: str) -> str:
-        """The ``indent + key = value`` part of the line (no trailing comment)."""
-        return f"{indent}{self.key.ljust(self.key_width)} = {self.value}"
+    def code_lines(self, indent: str) -> list[str]:
+        """The rendered rows, without trailing comments."""
+        first = f"{indent}{self.key.ljust(self.key_width)} = {self.chunks[0]}"
+        # Continuation values align under the first value character.
+        continuation = " " * (len(indent) + max(len(self.key), self.key_width) + 3)
+        return [first, *(f"{continuation}{chunk}" for chunk in self.chunks[1:])]
 
-    def render(self, indent: str) -> str:
-        code = self.code(indent)
-        if not self.comment:
+    def render_row(self, index: int, indent: str) -> str:
+        code = self.code_lines(indent)[index]
+        comment = self.comments[index]
+        if not comment:
             return code.rstrip()
         padded = code.ljust(self.comment_column) if self.comment_column else f"{code} "
-        return f"{padded}{self.comment}"
-
-
-def _parse_group_line(line: str, indent: str, options: NamelistFormatOptions) -> str | _FieldLine:
-    """A finished output line, or a `_FieldLine` still awaiting alignment."""
-    stripped = line.strip()
-    if not stripped:
-        return ""
-    if stripped[0] in "&/":  # opener and terminator stay at column zero
-        return stripped
-    if stripped[0] != "!":
-        code, comment = _split_field_comment(line)
-        key_part, sep, value_part = code.partition("=")
-        key = _RE_NORMALIZE_KEY.sub("", key_part)
-        if sep and key:
-            key = _apply_field_case(key, options.field_case)
-            return _FieldLine(key, value_part.strip(), comment)
-    # Comment-only and unparsable lines are indented as-is.
-    return f"{indent}{stripped}"
+        return f"{padded}{comment}"
 
 
 def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> list[str]:
     """
     Format the source lines of one ``&name ... /`` group.
 
-    ``key = value`` fields are re-indented, their names cased per
-    ``options.field_case``, and the spacing around ``=`` normalized. Within each
-    blank-line-delimited run of fields, the ``=`` (when ``align_equals``) and the
-    trailing ``!`` comments (when ``align_comments``) are padded into columns.
-    The opener and terminator stay at column zero, blank lines stay empty, and
-    comment-only lines are indented but do not participate in a run's alignment.
+    ``key = value`` records are re-indented, their names cased per
+    ``options.field_case``, and the spacing around ``=`` normalized. A record
+    whose value continues across lines keeps its wrapping, continuation values
+    aligned under the first value character; several records sharing one source
+    line are split onto separate lines. Within each blank-line-delimited run of
+    records, the ``=`` (when ``align_equals``) and the trailing ``!`` comments
+    (when ``align_comments``) are padded into columns. The opener and
+    terminator stay at column zero, blank lines stay empty, and comment-only
+    lines are indented but do not participate in a run's alignment.
     """
     indent = options.indent_char * options.indent_size
-    parsed = [_parse_group_line(line, indent, options) for line in lines]
+    scan = _scan_namelist(lines)
 
-    # A run is a maximal group of field lines uninterrupted by a blank line;
+    # anchors: physical line -> rows to emit there; line_rows: physical line ->
+    # the (record, row) owning that line's trailing comment (last record wins);
+    # consumed: lines whose code is re-rendered through a record.
+    anchors: dict[int, list[tuple[_FieldRecord, int]]] = {}
+    line_rows: dict[int, tuple[_FieldRecord, int]] = {}
+    consumed: set[int] = set()
+    records: list[_FieldRecord] = []
+
+    for assignment in scan.assignments:
+        start = assignment.span.line  # base_line=0: locations are line indices
+        # ``str(value)`` is the raw field-to-field slice per physical line
+        # (including any repeat-count prefix), joined with newlines.
+        chunk_lines = sorted({token.loc.line for token in assignment.values})
+        chunks = []
+        for part, ln in zip(str(assignment.value).split("\n"), chunk_lines):
+            if ln != chunk_lines[-1]:
+                # Keep a trailing comma marking the continuation.
+                end = max(t.loc.end_column for t in assignment.values if t.loc.line == ln)
+                rest = lines[ln][end:].lstrip(" \t")
+                if rest.startswith(","):
+                    part += ","
+            chunks.append(part)
+        record = _FieldRecord(
+            key=_apply_field_case(assignment.key, options.field_case),
+            chunks=chunks or [""],
+            comments=[""] * max(len(chunks), 1),
+        )
+        records.append(record)
+        anchors.setdefault(start, []).append((record, 0))
+        line_rows[start] = (record, 0)
+        for row, ln in enumerate(chunk_lines):
+            if row > 0:
+                anchors.setdefault(ln, []).append((record, row))
+            line_rows[ln] = (record, row)
+        consumed.update(range(assignment.span.line, assignment.span.end_line + 1))
+
+    for index, line in enumerate(lines):
+        _, comment = _split_field_comment(line)
+        comment = comment.strip()
+        if not comment:
+            continue
+        owner = line_rows.get(index)
+        if owner is not None:
+            record, row = owner
+            existing = record.comments[row]
+            record.comments[row] = f"{existing} {comment}".strip() if existing else comment
+
+    # A run is a maximal group of records uninterrupted by a blank line;
     # comment-only and unparsable lines neither join nor break it.
-    runs: list[list[_FieldLine]] = [[]]
-    for item in parsed:
-        if isinstance(item, _FieldLine):
-            runs[-1].append(item)
-        elif not item:
+    runs: list[list[_FieldRecord]] = [[]]
+    for index, line in enumerate(lines):
+        if index in anchors:
+            runs[-1].extend(record for record, row in anchors[index] if row == 0)
+        elif not line.strip() and index not in consumed:
             runs.append([])
 
     for run in runs:
         if not run:
             continue
         if options.align_equals:
-            width = max(len(f.key) for f in run)
-            for f in run:
-                f.key_width = width
+            width = max(len(r.key) for r in run)
+            for r in run:
+                r.key_width = width
         if options.align_comments:
-            column = max(len(f.code(indent)) for f in run) + _INLINE_COMMENT_GAP
-            for f in run:
-                f.comment_column = column
+            column = (
+                max(len(code) for r in run for code in r.code_lines(indent)) + _INLINE_COMMENT_GAP
+            )
+            for r in run:
+                r.comment_column = column
 
-    return [item if isinstance(item, str) else item.render(indent) for item in parsed]
+    terminator = scan.terminator
+    opener = bool(lines) and lines[0].lstrip().startswith("&")
+    opener_text = lines[0].strip() if lines else ""
+    if opener and (0 in anchors or (terminator is not None and terminator[0] == 0)):
+        # Records and/or the terminator share the opener line: keep only &name.
+        match = _RE_GROUP_OPEN.match(lines[0])
+        if match is not None:
+            opener_text = f"&{match.group(1)}"
+
+    out: list[str] = []
+    for index, line in enumerate(lines):
+        if index == 0 and opener:
+            out.append(opener_text)
+        for record, row in anchors.get(index, ()):
+            out.append(record.render_row(row, indent))
+        if terminator is not None and terminator[0] == index:
+            out.append(line[terminator[1] :].rstrip())
+            continue
+        if (index == 0 and opener) or index in anchors:
+            continue
+        stripped = line.strip()
+        if index in consumed:
+            # Comment-only lines inside a record's span keep their place;
+            # blank lines inside one are dropped.
+            if stripped.startswith("!"):
+                out.append(f"{indent}{stripped}")
+            continue
+        out.append("" if not stripped else f"{indent}{stripped}")
+    return out
 
 
 def split_values(value: Token) -> list[Token]:
@@ -216,6 +287,10 @@ def split_values(value: Token) -> list[Token]:
     (including empty ``''``) intact, carrying a source `Location` for each field
     derived from ``value``'s own location. A Fortran repeat count ``r*c`` (e.g.
     ``6*'beginning'`` or ``3*0``) expands to ``r`` copies of the constant.
+
+    ``value`` is assumed to lie on a single source line; for parsed
+    assignments (whose values may continue across lines), `Assignment.values`
+    is authoritative and carries correct per-line locations.
     """
     loc = value.loc
     tokens: list[Token] = []
@@ -236,6 +311,258 @@ def split_values(value: Token) -> list[Token]:
             for _ in range(count)
         )
     return tokens
+
+
+_RE_REPEAT_PREFIX = re.compile(r"\d+\*")
+
+
+@dataclass(frozen=True, slots=True)
+class _ScanToken:
+    """One lexical token of a group's comment-stripped source lines."""
+
+    kind: Literal["open", "eq", "slash", "field"]
+    text: str
+    line: int  # index into the scanned lines, not the source file
+    column: int
+    end_column: int
+
+
+def _read_quoted(code: str, start: int) -> int:
+    """Index one past the quoted string starting at ``code[start]`` (a quote)."""
+    quote = code[start]
+    i = start + 1
+    while i < len(code):
+        if code[i] == quote:
+            if code[i + 1 : i + 2] == quote:  # doubled-quote escape, e.g. 'it''s'
+                i += 2
+                continue
+            return i + 1
+        i += 1
+    return len(code)  # unterminated: runs to the end of the line
+
+
+def _read_field(code: str, start: int) -> int:
+    """
+    Index one past the field token starting at ``start``.
+
+    A quoted string is a single token. A bare token runs until a separator,
+    ``=``, ``/``, or quote at parenthesis depth zero; within ``(...)`` nothing
+    separates, so subscripts like ``datum( 1)`` and ``var(1 : 6)%x`` stay
+    whole. Blanks inside a designator (``datum (1)``, ``a % b``) are stepped
+    over, and a Fortran repeat count directly followed by a quote (``6*'x'``)
+    continues into the string.
+    """
+    if code[start] in "'\"":
+        return _read_quoted(code, start)
+    depth = 0
+    i = start
+    while i < len(code):
+        char = code[i]
+        if depth == 0:
+            if char in " \t":
+                j = i
+                while j < len(code) and code[j] in " \t":
+                    j += 1
+                if j < len(code) and (code[j] in "(%" or code[i - 1] == "%"):
+                    i = j
+                    continue
+                break
+            if char in ",=/":
+                break
+            if char in "'\"":
+                if _RE_REPEAT_PREFIX.fullmatch(code, start, i):
+                    return _read_quoted(code, i)
+                break
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth:
+            depth -= 1
+        i += 1
+    return i
+
+
+def _scan_line(code: str) -> Iterator[tuple[str, int, int]]:
+    """Yield ``(kind, start, end)`` lexical tokens of one comment-stripped line."""
+    i = 0
+    while i < len(code):
+        char = code[i]
+        if char in " \t,":
+            i += 1
+        elif char == "=":
+            yield ("eq", i, i + 1)
+            i += 1
+        elif char == "/":
+            yield ("slash", i, i + 1)
+            return  # the group ends here; the rest of the line is not code
+        else:
+            end = _read_field(code, i)
+            yield ("field", i, end)
+            i = end
+
+
+def _find_terminator(line: str) -> int | None:
+    """Column of a group-terminating ``/`` on this line, or ``None``.
+
+    Comment- and quote-aware: a ``/`` inside a string or after a ``!`` does
+    not terminate.
+    """
+    code, _ = _split_comment(line)
+    for kind, start, _end in _scan_line(code):
+        if kind == "slash":
+            return start
+    return None
+
+
+def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
+    """
+    Lex a group's source lines into `_ScanToken`s.
+
+    Comments are stripped per line. The first token, when it starts with
+    ``&``, is the group opener. Scanning stops at the terminating ``/``.
+    """
+    first = True
+    for index, line in enumerate(lines):
+        code, _ = _split_comment(line)
+        for kind, start, end in _scan_line(code):
+            if kind == "field" and first and code[start] == "&":
+                kind = "open"
+            first = False
+            yield _ScanToken(kind, code[start:end], index, start, end)
+            if kind == "slash":
+                return
+
+
+def _build_assignment(
+    key: _ScanToken,
+    eq: _ScanToken,
+    fields: list[_ScanToken],
+    lines: list[str],
+    filename: pathlib.Path | None,
+    base_line: int,
+) -> Assignment:
+    """Assemble an `Assignment` from its key/``=``/value tokens."""
+    values: list[Token] = []
+    for token in fields:
+        match = _RE_VALUE_FIELD.fullmatch(token.text)
+        if match is None:
+            start, end, count = 0, len(token.text), 1
+        else:
+            start, end = match.span("value")
+            count = int(match["count"]) if match["count"] else 1
+        loc = Location(
+            filename=filename,
+            line=base_line + token.line,
+            column=token.column + start,
+            end_line=base_line + token.line,
+            end_column=token.column + end,
+        )
+        values.extend(Token(token.text[start:end], loc=loc) for _ in range(count))
+
+    if fields:
+        first, last = fields[0], fields[-1]
+        parts: list[str] = []
+        for index in dict.fromkeys(token.line for token in fields):
+            row = [token for token in fields if token.line == index]
+            parts.append(lines[index][row[0].column : row[-1].end_column])
+        value = Token(
+            "\n".join(parts),
+            loc=Location(
+                filename=filename,
+                line=base_line + first.line,
+                column=first.column,
+                end_line=base_line + last.line,
+                end_column=last.end_column,
+            ),
+        )
+    else:
+        # Empty right-hand side (``x =``): a zero-width token just after the '='.
+        line = base_line + eq.line
+        loc = Location(
+            filename=filename,
+            line=line,
+            column=eq.end_column,
+            end_line=line,
+            end_column=eq.end_column,
+        )
+        value = Token("", loc=loc)
+
+    return Assignment(
+        key=_RE_NORMALIZE_KEY.sub("", key.text),
+        value=value,
+        values=values,
+        key_loc=Location(
+            filename=filename,
+            line=base_line + key.line,
+            column=key.column,
+            end_line=base_line + key.line,
+            end_column=key.end_column,
+        ),
+    )
+
+
+@dataclass
+class _GroupScan:
+    """Parsed content of one ``&name ... /`` group's source lines."""
+
+    assignments: list[Assignment]
+    terminator: tuple[int, int] | None  # (line index, column) of the '/'
+
+
+def _scan_namelist(
+    lines: list[str],
+    *,
+    filename: pathlib.Path | None = None,
+    base_line: int = 0,
+) -> _GroupScan:
+    """
+    Parse a group's source lines into `Assignment`s with true source spans.
+
+    Namelist input is free-form: values may continue across lines, several
+    ``key = value`` pairs may share a line, assignments may sit on the
+    ``&name`` opener line, and ``/`` terminates the group anywhere outside a
+    quoted string. Trailing comments attach to the last assignment whose span
+    covers their line.
+    """
+    assignments: list[Assignment] = []
+    pending: list[_ScanToken] = []
+    key: _ScanToken | None = None
+    eq: _ScanToken | None = None
+    terminator: tuple[int, int] | None = None
+
+    def finalize() -> None:
+        if key is not None and eq is not None:
+            assignments.append(_build_assignment(key, eq, pending, lines, filename, base_line))
+        pending.clear()
+
+    for token in _scan_group(lines):
+        if token.kind == "field":
+            pending.append(token)
+        elif token.kind == "eq":
+            # The token just before '=' keys the next assignment; the rest of
+            # the pending fields close out the previous one. A stray '=' (no
+            # preceding token, or a quoted string) is ignored.
+            if pending and pending[-1].text[0] not in "'\"":
+                next_key = pending.pop()
+                finalize()
+                key, eq = next_key, token
+        elif token.kind == "slash":
+            terminator = (token.line, token.column)
+            break
+    finalize()
+
+    for index, line in enumerate(lines):
+        _, comment = _split_comment(line)
+        comment = comment.strip()
+        if not comment:
+            continue
+        absolute = base_line + index
+        for assignment in reversed(assignments):
+            span = assignment.span
+            if span.line <= absolute <= span.end_line:
+                assignment.comment = f"{assignment.comment} {comment}".strip()
+                break
+
+    return _GroupScan(assignments=assignments, terminator=terminator)
 
 
 @dataclass(frozen=True)
@@ -276,6 +603,15 @@ class KeyComponent:
         if step <= 0:
             return None
         return list(range(start, stop + 1, step))
+
+    @property
+    def slice_start(self) -> int | None:
+        """The ``a`` of an open-ended array section ``name(a:)``, or ``None``."""
+        text = self.index_text
+        if text is None:
+            return None
+        match = _RE_OPEN_SLICE.fullmatch(text)
+        return int(match[1]) if match is not None else None
 
     def __str__(self) -> str:
         return self.name if self.index_text is None else f"{self.name}({self.index_text})"
@@ -318,11 +654,37 @@ class KeyPath:
 
 @dataclass
 class Assignment:
-    """A single ``key = value`` assignment within a namelist group."""
+    """
+    A single ``key = value`` assignment within a namelist group.
+
+    Values are free-form: they may continue across lines and several
+    assignments may share one line.
+
+    Attributes
+    ----------
+    key : str
+        The whitespace-normalized key (e.g. ``datum(1)%ele_name``).
+    value : Token
+        The value text. Its ``loc`` spans from the first character of the
+        first value field through the last character of the last one
+        (multi-line when the value continues across lines). Per physical
+        line, ``str(value)`` is the raw source slice from that line's first
+        field to its last, joined with newlines — so for single-line values
+        ``str(value) == value.loc.get_string(source)`` exactly.
+    values : list[Token]
+        The individual value fields with per-field source locations; Fortran
+        repeat counts (``3*0``) are expanded.
+    comment : str
+        Trailing ``!`` comments on the lines the assignment spans.
+    key_loc : Location or None
+        Source location of the key.
+    """
 
     key: str
     value: Token
+    values: list[Token] = field(default_factory=list)
     comment: str = ""
+    key_loc: Location | None = None
 
     @property
     def loc(self) -> Location:
@@ -330,49 +692,16 @@ class Assignment:
         return self.value.loc
 
     @property
+    def span(self) -> Location:
+        """Source span from the start of the key through the last value character."""
+        if self.key_loc is None:
+            return self.value.loc
+        return self.value.loc + self.key_loc
+
+    @property
     def path(self) -> KeyPath:
         """The key decomposed into `KeyComponent` parts (any nesting depth)."""
         return KeyPath.parse(self.key)
-
-    @classmethod
-    def from_line(
-        cls,
-        line: str,
-        idx: int,
-        filename: pathlib.Path | None = None,
-        base_line: int = 0,
-    ) -> Assignment | None:
-        """Parse a namelist file line into an `Assignment`."""
-        stripped = line.lstrip()
-        if not stripped or stripped[0] in "!&/":
-            return None
-        code, comment = _split_comment(line)
-
-        try:
-            eq = code.index("=")
-        except ValueError:
-            return None
-
-        key = code[:eq].strip()
-        if not key:
-            return None
-        rhs = code[eq + 1 :]
-        leading = len(rhs) - len(rhs.lstrip())
-        value = rhs.strip()
-        value_start = eq + 1 + leading
-        value_end = value_start + len(value)
-        absolute_line = base_line + idx
-        value_token = Token(
-            value,
-            loc=Location(
-                filename=filename,
-                line=absolute_line,
-                column=value_start,
-                end_line=absolute_line,
-                end_column=value_end,
-            ),
-        )
-        return cls(key=re.sub(r"\s+", "", key), value=value_token, comment=comment.strip())
 
 
 @dataclass
@@ -400,16 +729,16 @@ class Namelist:
     assignments: list[Assignment] = field(default_factory=list)
     filename: pathlib.Path | None = None
     start_line: int = 0
+    # (line index into ``lines``, column) of the terminating '/', or None.
+    _terminator: tuple[int, int] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._reparse()
 
     def _reparse(self) -> None:
-        self.assignments = []
-        for idx, line in enumerate(self.lines):
-            assignment = Assignment.from_line(line, idx, self.filename, self.start_line)
-            if assignment is not None:
-                self.assignments.append(assignment)
+        scan = _scan_namelist(self.lines, filename=self.filename, base_line=self.start_line)
+        self.assignments = scan.assignments
+        self._terminator = scan.terminator
 
     @property
     def loc(self) -> Location:
@@ -432,48 +761,90 @@ class Namelist:
                 return assignment
         return None
 
-    def _line_of(self, assignment: Assignment) -> int:
-        """Index into ``self.lines`` of ``assignment`` (from its value's loc)."""
-        return assignment.value.loc.line - self.start_line
-
     def _indent(self) -> str:
         """Indentation to use for inserted lines, mirroring existing entries."""
         for assignment in self.assignments:
-            line = self.lines[self._line_of(assignment)]
+            line = self.lines[assignment.span.line - self.start_line]
+            if line.lstrip().startswith("&"):
+                continue  # assignments on the opener line carry no useful indent
             return line[: len(line) - len(line.lstrip())]
         return "  "
 
-    def _terminator_index(self) -> int:
-        for idx in range(len(self.lines) - 1, -1, -1):
-            if self.lines[idx].lstrip().startswith("/"):
-                return idx
-        return len(self.lines)
+    def _insert_before_terminator(self, new_line: str) -> None:
+        if self._terminator is None:
+            self.lines.append(new_line)
+            return
+        index, column = self._terminator
+        line = self.lines[index]
+        if line[:column].strip():
+            # One-line group: split the code before '/' onto its own line.
+            self.lines[index : index + 1] = [line[:column].rstrip(), new_line, line[column:]]
+        else:
+            self.lines.insert(index, new_line)
 
     def set(self, key: str, value: str, *, comment: str = "") -> Assignment:
-        """Update ``key``'s value in place, or append it before the terminator."""
+        """
+        Update ``key``'s value in place, or append it before the terminator.
+
+        A value that continues across several lines is collapsed onto its
+        first line (interior comments on those lines are dropped with them).
+        """
         existing = self.get(key)
         if existing is not None:
-            idx = self._line_of(existing)
-            line = self.lines[idx]
-            value_loc = existing.value.loc
-            self.lines[idx] = line[: value_loc.column] + value + line[value_loc.end_column :]
+            loc = existing.value.loc
+            first = loc.line - self.start_line
+            last = loc.end_line - self.start_line
+            spliced = self.lines[first][: loc.column] + value + self.lines[last][loc.end_column :]
+            self.lines[first : last + 1] = spliced.split("\n")
         else:
             new_line = f"{self._indent()}{key} = {value}"
             if comment:
                 if not comment.lstrip().startswith("!"):
                     comment = f"!{comment}"
                 new_line = f"{new_line} {comment}"
-            self.lines.insert(self._terminator_index(), new_line)
+            self._insert_before_terminator(new_line)
 
         self._reparse()
         return cast(Assignment, self.get(key))
 
     def remove(self, key: str) -> None:
-        """Remove the line defining ``key`` (no-op if it is not present)."""
+        """
+        Remove ``key``'s assignment, including continuation lines (no-op if absent).
+
+        Lines the assignment shares with the opener, the terminator, or another
+        assignment are spliced rather than deleted.
+        """
         existing = self.get(key)
         if existing is None:
             return
-        del self.lines[self._line_of(existing)]
+        span = existing.span
+        first = span.line - self.start_line
+        last = span.end_line - self.start_line
+        others = [a for a in self.assignments if a is not existing]
+
+        def shared(index: int) -> bool:
+            absolute = index + self.start_line
+            return any(a.span.line <= absolute <= a.span.end_line for a in others)
+
+        for index in range(last, first - 1, -1):
+            line = self.lines[index]
+            protected = (
+                index == 0
+                or (self._terminator is not None and self._terminator[0] == index)
+                or shared(index)
+            )
+            if not protected:
+                del self.lines[index]
+                continue
+            start = span.column if index == first else 0
+            end = span.end_column if index == last else len(line)
+            while end < len(line) and line[end] in " \t,":
+                end += 1
+            remainder = (line[:start] + line[end:]).rstrip()
+            if remainder:
+                self.lines[index] = remainder
+            else:
+                del self.lines[index]
         self._reparse()
 
     def render(self, options: NamelistFormatOptions | None = None) -> str:
@@ -509,6 +880,13 @@ class NamelistFile:
                 items.append("\n".join(raw))
                 raw.clear()
 
+        def close() -> None:
+            nonlocal current
+            if current is not None:
+                current._reparse()
+                items.append(current)
+                current = None
+
         for idx, line in enumerate(text.split("\n")):
             stripped = line.lstrip()
             if current is None:
@@ -518,12 +896,13 @@ class NamelistFile:
                     current = Namelist(name=name, lines=[line], filename=path, start_line=idx)
                 else:
                     raw.append(line)
+                    continue
             else:
                 current.lines.append(line)
-                if stripped.startswith("/"):
-                    current._reparse()
-                    items.append(current)
-                    current = None
+            # '/' terminates the group anywhere outside a quoted string, even
+            # on the opener line; anything after it on the line stays verbatim.
+            if _find_terminator(line) is not None:
+                close()
         if current is not None:
             current._reparse()
             items.append(current)
@@ -734,6 +1113,13 @@ class NamelistArrayGroup:
             component = path.components[0]
             indices = component.indices
 
+            # An open-ended section ``name(a:)`` takes its extent from the
+            # number of supplied values.
+            if indices is None and len(path.components) > 1:
+                start = component.slice_start
+                if start is not None:
+                    indices = list(range(start, start + len(assignment.values)))
+
             # An empty array section (e.g. an ascending ``5:3`` slice) designates
             # no elements, so the assignment is a no-op.
             if indices is not None and not indices:
@@ -743,7 +1129,7 @@ class NamelistArrayGroup:
             # the designated indices (e.g. ``var(1:6)%ele_name = a, b, ...``).
             if len(path.components) > 1 and indices is not None and len(indices) > 1:
                 field_name = path.names[1]
-                for value, index in zip(split_values(assignment.value), indices):
+                for value, index in zip(assignment.values, indices):
                     entry_for(index, index).components[field_name] = value
                 continue
 
@@ -756,7 +1142,7 @@ class NamelistArrayGroup:
                 key = component.index if component.index is not None else component.index_text
             entry = entry_for(key, index)
             if len(path.components) == 1:
-                entry.positional = split_values(assignment.value)
+                entry.positional = list(assignment.values)
                 entry.comment = assignment.comment
             else:
                 entry.components[path.names[1]] = assignment.value

@@ -15,8 +15,9 @@ FILES = MODULE_PATH / "files" / "tao_init"
 FEATURES = FILES / "features.init"
 PROJ_INIT = FILES / "proj" / "tao.init"
 D1_DATA_INIT = FILES / "d1_data.init"
+FREEFORM_INIT = FILES / "freeform.init"
 
-CORPUS = [FEATURES, PROJ_INIT, D1_DATA_INIT]
+CORPUS = [FEATURES, PROJ_INIT, D1_DATA_INIT, FREEFORM_INIT]
 
 # Local real-world tao.init files: drop symlinks to lattice repositories or
 # files themselves under src/latform/tests/other-repos
@@ -423,6 +424,47 @@ def test_slice_assignment_shortfall_and_scalar_merge():
     assert variables[0].ele_name == "A"
     assert variables[1].ele_name == "B"
     assert variables[1].attribute == "k1"
+
+
+def test_open_ended_slice_extent_from_values():
+    # ``var(1:)%x = a, b`` fills entries 1..2: the extent comes from the values.
+    tao = TaoInit.parse(
+        "&tao_var\n"
+        "    v1_var%name = 'connect'\n"
+        "    default_step = 1e-4\n"
+        "    default_attribute = 'L'\n"
+        "    var(1:)%ele_name = 'FOO1_PIP5', 'FOO2_PIP0'\n"
+        '  !  search_for_lat_eles = "quad::*"\n'
+        "   default_key_bound = T\n"
+        "   default_key_delta = 0.1\n"
+        "/\n"
+    )
+    (v1,) = tao.variables
+    variables = v1.variables
+    assert [v.index for v in variables] == [1, 2]
+    assert [str(v.ele_name) for v in variables] == ["FOO1_PIP5", "FOO2_PIP0"]
+
+
+def test_open_ended_slice_start_offset():
+    tao = TaoInit.parse("&tao_var\n  var(3:)%ele_name = 'A', 'B'\n/\n")
+    (v1,) = tao.variables
+    assert [v.index for v in v1.variables] == [3, 4]
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("var(1:)%x", 1),
+        ("var(3:)%x", 3),
+        ("var(-2:)%x", -2),
+        ("var(1:6)%x", None),  # closed sections enumerate via .indices
+        ("var(1)%x", None),
+        ("var%x", None),
+        ("var(N:)%x", None),
+    ],
+)
+def test_keycomponent_slice_start(key: str, expected: int | None):
+    assert KeyPath.parse(key).components[0].slice_start == expected
 
 
 def test_slice_whitespace_and_empty_section():
