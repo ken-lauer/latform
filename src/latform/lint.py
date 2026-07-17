@@ -595,6 +595,35 @@ def lint_datums(
     return lints
 
 
+def lint_variables(
+    files_obj: Files,
+    named: dict[Token, Statement],
+) -> list[Lint]:
+    """
+    Lint tao_init variables (&tao_var) for undefined element references.
+    """
+    if not files_obj.tao_init:
+        return []
+
+    lints = []
+    for v1_var in files_obj.tao_init.variables:
+        for var in v1_var.variables:
+            name = var.ele_name
+            if not name:
+                continue
+            for ele_name in _split_element_name(name):
+                if ele_name.upper() not in named:
+                    lints.append(
+                        Lint(
+                            code=LintCode.undefined_reference,
+                            context=v1_var.namelist,
+                            message=f"Reference to undefined element in tao_init var: {name}",
+                            relevant_tokens=[],
+                        )
+                    )
+    return lints
+
+
 def lint_files(
     files_obj: Files,
     *,
@@ -641,8 +670,10 @@ def lint_files(
 
     if files_obj.tao_init:
         init_path = files_obj.tao_init.filename or pathlib.Path("<tao.init>")
-        for lint in lint_datums(files_obj, named):
-            yield (init_path, lint)
+        for lint in (*lint_datums(files_obj, named), *lint_variables(files_obj, named)):
+            # Attribute to the namelist's own source (e.g. a split-out
+            # data_file/var_file), falling back to the tao.init path.
+            yield (getattr(lint.context, "filename", None) or init_path, lint)
 
 
 def _build_argparser():
