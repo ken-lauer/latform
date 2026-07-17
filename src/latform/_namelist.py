@@ -22,6 +22,7 @@ __all__ = [
     "Namelist",
     "NamelistFile",
     "is_namelist_file",
+    "split_values",
 ]
 
 _NAMELIST_SUFFIXES = frozenset({".init", ".nml"})
@@ -89,6 +90,45 @@ def _split_comment(line: str, comment_char: str = "!", escape_char: str = "\\") 
 def _normalize_key(key: str) -> str:
     """Whitespace-insensitive, case-insensitive key form used for lookups."""
     return _RE_NORMALIZE_KEY.sub("", key).lower()
+
+
+def split_values(value: Token) -> list[Token]:
+    """
+    Split a namelist value into its whitespace/comma-separated fields.
+
+    An anonymous derived-type assignment such as
+    ``datum(1) = 'orbit.x' '' '' 'R0\\2' 'target' 0 1e1`` packs several field
+    values onto the right-hand side. Split them while keeping quoted strings
+    (including empty ``''``) intact, carrying a source `Location` for
+    each field derived from ``value``'s own location.
+    """
+    text = str(value)
+    loc = value.loc
+    tokens: list[Token] = []
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if char in " \t,":
+            i += 1
+            continue
+        start = i
+        if char in "'\"":
+            i += 1
+            while i < n and text[i] != char:
+                i += 1
+            i = min(i + 1, n)  # include the closing quote, if present
+        else:
+            while i < n and text[i] not in " \t,'\"":
+                i += 1
+        field_loc = Location(
+            filename=loc.filename,
+            line=loc.line,
+            column=loc.column + start,
+            end_line=loc.line,
+            end_column=loc.column + i,
+        )
+        tokens.append(Token(text[start:i], loc=field_loc))
+    return tokens
 
 
 @dataclass(frozen=True)
@@ -159,7 +199,7 @@ class Assignment:
 
     @property
     def path(self) -> KeyPath:
-        """The key decomposed into :class:`KeyComponent` parts (any nesting depth)."""
+        """The key decomposed into `KeyComponent` parts (any nesting depth)."""
         return KeyPath.parse(self.key)
 
     @classmethod

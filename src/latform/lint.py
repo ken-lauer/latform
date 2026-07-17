@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Collection, Generator, Iterable, Sequence
 
+from ._namelist import Namelist
 from .attrs import element_key_to_attrs
 from .const import named_physical_constants
 from .statements import (
@@ -52,13 +53,13 @@ class LintCode(str, enum.Enum):
 @dataclass()
 class Lint:
     code: LintCode
-    statement: Statement
+    context: Statement | Namelist
     message: str
     relevant_tokens: list[Token] | None
 
     def to_user_message(self):
-        clsname = type(self.statement).__name__
-        obj_name = str(getattr(self.statement, "name", "unnamed"))
+        clsname = type(self.context).__name__
+        obj_name = str(getattr(self.context, "name", "unnamed"))
         parts = [f"[{self.code.value}] {obj_name!r} Statement of type {clsname!r}: {self.message}"]
 
         if self.relevant_tokens:
@@ -99,7 +100,7 @@ def lint_statement(st: Statement) -> list[Lint]:
             return [
                 Lint(
                     code=LintCode.unknown_statement,
-                    statement=st,
+                    context=st,
                     message=f"Statement type is unknown; this may indicate an error in parsing: {st.statement}",
                     relevant_tokens=[st.statement],
                 )
@@ -130,7 +131,7 @@ def lint_duplicate_attributes(element: Element) -> list[Lint]:
             lints.append(
                 Lint(
                     code=LintCode.duplicate_attribute,
-                    statement=element,
+                    context=element,
                     message=f"Attribute '{name}' is set more than once",
                     relevant_tokens=[first_seen[key], name],
                 )
@@ -203,7 +204,7 @@ def lint_attribute_overrides(
         lints.append(
             Lint(
                 code=LintCode.attribute_override,
-                statement=st,
+                context=st,
                 message=message,
                 relevant_tokens=[*originals, st.name],
             )
@@ -260,7 +261,7 @@ def lint_ambiguous_names(
         lints.append(
             Lint(
                 code=LintCode.ambiguous_name,
-                statement=st,
+                context=st,
                 message=message,
                 relevant_tokens=[name],
             )
@@ -335,7 +336,7 @@ def lint_unused_constants(
             lints.append(
                 Lint(
                     code=LintCode.unused_constant,
-                    statement=st,
+                    context=st,
                     message=f"Constant '{st.name}' is defined but never used",
                     relevant_tokens=[st.name],
                 )
@@ -398,7 +399,7 @@ def lint_builtin_constants(
             lints.append(
                 Lint(
                     code=LintCode.use_builtin_constant,
-                    statement=st,
+                    context=st,
                     message=(
                         f"Value {tok} matches built-in constant(s) {names}; "
                         "use the built-in instead"
@@ -478,7 +479,7 @@ def lint_element_attributes(element: Element) -> list[Lint]:
             lints.append(
                 Lint(
                     code=LintCode.unknown_attribute,
-                    statement=element,
+                    context=element,
                     message=(
                         f"Unknown attribute '{name}' for element type "
                         f"'{element.element_type.lower()}'"
@@ -492,7 +493,7 @@ def lint_element_attributes(element: Element) -> list[Lint]:
         lints.append(
             Lint(
                 code=LintCode.controller_default_missing,
-                statement=element,
+                context=element,
                 message=(f"Controller variable '{missing}' does not have a default set"),
                 relevant_tokens=[missing],
             )
@@ -517,7 +518,7 @@ def lint_undefined_references(
             lints.append(
                 Lint(
                     code=LintCode.undefined_reference,
-                    statement=statement,
+                    context=statement,
                     message=f"Reference to undefined element or constant: {name}",
                     relevant_tokens=[name],
                 )
@@ -540,11 +541,57 @@ def lint_unknown_element_types(statements: Sequence[Statement]) -> list[Lint]:
             lints.append(
                 Lint(
                     code=LintCode.unknown_element_type,
-                    statement=statement,
+                    context=statement,
                     message=f"Unknown element type or undefined base element: {statement.keyword}",
                     relevant_tokens=[statement.keyword],
                 )
             )
+    return lints
+
+
+def _split_element_name(name):
+    if not name:
+        return
+
+    name = name.split("#", 1)[0]
+
+    for part in name.split("\\"):
+        try:
+            int(part)
+        except ValueError:
+            pass
+        else:
+            continue
+        yield part
+
+
+def lint_datums(
+    files_obj: Files,
+    named: dict[Token, Statement],
+) -> list[Lint]:
+    """
+    Lint tao_init datums (&tao_d1_data) for undefined element references.
+    """
+    if not files_obj.tao_init:
+        return []
+
+    lints = []
+    for d1_data in files_obj.tao_init.d1_data:
+        for datum in d1_data.datums:
+            ele_names = {datum.ele_name, datum.ele_ref_name, datum.ele_start_name}
+            for name in ele_names:
+                if not name:
+                    continue
+                for ele_name in _split_element_name(name):
+                    if ele_name.upper() not in named:
+                        lints.append(
+                            Lint(
+                                code=LintCode.undefined_reference,
+                                context=d1_data.namelist,
+                                message=f"Reference to undefined element in tao_init d1_data: {name}",
+                                relevant_tokens=[],
+                            )
+                        )
     return lints
 
 
@@ -591,6 +638,11 @@ def lint_files(
             builtin_constant_rtol=builtin_constant_rtol,
         ):
             yield fn, lint
+
+    if files_obj.tao_init:
+        init_path = files_obj.tao_init_path or pathlib.Path("<tao.init>")
+        for lint in lint_datums(files_obj, named):
+            yield (init_path, lint)
 
 
 def _build_argparser():

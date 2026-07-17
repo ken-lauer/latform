@@ -5,16 +5,18 @@ import pathlib
 
 import pytest
 
-from .._namelist import KeyPath, Namelist, NamelistFile
+from .._namelist import KeyPath, Namelist, NamelistFile, split_values
 from ..parser import Files, MemoryFiles, build_files
 from ..tao import TaoInit, is_init_file
+from ..token import Token
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parent
 FILES = MODULE_PATH / "files" / "tao_init"
 FEATURES = FILES / "features.init"
 PROJ_INIT = FILES / "proj" / "tao.init"
+D1_DATA_INIT = FILES / "d1_data.init"
 
-CORPUS = [FEATURES, PROJ_INIT]
+CORPUS = [FEATURES, PROJ_INIT, D1_DATA_INIT]
 
 # Local real-world tao.init files: drop symlinks to lattice repositories or
 # files themselves under src/latform/tests/other-repos
@@ -232,6 +234,90 @@ def test_memory_files_from_tao_init_contents():
 )
 def test_is_init_file(name: str, expected: bool):
     assert is_init_file(name) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "'orbit.x' '' '' 'END\\2' 'target' 0 1e1",
+            ["'orbit.x'", "''", "''", "'END\\2'", "'target'", "0", "1e1"],
+        ),
+        ("'a','b' , 'c'", ["'a'", "'b'", "'c'"]),
+        ('"quoted value" bare', ['"quoted value"', "bare"]),
+        ("", []),
+        ("'unterminated", ["'unterminated"]),
+    ],
+)
+def test_split_values(text: str, expected: list[str]):
+    assert [str(v) for v in split_values(Token(text))] == expected
+
+
+def test_split_values_locations_point_at_each_field():
+    source = "&t\n  datum(1) = 'orbit.x' 'target'\n/"
+    tao = TaoInit.parse(source)
+    assignment = tao.get_namelist("t").get("datum(1)")
+    (first, second) = split_values(assignment.value)
+    # Each field's location slices its own text back out of the full source.
+    assert first.loc.get_string(source) == first == "'orbit.x'"
+    assert second.loc.get_string(source) == second == "'target'"
+
+
+def test_d1_data_groups_parsed():
+    tao = TaoInit.from_file(D1_DATA_INIT)
+    d1s = tao.d1_data
+    assert [d.name for d in d1s] == ["12", "y"]
+    assert [d.ix_d1_data for d in d1s] == ["1", "2"]
+    assert d1s[0].default_weight == "1e1"
+
+
+def test_d1_data_positional_datums():
+    tao = TaoInit.from_file(D1_DATA_INIT)
+    datums = tao.d1_data[0].datums
+    # The commented-out datum(1) is ignored; two active datums remain.
+    assert [d.index for d in datums] == [1, 2]
+
+    first = datums[0]
+    assert first.data_type == "orbit.x"
+    assert first.ele_ref_name == ""
+    assert first.ele_start_name == ""
+    assert first.ele_name == "R0_MAR_END\\2"
+    assert first.merit_type == "target"
+    assert first.meas == "0"
+    assert first.weight == "1e1"
+    # Nothing beyond the supplied fields.
+    assert first.value("good_user") is None
+    assert first.value("eval_point") is None
+
+    assert datums[1].data_type == "orbit.px"
+    assert datums[1].comment == "horizontal"
+
+
+def test_d1_data_component_datums():
+    tao = TaoInit.from_file(D1_DATA_INIT)
+    (datum,) = tao.d1_data[1].datums
+    assert datum.index == 1
+    assert datum.data_type == "orbit.y"
+    assert datum.ele_name == "R0_MAR_END\\2"
+    assert datum.merit_type == "target"
+    # A field neither positional nor set by component reads as unset.
+    assert datum.weight is None
+
+
+def test_d1_data_component_overrides_positional():
+    tao = TaoInit.parse(
+        "&tao_d1_data\n"
+        "  datum(1) = 'orbit.x' '' '' 'ELE' 'target'\n"
+        "  datum(1)%ele_name = 'OVERRIDE'\n"
+        "/\n"
+    )
+    (datum,) = tao.d1_data[0].datums
+    assert datum.data_type == "orbit.x"  # from positional
+    assert datum.ele_name == "OVERRIDE"  # component wins
+
+
+def test_no_d1_data():
+    assert TaoInit.from_file(PROJ_INIT).d1_data == []
 
 
 def test_blank_tao_init():
