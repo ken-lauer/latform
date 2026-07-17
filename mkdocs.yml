@@ -4,16 +4,17 @@ repo_name: ken-lauer/latform
 
 nav:
   - Home: index.md
-  - CLI Reference:
+  - Configuration: configuration.md
+  - Style Guide: style_guide.md
+  - Command-line tools:
       - cli/index.md
       - latform: cli/latform.md
       - Linting: cli/lint.md
       - Templating: cli/templating.md
-      - Inspection: cli/inspection.md
-  - Configuration: configuration.md
-  - Python API: api.md
-  - Style Guide: style_guide.md
-  - Development: development/development_guidelines.md
+      - Inspection/diff: cli/inspection.md
+  - Developers:
+      - Python API: api.md
+      - Development: development/development_guidelines.md
 
 theme:
   icon:
