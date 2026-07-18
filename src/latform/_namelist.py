@@ -44,7 +44,7 @@ def is_namelist_file(path: pathlib.Path | str) -> bool:
 
 
 _RE_GROUP_OPEN = re.compile(r"\s*&(\w+)")
-_RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")
+_RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")  # one key-path segment: name(subscript)?
 _RE_NORMALIZE_KEY = re.compile(r"\s+")
 _RE_INT = re.compile(r"-?\d+")
 _RE_SLICE = re.compile(r"(-?\d+):(-?\d+)(?::(-?\d+))?")
@@ -311,8 +311,11 @@ def split_values(value: Token) -> list[Token]:
 
 
 _RE_REPEAT_PREFIX = re.compile(r"\d+\*")
-# Fast path for `_read_field`: a bare run with none of the characters that
-# need the stateful scan (separators, '=', '/', parens, quotes).
+# A bare (unquoted) run as the line lexers see it: stops at a whitespace/comma
+# separator, '=', '/', or a quote. Unlike _BARE_TOKEN, '=' and '/' stop it.
+_LEX_BARE = r"""[^ \t,=/'"]+"""
+# Fast path for `_read_field`: a bare run that also stops at parens, i.e. one
+# with none of the characters that need the stateful scan.
 _RE_PLAIN_FIELD = re.compile(r"""[^ \t,=/()'"]+""")
 
 
@@ -420,7 +423,7 @@ def _scan_line(code: str) -> Iterator[tuple[str, int, int]]:
 # Separators fall between matches. This deliberately ignores the stateful
 # rules (paren depth, designator blanks, repeat merges); `_lex_line` detects
 # those cases and defers to `_scan_line`.
-_RE_LEX = re.compile(r"""'(?:''|[^'])*'?|"(?:""|[^"])*"?|[^ \t,=/'"]+|[=/]""")
+_RE_LEX = re.compile(rf"{_SINGLE_QUOTED}|{_DOUBLE_QUOTED}|{_LEX_BARE}|[=/]")
 
 
 def _lex_line(code: str) -> list[tuple[str, int, int]]:
