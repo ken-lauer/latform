@@ -20,7 +20,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from ._namelist import Assignment, Namelist, NamelistArrayEntry, NamelistArrayGroup, NamelistFile
+from ._namelist import (
+    Assignment,
+    Namelist,
+    NamelistArrayEntry,
+    NamelistArrayGroup,
+    NamelistFile,
+    quote_value,
+    unquote_value,
+)
 from .token import Token
 
 __all__ = [
@@ -318,7 +326,7 @@ class TaoInit(NamelistFile):
         if start is None:
             return None
         assignment = start.get(key)
-        return assignment.value.strip().remove_quotes() if assignment is not None else None
+        return unquote_value(assignment.value.strip()) if assignment is not None else None
 
     @property
     def data_file(self) -> Token | None:
@@ -439,7 +447,7 @@ class TaoInit(NamelistFile):
         are removed, and new entries are appended.
         """
         by_index = {
-            assignment.path.components[0].index: assignment.value.strip().remove_quotes()
+            assignment.path.components[0].index: unquote_value(assignment.value.strip())
             for assignment in self._lattice_file_assignments()
             if assignment.path.components[0].index is not None
         }
@@ -455,7 +463,7 @@ class TaoInit(NamelistFile):
             assn.path.components[0].index for assn in self._lattice_file_assignments()
         }
         for position, filename in enumerate(files, start=1):
-            namelist.set(f"design_lattice({position})%file", f"'{filename}'")
+            namelist.set(f"design_lattice({position})%file", quote_value(filename))
         for surplus in existing_indices - set(range(1, len(files) + 1)):
             namelist.remove(f"design_lattice({surplus})%file")
 

@@ -32,7 +32,9 @@ __all__ = [
     "NamelistArrayGroup",
     "NamelistFile",
     "is_namelist_file",
+    "quote_value",
     "split_values",
+    "unquote_value",
 ]
 
 _NAMELIST_SUFFIXES = frozenset({".init", ".nml"})
@@ -102,6 +104,41 @@ def _find_comment_index(line: str) -> int | None:
         elif char == "!" and not in_single_quote and not in_double_quote:
             return i
     return None
+
+
+def quote_value(text: str, quote: str = "'") -> str:
+    """
+    Quote ``text`` as a Fortran-namelist string literal.
+
+    Embedded ``quote`` characters are escaped by doubling (``it's`` becomes
+    ``'it''s'``); the other quote character passes through untouched.
+
+    Parameters
+    ----------
+    text : str
+        The string content to quote.
+    quote : {"'", '"'}, optional
+        The delimiter to use. Defaults to a single quote.
+    """
+    if quote not in {"'", '"'}:
+        raise ValueError(f"quote must be a single or double quote character, got {quote!r}")
+    return f"{quote}{text.replace(quote, quote * 2)}{quote}"
+
+
+def unquote_value(token: Token) -> Token:
+    """
+    The string content of a namelist value token.
+
+    Strips the outer quotes and undoubles the escaped delimiter quote
+    character (``'it''s'`` becomes ``it's``); occurrences of the other quote
+    character are literal and left untouched. Bare (unquoted) and unterminated
+    tokens are returned unchanged.
+    """
+    if not token.is_quoted_string:
+        return token
+    text = str(token)
+    quote = text[0]
+    return Token(text[1:-1].replace(quote * 2, quote), loc=token.loc, comments=token.comments)
 
 
 def _split_comment(line: str) -> tuple[str, str]:
@@ -1146,7 +1183,7 @@ class NamelistArrayEntry:
         returned token keeps its source `Location`.
         """
         token = self.get(name)
-        return token.strip().remove_quotes() if token is not None else None
+        return unquote_value(token.strip()) if token is not None else None
 
 
 @dataclass
@@ -1163,7 +1200,7 @@ class NamelistArrayGroup:
 
     def _scalar(self, key: str) -> Token | None:
         assignment = self.namelist.get(key)
-        return assignment.value.strip().remove_quotes() if assignment is not None else None
+        return unquote_value(assignment.value.strip()) if assignment is not None else None
 
     def _entries(self, array_name: str, entry_cls: type[NamelistArrayEntry]) -> list:
         """

@@ -1,4 +1,4 @@
-"""Free-form namelist input: continued values, shared lines, inline terminators."""
+"""Free-form namelist input: continued values, shared lines, inline terminators, quoting."""
 
 from __future__ import annotations
 
@@ -6,8 +6,16 @@ import pathlib
 
 import pytest
 
-from .._namelist import NamelistFile, _find_terminator, _scan_namelist, split_values
-from ..tao import TaoInit
+from .._namelist import (
+    NamelistFile,
+    _find_comment_index,
+    _find_terminator,
+    _scan_namelist,
+    quote_value,
+    split_values,
+    unquote_value,
+)
+from ..tao import TaoD1Data, TaoInit
 from ..token import Token
 
 FILES = pathlib.Path(__file__).resolve().parent / "files" / "tao_init"
@@ -301,6 +309,111 @@ def test_format_preserves_text_after_terminator():
 
     out = interpolate_namelist("&g x = 1 / trailing\n", options=NamelistFormatOptions())
     assert out == "&g\n  x = 1\n/ trailing\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("'it''s'", "it's"),
+        ('"say ""hi"""', 'say "hi"'),
+        ("''''", "'"),
+        ("''", ""),
+        ('"don\'t"', "don't"),
+        ("'a''''b'", "a''b"),
+        ("'a\"\"b'", 'a""b'),  # non-delimiter quotes are literal, not escapes
+        ("'abc", "'abc"),  # unterminated: returned unchanged
+        ("bare", "bare"),
+        ("1.5e-3", "1.5e-3"),
+    ],
+)
+def test_unquote_value(text: str, expected: str):
+    assert str(unquote_value(Token(text))) == expected
+
+
+def test_unquote_value_keeps_location_and_comments():
+    from ..comments import Comments
+    from ..location import Location
+
+    token = Token(
+        "'it''s'",
+        loc=Location(filename=pathlib.Path("x.init"), line=3, column=7),
+        comments=Comments(inline=Token("c")),
+    )
+    unquoted = unquote_value(token)
+    assert unquoted.loc == token.loc
+    assert unquoted.comments == token.comments
+
+
+@pytest.mark.parametrize(
+    ("text", "quote", "expected"),
+    [
+        ("it's", "'", "'it''s'"),
+        ('say "hi"', '"', '"say ""hi"""'),
+        ("plain", "'", "'plain'"),
+        ("", "'", "''"),
+        ("'", "'", "''''"),
+        ('say "hi"', "'", "'say \"hi\"'"),
+    ],
+)
+def test_quote_value(text: str, quote: str, expected: str):
+    assert quote_value(text, quote) == expected
+
+
+def test_quote_value_rejects_bad_quote():
+    with pytest.raises(ValueError):
+        quote_value("x", quote="`")
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize("text", ["", "plain", "it's", 'say "hi"', "both ' and \" here", "''"])
+def test_quote_unquote_round_trip(text: str, quote: str):
+    assert str(unquote_value(Token(quote_value(text, quote)))) == text
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("x = 1 ! c", 6),  # fast path: no quotes before the '!'
+        ("s = 'it''s ! x' ! real", 16),
+        ("x = '''' ! c", 9),
+        ('t = "say ""hi!"" " ! c', 19),
+        ("x = 'abc ! unterminated", None),
+        ("no comment here", None),
+    ],
+)
+def test_find_comment_index_with_escaped_quotes(line: str, expected: int | None):
+    assert _find_comment_index(line) == expected
+
+
+ESCAPED_QUOTES_INIT = '''\
+&tao_d1_data
+  d1_data%name = 'it\'\'s'
+  datum(1)%ele_name = "say ""hi"""
+  datum(2) = 'orbit.x' \'\' \'\' 'Q\'\'1' 'target' 0 1e1
+/
+'''
+
+
+def test_group_values_unescape_quotes():
+    (namelist,) = NamelistFile.parse(ESCAPED_QUOTES_INIT).namelists
+    group = TaoD1Data(namelist)
+    assert str(group.name) == "it's"
+    first, second = group.datums
+    assert str(first.ele_name) == 'say "hi"'
+    assert str(second.ele_name) == "Q'1"
+    assert str(second.ele_ref_name) == ""
+
+
+def test_render_preserves_escaped_quotes():
+    nml = NamelistFile.parse(ESCAPED_QUOTES_INIT)
+    assert nml.render() == ESCAPED_QUOTES_INIT
+
+
+def test_lattice_files_setter_escapes_quotes():
+    tao = TaoInit.parse("&tao_design_lattice\n/\n")
+    tao.lattice_files = ["it's.bmad"]
+    assert [str(f) for f in tao.lattice_files] == ["it's.bmad"]
+    assert "'it''s.bmad'" in tao.render()
 
 
 def test_format_freeform_is_idempotent():
