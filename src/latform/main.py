@@ -423,7 +423,7 @@ def cli_main(args: list[str] | None = None) -> None:
     Parameters
     ----------
     args : list of str, optional
-        Command-line arguments to parse and pass to :func:`main()`.
+        Command-line arguments to parse and pass to `main()`.
     """
     from . import cli
 

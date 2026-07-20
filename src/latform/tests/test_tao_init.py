@@ -5,7 +5,7 @@ import pathlib
 
 import pytest
 
-from .._namelist import KeyPath, Namelist, NamelistFile, split_values
+from .._namelist import KeyPath, Namelist, NamelistFile
 from ..parser import Files, MemoryFiles, build_files
 from ..tao import TaoInit, is_init_file
 from ..token import Token
@@ -251,37 +251,6 @@ def test_memory_files_from_tao_init_contents():
 )
 def test_is_init_file(name: str, expected: bool):
     assert is_init_file(name) is expected
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        (
-            "'orbit.x' '' '' 'END\\2' 'target' 0 1e1",
-            ["'orbit.x'", "''", "''", "'END\\2'", "'target'", "0", "1e1"],
-        ),
-        ("'a','b' , 'c'", ["'a'", "'b'", "'c'"]),
-        ('"quoted value" bare', ['"quoted value"', "bare"]),
-        ("", []),
-        ("'unterminated", ["'unterminated"]),
-        # Fortran repeat counts expand to r copies of the constant.
-        ("6*'beginning'", ["'beginning'"] * 6),
-        ("3*0 1e1", ["0", "0", "0", "1e1"]),
-        ("2*'a', 'b'", ["'a'", "'a'", "'b'"]),
-    ],
-)
-def test_split_values(text: str, expected: list[str]):
-    assert [str(v) for v in split_values(Token(text))] == expected
-
-
-def test_split_values_locations_point_at_each_field():
-    source = "&t\n  datum(1) = 'orbit.x' 'target'\n/"
-    tao = TaoInit.parse(source)
-    assignment = tao.get_namelist("t").get("datum(1)")
-    (first, second) = split_values(assignment.value)
-    # Each field's location slices its own text back out of the full source.
-    assert first.loc.get_string(source) == first == "'orbit.x'"
-    assert second.loc.get_string(source) == second == "'target'"
 
 
 def test_d1_data_groups_parsed():

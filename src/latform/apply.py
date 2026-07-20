@@ -2,8 +2,8 @@
 Apply values and renames to a single Bmad or namelist template file.
 
 This module is the foundation for :mod:`latform.template`: it holds the value
-overrides (:func:`apply_values`, :func:`apply_namelist_values`), the rename
-ruleset machinery, and the single-file :func:`interpolate` entry point, all of
+overrides (`apply_values`, `apply_namelist_values`), the rename
+ruleset machinery, and the single-file `interpolate` entry point, all of
 which :mod:`latform.template` reuses for multi-instance expansion.
 """
 
@@ -16,6 +16,7 @@ import sys
 from typing import Literal
 
 from ._namelist import NamelistFile, is_namelist_file
+from .comments import Comments
 from .parser import MemoryFiles, parse
 from .statements import Constant, Element
 from .token import Role, Token
@@ -170,7 +171,7 @@ def interpolate_namelist(
     contents : str
         The namelist file contents.
     values : dict, optional
-        Namelist overrides. See :func:`apply_namelist_values`.
+        Namelist overrides. See `apply_namelist_values`.
     filename : str, optional
         Virtual filename used for source locations.
     options : NamelistFormatOptions, optional
@@ -216,8 +217,8 @@ def interpolate(
         The template file contents (valid Bmad, or a namelist file).
     values : dict, optional
         For Bmad, overrides keyed by element/constant name (see
-        :func:`apply_values`). For namelist files, overrides keyed by namelist
-        group name (see :func:`apply_namelist_values`).
+        `apply_values`). For namelist files, overrides keyed by namelist
+        group name (see `apply_namelist_values`).
     renames : dict, optional
         Rename rules applied after values: either the flat shortcut form
         (``{pattern: replacement}``, literal unless it contains ``* + ?``) or the
@@ -380,7 +381,9 @@ def normalize_renames(value: dict | None, default_delims: set[str] | None = None
             if _is_regex(pattern):
                 rules["regex"].append((pattern, repl))
             else:
-                rules["literal"][pattern.lower()] = repl
+                # Keyed by lowercased name; the original spelling is kept for
+                # case-sensitive contexts (comment text).
+                rules["literal"][pattern.lower()] = (pattern, repl)
     return rules
 
 
@@ -408,7 +411,9 @@ def _build_ruleset(
     return merge_rulesets(extra, base)  # explicit renames precede convenience kwargs
 
 
-def _apply_part_rule(name: str, delims: set[str], frm: str, to: str) -> tuple[str, bool]:
+def _apply_part_rule(
+    name: str, delims: set[str], frm: str, to: str, *, case_sensitive: bool = False
+) -> tuple[str, bool]:
     """Rename whole delimiter-separated segments of ``name`` equal to ``frm``."""
     out: list[str] = []
     segment = ""
@@ -416,7 +421,7 @@ def _apply_part_rule(name: str, delims: set[str], frm: str, to: str) -> tuple[st
 
     def flush() -> None:
         nonlocal segment, changed
-        if segment.lower() == frm.lower():
+        if segment == frm if case_sensitive else segment.lower() == frm.lower():
             out.append(to)
             changed = True
         else:
@@ -433,16 +438,26 @@ def _apply_part_rule(name: str, delims: set[str], frm: str, to: str) -> tuple[st
     return "".join(out), changed
 
 
-def _expand_ruleset_over_names(rules: dict, names: set[str]) -> dict[str, str]:
-    """Resolve a RuleSet against the known name set into literal renames."""
+def _expand_ruleset_over_names(
+    rules: dict, names: set[str], *, case_sensitive: bool = False
+) -> dict[str, str]:
+    """
+    Resolve a RuleSet against the known name set into literal renames.
+
+    Bmad names are case-insensitive, so code renames match regardless of case;
+    ``case_sensitive`` is for prose-adjacent contexts (comment text) where a
+    lowercase ordinary word must not match an uppercase name rule.
+    """
     literal = rules["literal"]
-    regexes = [(re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in rules["regex"]]
+    flags = 0 if case_sensitive else re.IGNORECASE
+    regexes = [(re.compile(pattern, flags), repl) for pattern, repl in rules["regex"]]
     parts = rules["parts"]
 
     expanded: dict[str, str] = {}
     for name in names:
-        if name.lower() in literal:
-            expanded[name] = literal[name.lower()]
+        entry = literal.get(name.lower())
+        if entry is not None and (not case_sensitive or name == entry[0]):
+            expanded[name] = entry[1]
             continue
         matched = False
         for pattern, repl in regexes:
@@ -453,7 +468,9 @@ def _expand_ruleset_over_names(rules: dict, names: set[str]) -> dict[str, str]:
         if matched:
             continue
         for delims, frm, to in parts:
-            new_name, changed = _apply_part_rule(name, delims, frm, to)
+            new_name, changed = _apply_part_rule(
+                name, delims, frm, to, case_sensitive=case_sensitive
+            )
             if changed:
                 expanded[name] = new_name
                 break
@@ -464,6 +481,51 @@ def apply_renames(files: MemoryFiles, rules: dict) -> None:
     expanded = _expand_ruleset_over_names(rules, _collect_names(files))
     if expanded:
         files.rename(expanded)
+    _rename_in_comments(files, rules)
+
+
+_COMMENT_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_.]*")
+
+
+def _rename_in_comments(files: MemoryFiles, rules: dict) -> None:
+    """
+    Apply rename rules to name-like words inside comment text.
+
+    Comments (including commented-out code) reference the same names as the
+    code; a name-map rename cannot reach them since commented-out names are
+    not part of the parsed name set, so the ruleset itself is resolved over
+    the words found in comments.
+    """
+    all_comments: list[Comments] = []
+    for statements in files.by_filename.values():
+        for statement in statements:
+            if statement.comments:
+                all_comments.append(statement.comments)
+            for item in walk(statement):
+                comments = getattr(item.node, "comments", None)
+                if comments:
+                    all_comments.append(comments)
+
+    words: set[str] = set()
+    for comments in all_comments:
+        for token in [*comments.pre, comments.inline]:
+            if token is not None:
+                words.update(_COMMENT_WORD.findall(str(token)))
+
+    expanded = _expand_ruleset_over_names(rules, words, case_sensitive=True)
+    if not expanded:
+        return
+
+    def rewrite(token: Token) -> Token:
+        new_text = _COMMENT_WORD.sub(lambda m: expanded.get(m.group(0), m.group(0)), str(token))
+        if new_text == str(token):
+            return token
+        return Token(new_text, role=token.role)
+
+    for comments in all_comments:
+        comments.pre = [rewrite(token) for token in comments.pre]
+        if comments.inline is not None:
+            comments.inline = rewrite(comments.inline)
 
 
 # --------------------------------------------------------------------------- #

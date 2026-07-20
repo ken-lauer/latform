@@ -33,7 +33,6 @@ __all__ = [
     "NamelistFile",
     "is_namelist_file",
     "quote_value",
-    "split_values",
     "unquote_value",
 ]
 
@@ -122,7 +121,8 @@ def quote_value(text: str, quote: str = "'") -> str:
     """
     if quote not in {"'", '"'}:
         raise ValueError(f"quote must be a single or double quote character, got {quote!r}")
-    return f"{quote}{text.replace(quote, quote * 2)}{quote}"
+    escaped = quote * 2
+    return "".join((quote, text.replace(quote, escaped), quote))
 
 
 def unquote_value(token: Token) -> Token:
@@ -138,7 +138,8 @@ def unquote_value(token: Token) -> Token:
         return token
     text = str(token)
     quote = text[0]
-    return Token(text[1:-1].replace(quote * 2, quote), loc=token.loc, comments=token.comments)
+    escaped = quote * 2
+    return Token(text[1:-1].replace(escaped, quote), loc=token.loc, comments=token.comments)
 
 
 def _split_comment(line: str) -> tuple[str, str]:
@@ -180,7 +181,8 @@ class _FieldRecord:
 
     def code_lines(self, indent: str) -> list[str]:
         """The rendered rows, without trailing comments."""
-        first = f"{indent}{self.key.ljust(self.key_width)} = {self.chunks[0]}"
+        key = self.key.ljust(self.key_width)
+        first = f"{indent}{key} = {self.chunks[0]}"
         # Continuation values align under the first value character.
         continuation = " " * (len(first) - len(self.chunks[0]))
         return [first, *(f"{continuation}{chunk}" for chunk in self.chunks[1:])]
@@ -309,42 +311,6 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
             continue
         out.append("" if not stripped else f"{indent}{stripped}")
     return out
-
-
-def split_values(value: Token) -> list[Token]:
-    """
-    Split a namelist value into its whitespace/comma-separated fields.
-
-    An anonymous derived-type assignment such as
-    ``datum(1) = 'orbit.x' '' '' 'R0\\2' 'target' 0 1e1`` packs several field
-    values onto the right-hand side. Split them while keeping quoted strings
-    (including empty ``''``) intact, carrying a source `Location` for each field
-    derived from ``value``'s own location. A Fortran repeat count ``r*c`` (e.g.
-    ``6*'beginning'`` or ``3*0``) expands to ``r`` copies of the constant.
-
-    ``value`` is assumed to lie on a single source line; for parsed
-    assignments (whose values may continue across lines), `Assignment.values`
-    is authoritative and carries correct per-line locations.
-    """
-    loc = value.loc
-    tokens: list[Token] = []
-    for match in _RE_VALUE_FIELD.finditer(str(value)):
-        start, end = match.span("value")
-        count = int(match["count"]) if match["count"] else 1
-        tokens.extend(
-            Token(
-                match["value"],
-                loc=Location(
-                    filename=loc.filename,
-                    line=loc.line,
-                    column=loc.column + start,
-                    end_line=loc.line,
-                    end_column=loc.column + end,
-                ),
-            )
-            for _ in range(count)
-        )
-    return tokens
 
 
 _RE_REPEAT_PREFIX = re.compile(r"\d+\*")
@@ -910,6 +876,8 @@ class Namelist:
 
         A value that continues across several lines is collapsed onto its
         first line (interior comments on those lines are dropped with them).
+        When appending a new key, embedded newlines in ``value`` insert the
+        continuation lines verbatim (e.g. a follow-on comment-only line).
         """
         existing = self.get(key)
         if existing is not None:
@@ -924,7 +892,8 @@ class Namelist:
                 if not comment.lstrip().startswith("!"):
                     comment = f"!{comment}"
                 new_line = f"{new_line} {comment}"
-            self._insert_before_terminator(new_line)
+            for line in reversed(new_line.split("\n")):
+                self._insert_before_terminator(line)
 
         self._reparse()
         return cast(Assignment, self.get(key))
@@ -1051,7 +1020,10 @@ class NamelistFile:
                 while lines and not lines[0].strip():
                     lines.pop(0)
             out.extend(lines)
-        return "\n".join(out)
+        text = "\n".join(out)
+        if text and not text.endswith("\n"):
+            text += "\n"
+        return text
 
     def render(self, options: NamelistFormatOptions | None = None) -> str:
         """

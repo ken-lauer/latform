@@ -12,7 +12,6 @@ from .._namelist import (
     _find_terminator,
     _scan_namelist,
     quote_value,
-    split_values,
     unquote_value,
 )
 from ..tao import TaoD1Data, TaoInit
@@ -92,10 +91,6 @@ def test_scan_doubled_quote_escape():
     (assignment,) = scan.assignments
     assert str(assignment.value) == "'it''s'"
     assert [str(v) for v in assignment.values] == ["'it''s'"]
-
-
-def test_split_values_doubled_quote():
-    assert [str(v) for v in split_values(Token("'it''s' 'b'"))] == ["'it''s'", "'b'"]
 
 
 def test_continuation_values_joined_and_located():

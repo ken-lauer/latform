@@ -57,7 +57,9 @@ def _interpolate(text: str, instance: str) -> str:
 
 def _interpolate_ruleset(rules: dict, instance: str) -> dict:
     return {
-        "literal": {k: _interpolate(v, instance) for k, v in rules["literal"].items()},
+        "literal": {
+            k: (orig, _interpolate(repl, instance)) for k, (orig, repl) in rules["literal"].items()
+        },
         "regex": [(pat, _interpolate(repl, instance)) for pat, repl in rules["regex"]],
         "parts": [(d, frm, _interpolate(to, instance)) for d, frm, to in rules["parts"]],
     }
@@ -176,6 +178,30 @@ def load_instances(path: pathlib.Path | str) -> dict:
     return load_json_or_similar(path)
 
 
+def _spec_format_options(spec_format: dict | None, base: FormatOptions) -> FormatOptions:
+    """
+    Apply a spec-level ``format`` section onto ``base``.
+
+    Keys are :class:`FormatOptions` field names (kebab- or snake-case), matching
+    the ``[format]`` section of a latform config file. ``compact`` also flips
+    ``newline_before_new_type`` (unless that is given explicitly), mirroring the
+    ``latform`` CLI.
+    """
+    import dataclasses
+
+    if not spec_format:
+        return base
+
+    kwargs = {str(key).replace("-", "_"): value for key, value in spec_format.items()}
+    valid = {f.name for f in dataclasses.fields(FormatOptions)} - {"namelist", "renames"}
+    unknown = sorted(set(kwargs) - valid)
+    if unknown:
+        raise ValueError(f"unknown format option(s) in instances file: {unknown}")
+    if "compact" in kwargs and "newline_before_new_type" not in kwargs:
+        kwargs["newline_before_new_type"] = not kwargs["compact"]
+    return dataclasses.replace(base, **kwargs)
+
+
 def instantiate(
     spec: dict,
     *,
@@ -191,7 +217,9 @@ def instantiate(
     spec : dict
         Parsed instances file: ``template`` (list of ``{input, output}``),
         optional global ``renames``, optional ``delimiters`` (default delimiter
-        set for prefix/suffix/parts), optional ``tao_init`` (``{input, output}``
+        set for prefix/suffix/parts), optional ``format`` (formatting options
+        for the emitted files, config-file ``[format]`` style; applied on top
+        of ``options``), optional ``tao_init`` (``{input, output}``
         for a Tao ``tao.init`` whose ``design_lattice`` files are rewritten to
         the generated lattices), and ``instances`` (name -> overrides). A
         per-instance ``tao_init.namelists`` override (``{namelist: {key: value}}``,
@@ -215,7 +243,7 @@ def instantiate(
     from .output import default_options, format_statements
 
     base_dir = pathlib.Path(base_dir)
-    options = options or default_options
+    options = _spec_format_options(spec.get("format"), options or default_options)
 
     template_files = spec["template"]
     default_delims = delim_set(spec.get("delimiters"))
@@ -294,7 +322,7 @@ def write_instances(
     Parameters
     ----------
     results : dict[str, dict[str, str]]
-        The mapping returned by :func:`instantiate`
+        The mapping returned by `instantiate`
         (``{instance: {output_path: contents}}``).
     output_dir : pathlib.Path | str
         Base directory; each output path is resolved relative to it.
