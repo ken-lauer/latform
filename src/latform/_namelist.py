@@ -60,9 +60,20 @@ _REPEAT_COUNT = r"(?:(?P<count>\d+)\*)?"  # optional Fortran repeat: 3*0 -> 0 0 
 _RE_VALUE_FIELD = re.compile(
     rf"{_REPEAT_COUNT}(?P<value>{_SINGLE_QUOTED}|{_DOUBLE_QUOTED}|{_BARE_TOKEN})"
 )
+_RE_REPEAT_PREFIX = re.compile(r"\d+\*")
+# A bare (unquoted) run as the line lexers see it: stops at a whitespace/comma
+# separator, '=', '/', or a quote. Unlike _BARE_TOKEN, '=' and '/' stop it.
+_LEX_BARE = r"""[^ \t,=/'"]+"""
+# One coarse lexical token: a quoted string, a bare run, or an '='/'/'.
+# Separators fall between matches. This deliberately ignores the stateful
+# rules (paren depth, designator blanks, repeat merges); `_lex_line` detects
+# those cases and defers to `_scan_line`.
+_RE_LEX = re.compile(rf"{_SINGLE_QUOTED}|{_DOUBLE_QUOTED}|{_LEX_BARE}|[=/]")
+
 
 # Spaces between the longest field in a run and its aligned inline comment.
 _INLINE_COMMENT_GAP = 2
+QUOTE_CHARS = "'\""
 
 
 def _field_value_span(text: str) -> tuple[int, int, int]:
@@ -313,15 +324,6 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
     return out
 
 
-_RE_REPEAT_PREFIX = re.compile(r"\d+\*")
-# A bare (unquoted) run as the line lexers see it: stops at a whitespace/comma
-# separator, '=', '/', or a quote. Unlike _BARE_TOKEN, '=' and '/' stop it.
-_LEX_BARE = r"""[^ \t,=/'"]+"""
-# Fast path for `_read_field`: a bare run that also stops at parens, i.e. one
-# with none of the characters that need the stateful scan.
-_RE_PLAIN_FIELD = re.compile(r"""[^ \t,=/()'"]+""")
-
-
 class _ScanToken(NamedTuple):
     """One lexical token of a group's comment-stripped source lines."""
 
@@ -338,7 +340,9 @@ def _read_quoted(code: str, start: int) -> int:
     i = start + 1
     while i < len(code):
         if code[i] == quote:
-            if code[i + 1 : i + 2] == quote:  # doubled-quote escape, e.g. 'it''s'
+            # doubled-quote escape, e.g. 'it''s'
+            # slice handles end-of-string scenario
+            if code[i + 1 : i + 2] == quote:
                 i += 2
                 continue
             return i + 1
@@ -350,55 +354,44 @@ def _read_field(code: str, start: int) -> int:
     """
     Index one past the field token starting at ``start``.
 
-    A quoted string is a single token. A bare token runs until a separator,
-    ``=``, ``/``, or quote at parenthesis depth zero; within ``(...)`` nothing
-    separates, so subscripts like ``datum( 1)`` and ``var(1 : 6)%x`` stay
-    whole. Blanks inside a designator (``datum (1)``, ``a % b``) are stepped
-    over, and a Fortran repeat count directly followed by a quote (``6*'x'``)
-    continues into the string.
+    * A quoted string is a single token.
+    * A bare token runs until a separator, ``=``, ``/``, or quote at
+      parenthesis depth zero
+    * Subscripts like ``datum( 1)`` and ``var(1 : 6)%x`` stay whole.
+    * Fortran repeat count directly followed by a quote (``6*'x'``)
+      continues into the string.
     """
-    if code[start] in "'\"":
+    if code[start] in QUOTE_CHARS:
         return _read_quoted(code, start)
 
-    match = _RE_PLAIN_FIELD.match(code, start)
-    if match is not None:
-        end = match.end()
-        follow = code[end : end + 1]
-        if follow in ",=/" or not follow:
-            return end
-        if follow in " \t" and code[end - 1] != "%":
-            # Only a designator continuation ("name (1)", "a % b") reads past
-            # the blank; otherwise the token ends here.
-            j = end + 1
-            while j < len(code) and code[j] in " \t":
-                j += 1
-            if j >= len(code) or code[j] not in "(%":
-                return end
-        # Parens, quotes, or a designator continuation: take the stateful scan.
-
-    depth = 0
+    paren_depth = 0
     i = start
-    while i < len(code):
+    whitespace = frozenset(" \t")
+    length = len(code)
+    while i < length:
         char = code[i]
-        if depth == 0:
-            if char in " \t":
+        if paren_depth == 0:
+            if char in whitespace:
                 j = i
-                while j < len(code) and code[j] in " \t":
+                while j < length and code[j] in whitespace:
                     j += 1
-                if j < len(code) and (code[j] in "(%" or code[i - 1] == "%"):
+                # skip to the next (%
+                prev_ch = code[i - 1]
+                if j < length and (code[j] in "(%" or prev_ch == "%"):
                     i = j
                     continue
                 break
             if char in ",=/":
                 break
-            if char in "'\"":
+            if char in QUOTE_CHARS:
                 if _RE_REPEAT_PREFIX.fullmatch(code, start, i):
                     return _read_quoted(code, i)
                 break
+
         if char == "(":
-            depth += 1
-        elif char == ")" and depth:
-            depth -= 1
+            paren_depth += 1
+        elif char == ")" and paren_depth:
+            paren_depth -= 1
         i += 1
     return i
 
@@ -411,22 +404,15 @@ def _scan_line(code: str) -> Iterator[tuple[str, int, int]]:
         if char in " \t,":
             i += 1
         elif char == "=":
-            yield ("eq", i, i + 1)
+            yield "eq", i, i + 1
             i += 1
         elif char == "/":
-            yield ("slash", i, i + 1)
+            yield "slash", i, i + 1
             return  # the group ends here; the rest of the line is not code
         else:
             end = _read_field(code, i)
-            yield ("field", i, end)
+            yield "field", i, end
             i = end
-
-
-# One coarse lexical token: a quoted string, a bare run, or an '='/'/'.
-# Separators fall between matches. This deliberately ignores the stateful
-# rules (paren depth, designator blanks, repeat merges); `_lex_line` detects
-# those cases and defers to `_scan_line`.
-_RE_LEX = re.compile(rf"{_SINGLE_QUOTED}|{_DOUBLE_QUOTED}|{_LEX_BARE}|[=/]")
 
 
 def _lex_line(code: str) -> list[tuple[str, int, int]]:
@@ -451,7 +437,7 @@ def _lex_line(code: str) -> list[tuple[str, int, int]]:
         elif first == "/":
             tokens.append(("slash", match.start(), match.end()))
             return tokens
-        elif first in "'\"":
+        elif first in QUOTE_CHARS:
             tokens.append(("field", match.start(), match.end()))
         else:
             # Signs that the stateful rules apply: a token split inside
@@ -464,7 +450,7 @@ def _lex_line(code: str) -> list[tuple[str, int, int]]:
             if text[-1] == "*" and _RE_REPEAT_PREFIX.fullmatch(text):
                 # Repeat count directly followed by a quote: 6*'x' is one field.
                 nxt = matches[index + 1] if index + 1 < total else None
-                if nxt is not None and nxt.start() == end and nxt[0][0] in "'\"":
+                if nxt is not None and nxt.start() == end and nxt[0][0] in QUOTE_CHARS:
                     end = nxt.end()
                     index += 1
             tokens.append(("field", match.start(), end))
@@ -473,7 +459,8 @@ def _lex_line(code: str) -> list[tuple[str, int, int]]:
 
 
 def _find_terminator(line: str) -> int | None:
-    """Column of a group-terminating ``/`` on this line, or ``None``.
+    """
+    Column of a group-terminating ``/`` on this line, or ``None``.
 
     Comment- and quote-aware: a ``/`` inside a string or after a ``!`` does
     not terminate.
@@ -606,7 +593,7 @@ def _scan_namelist(
             # The token just before '=' keys the next assignment; the rest of
             # the pending fields close out the previous one. A stray '=' (no
             # preceding token, or a quoted string) is ignored.
-            if pending and pending[-1].text[0] not in "'\"":
+            if pending and pending[-1].text[0] not in QUOTE_CHARS:
                 next_key = pending.pop()
                 finalize()
                 key, eq = next_key, token
