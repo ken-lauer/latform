@@ -171,6 +171,56 @@ def test_format_keeps_multiline_string_record_verbatim():
     assert "x = 1" in rendered
 
 
+@pytest.mark.parametrize("terminator", ["&end", "&END", "$end", "$End"])
+def test_amp_end_terminates_group(terminator: str):
+    source = f"&g\n  x = 1\n{terminator}\n&h\n  y = 2\n/\n"
+    nml = NamelistFile.parse(source)
+    assert [n.name for n in nml.namelists] == ["g", "h"]
+    assert str(nml.namelists[0].get("x").value) == "1"
+    assert nml.render() == source
+
+
+def test_amp_end_inline_after_values():
+    scan = _scan_namelist(["&g", "  x = 1 &end"])
+    assert [(a.key, str(a.value)) for a in scan.assignments] == [("x", "1")]
+    assert scan.terminator == (1, 8)
+
+
+def test_amp_endx_is_not_a_terminator():
+    assert _scan_line_state("  x = &endx", None) == (None, None)
+
+
+def test_amp_end_inside_strings_is_content():
+    (group,) = NamelistFile.parse("&g\n  s = 'a &end b'\n/\n").namelists
+    assert str(group.get("s").value) == "'a &end b'"
+
+    (group,) = NamelistFile.parse("&g\n  s = 'one\n &end two'\n/\n").namelists
+    assert str(group.get("s").value) == "'one\n &end two'"
+
+
+def test_group_named_end_is_not_self_terminating():
+    (group,) = NamelistFile.parse("&end\n  x = 1\n/\n").namelists
+    assert group.name == "end"
+    assert str(group.get("x").value) == "1"
+
+
+def test_set_inserts_before_amp_end_terminator():
+    (group,) = NamelistFile.parse("&g\n  x = 1\n&end\n").namelists
+    group.set("y", "2")
+    assert group.render() == "&g\n  x = 1\n  y = 2\n&end"
+
+
+def test_dollar_group_opener_and_format_preserves_sigil():
+    source = "$g\n  x = 1\n$END\n"
+    nml = NamelistFile.parse(source)
+    (group,) = nml.namelists
+    assert group.name == "g"
+    assert nml.render() == source
+
+    (group,) = NamelistFile.parse("$g x=1 $end\n").namelists
+    assert group.render(NamelistFormatOptions()) == "$g\n  x = 1\n$end"
+
+
 def test_empty_rhs_keeps_following_assignment():
     (group,) = NamelistFile.parse("&g\n  x =\n  y = 1\n/\n").namelists
     assert [(a.key, str(a.value)) for a in group.assignments] == [("x", ""), ("y", "1")]

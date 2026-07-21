@@ -44,7 +44,10 @@ def is_namelist_file(path: pathlib.Path | str) -> bool:
     return pathlib.Path(path).suffix.lower() in _NAMELIST_SUFFIXES
 
 
-_RE_GROUP_OPEN = re.compile(r"\s*&(\w+)")
+# '$' as the group sigil is a GNU extension accepted by gfortran.
+_RE_GROUP_OPEN = re.compile(r"\s*(?P<sigil>[&$])(?P<name>\w+)")
+# A group terminator equivalent to '/': '&end' or '$end', case-insensitive.
+_RE_GROUP_END = re.compile(r"[&$]end", re.IGNORECASE)
 _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")  # one key-path segment: name(subscript)?
 _RE_NORMALIZE_KEY = re.compile(r"\s+")
 _RE_INT = re.compile(r"-?\d+")
@@ -311,13 +314,13 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
                 r.comment_column = column
 
     terminator = scan.terminator
-    opener = bool(lines) and lines[0].lstrip().startswith("&")
+    opener = bool(lines) and lines[0].lstrip().startswith(("&", "$"))
     opener_text = lines[0].strip() if lines else ""
     if opener and (0 in anchors or (terminator is not None and terminator[0] == 0)):
         # Records and/or the terminator share the opener line: keep only &name.
         match = _RE_GROUP_OPEN.match(lines[0])
         if match is not None:
-            opener_text = f"&{match.group(1)}"
+            opener_text = f"{match['sigil']}{match['name']}"
 
     out: list[str] = []
     for index, line in enumerate(lines):
@@ -350,7 +353,8 @@ class _ScanToken(NamedTuple):
 
     A ``strcont`` token is the continuation of a quoted string left open by
     the previous line; it starts at column zero, so its leading whitespace
-    (which is string content) is preserved.
+    (which is string content) is preserved. A ``slash`` token is any group
+    terminator: a ``/`` or an ``&end``/``$end``.
     """
 
     kind: Literal["open", "eq", "slash", "field", "strcont"]
@@ -525,10 +529,11 @@ def _scan_line_state(line: str, open_quote: str | None) -> tuple[int | None, str
 
     ``open_quote`` is the delimiter of a quoted string the previous line left
     unterminated (its continuation is consumed first, so a ``/`` or ``!``
-    inside it is content), or ``None``.
+    inside it is content), or ``None``. The terminator is a ``/`` or an
+    ``&end``/``$end``.
     """
     if open_quote is None:
-        if "/" not in line and "'" not in line and '"' not in line:
+        if not any(c in line for c in "/'\"&$"):
             return None, None
         offset = 0
     else:
@@ -543,7 +548,13 @@ def _scan_line_state(line: str, open_quote: str | None) -> tuple[int | None, str
     for kind, start, end in _lex_line(code):
         if kind == "slash":
             return offset + start, None
-        last_field = code[start:end] if kind == "field" else None
+        if kind == "field":
+            text = code[start:end]
+            if text[0] in "&$" and _RE_GROUP_END.fullmatch(text):
+                return offset + start, None
+            last_field = text
+        else:
+            last_field = None
     if last_field is None:
         return None, None
     return None, _unterminated_quote(last_field)
@@ -554,11 +565,12 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
     Lex a group's source lines into `_ScanToken`s.
 
     Comments are stripped per line. The first token, when it starts with
-    ``&``, is the group opener. A quoted string left open at the end of a
-    line continues onto the next: the continuation (through its closing
-    quote) is yielded as a ``strcont`` token starting at column zero, and
-    only the rest of the line is comment-stripped and lexed. Scanning stops
-    at the terminating ``/``.
+    ``&`` or ``$``, is the group opener. A quoted string left open at the
+    end of a line continues onto the next: the continuation (through its
+    closing quote) is yielded as a ``strcont`` token starting at column
+    zero, and only the rest of the line is comment-stripped and lexed.
+    Scanning stops at the group terminator -- a ``/`` or an ``&end``/``$end``
+    (both yielded as ``slash``).
     """
     first = True
     open_quote: str | None = None
@@ -576,8 +588,11 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
         last_field: str | None = None
         for kind, start, end in _lex_line(code):
             text = code[start:end]
-            if kind == "field" and first and text.startswith("&"):
-                kind = "open"
+            if kind == "field" and text[0] in "&$":
+                if first:
+                    kind = "open"
+                elif _RE_GROUP_END.fullmatch(text):
+                    kind = "slash"
             first = False
             yield _ScanToken(kind, text, index, offset + start, offset + end)
             if kind == "slash":
@@ -651,7 +666,8 @@ class _GroupScan:
     """Parsed content of one ``&name ... /`` group's source lines."""
 
     assignments: list[Assignment]
-    terminator: tuple[int, int] | None  # (line index, column) of the '/'
+    # (line index, column) of the terminator ('/' or '&end'/'$end').
+    terminator: tuple[int, int] | None
 
 
 def _scan_namelist(
@@ -665,9 +681,10 @@ def _scan_namelist(
 
     Namelist input is free-form: values (including quoted strings) may
     continue across lines, several ``key = value`` pairs may share a line,
-    assignments may sit on the ``&name`` opener line, and ``/`` terminates
-    the group anywhere outside a quoted string. Trailing comments attach to
-    the last assignment whose span covers their line.
+    assignments may sit on the ``&name`` opener line, and ``/`` (or
+    ``&end``/``$end``) terminates the group anywhere outside a quoted
+    string. Trailing comments attach to the last assignment whose span
+    covers their line.
     """
     assignments: list[Assignment] = []
     pending: list[_ScanToken] = []
@@ -924,7 +941,8 @@ class Namelist:
     assignments: list[Assignment] = field(default_factory=list)
     filename: pathlib.Path | None = None
     start_line: int = 0
-    # (line index into ``lines``, column) of the terminating '/', or None.
+    # (line index into ``lines``, column) of the terminator ('/' or
+    # '&end'/'$end'), or None.
     _terminator: tuple[int, int] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -961,7 +979,7 @@ class Namelist:
         """Indentation to use for inserted lines, mirroring existing entries."""
         for assignment in self.assignments:
             line = self.lines[assignment.span.line - self.start_line]
-            if line.lstrip().startswith("&"):
+            if line.lstrip().startswith(("&", "$")):
                 continue  # assignments on the opener line carry no useful indent
             return line[: len(line) - len(line.lstrip())]
         return "  "
@@ -973,7 +991,8 @@ class Namelist:
         index, column = self._terminator
         line = self.lines[index]
         if line[:column].strip():
-            # One-line group: split the code before '/' onto its own line.
+            # One-line group: split the code before the terminator onto its
+            # own line.
             self.lines[index : index + 1] = [line[:column].rstrip(), new_line, line[column:]]
         else:
             self.lines.insert(index, new_line)
@@ -1094,13 +1113,17 @@ class NamelistFile:
                     raw.append(line)
                     continue
                 flush_raw()
-                current = Namelist(name=match.group(1), lines=[line], filename=path, start_line=idx)
+                current = Namelist(name=match["name"], lines=[line], filename=path, start_line=idx)
+                # Skip the opener token so a group named "end" is not read
+                # as its own terminator.
+                scan_text = line[match.end() :]
             else:
                 current.lines.append(line)
-            # '/' terminates the group anywhere outside a quoted string --
-            # including one continued from a previous line -- even on the
-            # opener line; anything after it on the line stays verbatim.
-            terminator, open_quote = _scan_line_state(line, open_quote)
+                scan_text = line
+            # '/' or '&end'/'$end' terminates the group anywhere outside a
+            # quoted string -- including one continued from a previous line --
+            # even on the opener line; anything after it stays verbatim.
+            terminator, open_quote = _scan_line_state(scan_text, open_quote)
             if terminator is not None:
                 close()
         close()
@@ -1195,7 +1218,7 @@ class NamelistFile:
         Namelist
             The updated or newly created group.
         """
-        name = name.removeprefix("&")
+        name = name.removeprefix("&").removeprefix("$")
         target = self.get_namelist(name, index)
         if target is None:
             target = Namelist(name=name, lines=[f"&{name}", "/"])
