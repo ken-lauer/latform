@@ -9,13 +9,14 @@ import pytest
 from .._namelist import (
     NamelistFile,
     _find_comment_index,
-    _find_terminator,
+    _scan_line_state,
     _scan_namelist,
     quote_value,
     unquote_value,
 )
 from ..tao import TaoD1Data, TaoInit
 from ..token import Token
+from ..types import NamelistFormatOptions
 
 FILES = pathlib.Path(__file__).resolve().parent / "files" / "tao_init"
 FREEFORM = FILES / "freeform.init"
@@ -36,7 +37,7 @@ FREEFORM = FILES / "freeform.init"
     ],
 )
 def test_find_terminator(line: str, expected: int | None):
-    assert _find_terminator(line) == expected
+    assert _scan_line_state(line, None)[0] == expected
 
 
 @pytest.mark.parametrize(
@@ -118,6 +119,56 @@ def test_interior_comment_on_continuation_line():
     (assignment,) = group.assignments
     assert assignment.comment == "part one"
     assert [str(v) for v in assignment.values] == ["1", "2"]
+
+
+def test_multiline_string_keeps_continuation_whitespace():
+    scan = _scan_namelist(["&g", "  a = 'abc", "       def'", "/"])
+    (assignment,) = scan.assignments
+    assert str(assignment.value) == "'abc\n       def'"
+    (value,) = assignment.values
+    assert str(value) == "'abc\n       def'"
+    assert value.loc.line == 1
+    assert value.loc.end_line == 2
+    assert scan.terminator == (3, 0)
+
+
+def test_multiline_string_spanning_three_lines():
+    scan = _scan_namelist(["&g", "  a = 'one", "two", "  three'", "/"])
+    (assignment,) = scan.assignments
+    assert str(assignment.value) == "'one\ntwo\n  three'"
+    assert [str(v) for v in assignment.values] == ["'one\ntwo\n  three'"]
+
+
+def test_multiline_string_bang_is_content_not_comment():
+    scan = _scan_namelist(["&g", "  a = 'abc", "  d!ef' ! note", "/"])
+    (assignment,) = scan.assignments
+    assert str(assignment.value) == "'abc\n  d!ef'"
+    assert assignment.comment == "note"
+
+
+def test_multiline_string_slash_is_content_not_terminator():
+    source = "&g\n  a = 'abc\n  d/ef'\n/\n"
+    nml = NamelistFile.parse(source)
+    (group,) = nml.namelists
+    (assignment,) = group.assignments
+    assert str(assignment.value) == "'abc\n  d/ef'"
+    assert group._terminator == (3, 0)
+    assert nml.render() == source
+
+
+def test_multiline_string_followed_by_assignment_on_close_line():
+    scan = _scan_namelist(["&g", "a = 'one", "two' b = 3", "/"])
+    a, b = scan.assignments
+    assert (a.key, str(a.value)) == ("a", "'one\ntwo'")
+    assert (b.key, str(b.value)) == ("b", "3")
+
+
+def test_format_keeps_multiline_string_record_verbatim():
+    source = "&g\n  x=1\n  a = 'abc\n       def'\n/"
+    (group,) = NamelistFile.parse(source).namelists
+    rendered = group.render(NamelistFormatOptions())
+    assert "  a = 'abc\n       def'" in rendered
+    assert "x = 1" in rendered
 
 
 def test_empty_rhs_keeps_following_assignment():

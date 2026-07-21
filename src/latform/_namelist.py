@@ -53,8 +53,13 @@ _RE_OPEN_SLICE = re.compile(r"(-?\d+):")
 # A namelist value field is a quoted string or a bare token; fields are
 # separated by whitespace/commas, which fall between the matches. Fortran
 # escapes a quote inside a string by doubling it ('it''s').
-_SINGLE_QUOTED = r"'(?:''|[^'])*'?"  # trailing '? tolerates a missing closing quote
-_DOUBLE_QUOTED = r'"(?:""|[^"])*"?'
+_SINGLE_QUOTED_CLOSED = r"'(?:''|[^'])*'"
+_DOUBLE_QUOTED_CLOSED = r'"(?:""|[^"])*"'
+# The trailing ? tolerates a missing closing quote: the string continues on
+# the next source line (or is simply unterminated).
+_SINGLE_QUOTED = _SINGLE_QUOTED_CLOSED + "?"
+_DOUBLE_QUOTED = _DOUBLE_QUOTED_CLOSED + "?"
+_RE_CLOSED_STRING = re.compile(rf"{_SINGLE_QUOTED_CLOSED}|{_DOUBLE_QUOTED_CLOSED}")
 _BARE_TOKEN = r"""[^ \t\r\n,'"]+"""  # runs until a separator or quote
 _REPEAT_COUNT = r"(?:(?P<count>\d+)\*)?"  # optional Fortran repeat: 3*0 -> 0 0 0
 _RE_VALUE_FIELD = re.compile(
@@ -219,10 +224,18 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
     records, the ``=`` (when ``align_equals``) and the trailing ``!`` comments
     (when ``align_comments``) are padded into columns. The opener and
     terminator stay at column zero, blank lines stay empty, and comment-only
-    lines are indented but do not participate in a run's alignment.
+    lines are indented but do not participate in a run's alignment. A record
+    whose quoted string continues across lines is left completely verbatim:
+    re-indenting its continuation would change the string's content.
     """
     indent = options.indent_char * options.indent_size
     scan = _scan_namelist(lines)
+
+    # Lines of records kept byte-identical (multiline quoted strings).
+    verbatim: set[int] = set()
+    for assignment in scan.assignments:
+        if any(token.kind == "strcont" for token in assignment.field_tokens):
+            verbatim.update(range(assignment.span.line, assignment.span.end_line + 1))
 
     # anchors: physical line -> rows to emit there; line_rows: physical line ->
     # the (record, row) owning that line's trailing comment (last record wins);
@@ -233,6 +246,10 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
 
     for assignment in scan.assignments:
         start = assignment.span.line  # base_line=0: locations are line indices
+        if any(ln in verbatim for ln in range(start, assignment.span.end_line + 1)):
+            # This assignment shares lines with a verbatim record; formatting
+            # it would splice those lines. Keep it verbatim too.
+            continue
         # ``str(value)`` is the raw field-to-field slice per physical line
         # (including any repeat-count prefix), joined with newlines.
         chunk_lines = sorted({token.loc.line for token in assignment.values})
@@ -304,6 +321,9 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
 
     out: list[str] = []
     for index, line in enumerate(lines):
+        if index in verbatim:
+            out.append(line)
+            continue
         if index == 0 and opener:
             out.append(opener_text)
         for record, row in anchors.get(index, ()):
@@ -325,9 +345,15 @@ def _format_group_lines(lines: list[str], options: NamelistFormatOptions) -> lis
 
 
 class _ScanToken(NamedTuple):
-    """One lexical token of a group's comment-stripped source lines."""
+    """
+    One lexical token of a group's comment-stripped source lines.
 
-    kind: Literal["open", "eq", "slash", "field"]
+    A ``strcont`` token is the continuation of a quoted string left open by
+    the previous line; it starts at column zero, so its leading whitespace
+    (which is string content) is preserved.
+    """
+
+    kind: Literal["open", "eq", "slash", "field", "strcont"]
     text: str
     line: int  # index into the scanned lines, not the source file
     column: int
@@ -348,6 +374,41 @@ def _read_quoted(code: str, start: int) -> int:
             return i + 1
         i += 1
     return len(code)  # unterminated: runs to the end of the line
+
+
+def _read_string_close(line: str, quote: str) -> int | None:
+    """
+    Index one past the quote closing a string continued onto this line.
+
+    ``None`` when the string does not close on this line. Doubled quotes are
+    escapes, as in `_read_quoted`.
+    """
+    i = 0
+    while i < len(line):
+        if line[i] == quote:
+            if line[i + 1 : i + 2] == quote:
+                i += 2
+                continue
+            return i + 1
+        i += 1
+    return None
+
+
+def _unterminated_quote(field_text: str) -> str | None:
+    """
+    The delimiter of a quoted field missing its closing quote, or ``None``.
+
+    `_read_quoted` cannot distinguish a string closing exactly at the end of
+    the line from an unterminated one, so this re-checks the token text. A
+    repeat-count prefix (``3*'ab``) is stripped first.
+    """
+    match = _RE_REPEAT_PREFIX.match(field_text)
+    if match is not None:
+        field_text = field_text[match.end() :]
+    quote = field_text[:1]
+    if quote not in ("'", '"') or _RE_CLOSED_STRING.fullmatch(field_text):
+        return None
+    return quote
 
 
 def _read_field(code: str, start: int) -> int:
@@ -458,20 +519,34 @@ def _lex_line(code: str) -> list[tuple[str, int, int]]:
     return tokens
 
 
-def _find_terminator(line: str) -> int | None:
+def _scan_line_state(line: str, open_quote: str | None) -> tuple[int | None, str | None]:
     """
-    Column of a group-terminating ``/`` on this line, or ``None``.
+    ``(terminator column, open-string state)`` after scanning one group line.
 
-    Comment- and quote-aware: a ``/`` inside a string or after a ``!`` does
-    not terminate.
+    ``open_quote`` is the delimiter of a quoted string the previous line left
+    unterminated (its continuation is consumed first, so a ``/`` or ``!``
+    inside it is content), or ``None``.
     """
-    if "/" not in line:
-        return None
-    code, _ = _split_comment(line)
-    for kind, start, _end in _lex_line(code):
+    if open_quote is None:
+        if "/" not in line and "'" not in line and '"' not in line:
+            return None, None
+        offset = 0
+    else:
+        if open_quote not in line:
+            return None, open_quote
+        close = _read_string_close(line, open_quote)
+        if close is None:
+            return None, open_quote
+        offset = close
+    code, _ = _split_comment(line[offset:])
+    last_field: str | None = None
+    for kind, start, end in _lex_line(code):
         if kind == "slash":
-            return start
-    return None
+            return offset + start, None
+        last_field = code[start:end] if kind == "field" else None
+    if last_field is None:
+        return None, None
+    return None, _unterminated_quote(last_field)
 
 
 def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
@@ -479,18 +554,37 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
     Lex a group's source lines into `_ScanToken`s.
 
     Comments are stripped per line. The first token, when it starts with
-    ``&``, is the group opener. Scanning stops at the terminating ``/``.
+    ``&``, is the group opener. A quoted string left open at the end of a
+    line continues onto the next: the continuation (through its closing
+    quote) is yielded as a ``strcont`` token starting at column zero, and
+    only the rest of the line is comment-stripped and lexed. Scanning stops
+    at the terminating ``/``.
     """
     first = True
+    open_quote: str | None = None
     for index, line in enumerate(lines):
-        code, _ = _split_comment(line)
+        offset = 0
+        if open_quote is not None:
+            close = _read_string_close(line, open_quote)
+            if close is None:
+                yield _ScanToken("strcont", line, index, 0, len(line))
+                continue
+            yield _ScanToken("strcont", line[:close], index, 0, close)
+            open_quote = None
+            offset = close
+        code, _ = _split_comment(line[offset:])
+        last_field: str | None = None
         for kind, start, end in _lex_line(code):
-            if kind == "field" and first and code[start] == "&":
+            text = code[start:end]
+            if kind == "field" and first and text.startswith("&"):
                 kind = "open"
             first = False
-            yield _ScanToken(kind, code[start:end], index, start, end)
+            yield _ScanToken(kind, text, index, offset + start, offset + end)
             if kind == "slash":
                 return
+            last_field = text if kind == "field" else None
+        if last_field is not None:
+            open_quote = _unterminated_quote(last_field)
 
 
 def _build_assignment(
@@ -569,11 +663,11 @@ def _scan_namelist(
     """
     Parse a group's source lines into `Assignment`s with true source spans.
 
-    Namelist input is free-form: values may continue across lines, several
-    ``key = value`` pairs may share a line, assignments may sit on the
-    ``&name`` opener line, and ``/`` terminates the group anywhere outside a
-    quoted string. Trailing comments attach to the last assignment whose span
-    covers their line.
+    Namelist input is free-form: values (including quoted strings) may
+    continue across lines, several ``key = value`` pairs may share a line,
+    assignments may sit on the ``&name`` opener line, and ``/`` terminates
+    the group anywhere outside a quoted string. Trailing comments attach to
+    the last assignment whose span covers their line.
     """
     assignments: list[Assignment] = []
     pending: list[_ScanToken] = []
@@ -587,13 +681,14 @@ def _scan_namelist(
         pending.clear()
 
     for token in _scan_group(lines):
-        if token.kind == "field":
+        if token.kind in ("field", "strcont"):
             pending.append(token)
         elif token.kind == "eq":
             # The token just before '=' keys the next assignment; the rest of
             # the pending fields close out the previous one. A stray '=' (no
-            # preceding token, or a quoted string) is ignored.
-            if pending and pending[-1].text[0] not in QUOTE_CHARS:
+            # preceding token, a quoted string, or a string continuation) is
+            # ignored.
+            if pending and pending[-1].kind == "field" and pending[-1].text[0] not in QUOTE_CHARS:
                 next_key = pending.pop()
                 finalize()
                 key, eq = next_key, token
@@ -608,10 +703,18 @@ def _scan_namelist(
             (a.key_loc.line if a.key_loc is not None else a.value.loc.line, a.value.loc.end_line)
             for a in assignments
         ]
+        # A line beginning inside a continued string: comment scanning starts
+        # after the string closes (a '!' inside it is content).
+        cont_end = {
+            token.line: token.end_column
+            for a in assignments
+            for token in a.field_tokens
+            if token.kind == "strcont"
+        }
         for index, line in enumerate(lines):
             if "!" not in line:
                 continue
-            _, comment = _split_comment(line)
+            _, comment = _split_comment(line[cont_end.get(index, 0) :])
             comment = comment.strip()
             if not comment:
                 continue
@@ -744,12 +847,30 @@ class Assignment:
 
     @cached_property
     def values(self) -> list[Token]:
-        """The value fields, repeat counts expanded, with per-field locations."""
+        """
+        The value fields, repeat counts expanded, with per-field locations.
+
+        A quoted string continued across lines is one token, its per-line
+        texts joined with newlines.
+        """
         filename = self.value.loc.filename
         base_line = self.base_line
         values: list[Token] = []
         for token in self.field_tokens:
             text = token.text
+            if token.kind == "strcont" and values:
+                prev = values[-1]
+                values[-1] = Token(
+                    f"{prev}\n{text}",
+                    loc=Location(
+                        filename=filename,
+                        line=prev.loc.line,
+                        column=prev.loc.column,
+                        end_line=base_line + token.line,
+                        end_column=token.end_column,
+                    ),
+                )
+                continue
             start, end, count = _field_value_span(text)
             loc = Location(
                 filename=filename,
@@ -965,6 +1086,7 @@ class NamelistFile:
                 items.append(current)
                 current = None
 
+        open_quote: str | None = None
         for idx, line in enumerate(text.split("\n")):
             if current is None:
                 match = _RE_GROUP_OPEN.match(line)
@@ -975,9 +1097,11 @@ class NamelistFile:
                 current = Namelist(name=match.group(1), lines=[line], filename=path, start_line=idx)
             else:
                 current.lines.append(line)
-            # '/' terminates the group anywhere outside a quoted string, even
-            # on the opener line; anything after it on the line stays verbatim.
-            if _find_terminator(line) is not None:
+            # '/' terminates the group anywhere outside a quoted string --
+            # including one continued from a previous line -- even on the
+            # opener line; anything after it on the line stays verbatim.
+            terminator, open_quote = _scan_line_state(line, open_quote)
+            if terminator is not None:
                 close()
         close()
         flush_raw()
