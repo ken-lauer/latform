@@ -3,6 +3,8 @@ Minimal Fortran-namelist reader/writer.
 
 This will **eventually** go away when f90nml supports everything needed from
 our init.tao files, so it's considered mostly internal API.
+
+In the meantime, I'm moving this into its own package `nmlform`.
 """
 
 from __future__ import annotations
