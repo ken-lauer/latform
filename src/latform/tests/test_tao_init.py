@@ -119,9 +119,14 @@ def test_keypath_range_index_is_none():
         ("var(1 : 6)%ele_name", [1, 2, 3, 4, 5, 6]),
         ("var(1:6: 2)%ele_name", [1, 3, 5]),
         ("var(-2:1)%ele_name", [-2, -1, 0, 1]),
+        ("var(:3)%ele_name", [1, 2, 3]),  # missing start: lower bound of 1
+        ("var(:6:2)%ele_name", [1, 3, 5]),
+        ("var(5:1:-2)%ele_name", [5, 3, 1]),  # negative stride descends
+        ("var(1:5:-1)%ele_name", []),  # wrong-direction range: no elements
         ("var%ele_name", None),  # no subscript
         ("var(N)%ele_name", None),  # named/non-integer bound
-        ("var(1:6:0)%ele_name", None),  # non-positive stride
+        ("var(1:6:0)%ele_name", None),  # zero stride
+        ("var(1,2)%ele_name", None),  # multi-dimensional subscript
     ],
 )
 def test_keycomponent_indices(key: str, expected: list[int] | None):
@@ -426,6 +431,8 @@ def test_open_ended_slice_start_offset():
         ("var(1:)%x", 1),
         ("var(3:)%x", 3),
         ("var(-2:)%x", -2),
+        ("var(:)%x", 1),  # missing start: lower bound of 1
+        ("var(2::3)%x", 2),
         ("var(1:6)%x", None),  # closed sections enumerate via .indices
         ("var(1)%x", None),
         ("var%x", None),
@@ -434,6 +441,22 @@ def test_open_ended_slice_start_offset():
 )
 def test_keycomponent_slice_start(key: str, expected: int | None):
     assert KeyPath.parse(key).components[0].slice_start == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("var(:)%x", (1, 1)),
+        ("var(2:)%x", (2, 1)),
+        ("var(2::3)%x", (2, 3)),
+        ("var(::2)%x", (1, 2)),
+        ("var(2::0)%x", None),  # zero step
+        ("var(1:6)%x", None),
+        ("var(1)%x", None),
+    ],
+)
+def test_keycomponent_open_slice(key: str, expected: tuple[int, int] | None):
+    assert KeyPath.parse(key).components[0].open_slice == expected
 
 
 def test_slice_whitespace_and_empty_section():

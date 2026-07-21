@@ -7,6 +7,9 @@ import pathlib
 import pytest
 
 from .._namelist import (
+    Namelist,
+    NamelistArrayEntry,
+    NamelistArrayGroup,
     NamelistFile,
     _find_comment_index,
     _scan_line_state,
@@ -59,6 +62,7 @@ def test_find_terminator(line: str, expected: int | None):
         "",
         "   ",
         "  x = (1.0, 2.0)",
+        "  x = 1,\n, 2",  # an embedded newline acts as a blank
     ],
 )
 def test_lex_line_matches_scan_line(code: str):
@@ -219,6 +223,94 @@ def test_dollar_group_opener_and_format_preserves_sigil():
 
     (group,) = NamelistFile.parse("$g x=1 $end\n").namelists
     assert group.render(NamelistFormatOptions()) == "$g\n  x = 1\n$end"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("  x = 1,,3", ["1", "", "3"]),
+        ("  x = ,5", ["", "5"]),
+        ("  x = 1,,", ["1", ""]),
+        ("  x = 1,\n,", ["1", ""]),
+        ("  x = 1, 2", ["1", "2"]),  # single commas are plain separators
+        ("  x = 3* 5", ["", "", "", "5"]),  # bare repeat count: that many nulls
+        ("  x = 2*, 7", ["", "", "7"]),
+        ("  s = 'a,,b'", ["'a,,b'"]),  # commas inside strings are content
+    ],
+)
+def test_null_values(line: str, expected: list[str]):
+    scan = _scan_namelist(["&g", line, "/"])
+    (assignment,) = scan.assignments
+    assert [str(v) for v in assignment.values] == expected
+
+
+# Expectations verified against gfortran 15 (element positions observed via
+# sentinel arrays): the separator gap carries across record boundaries, so
+# an end-of-record between commas acts as a blank and does not cancel a null.
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        (["  x = 1,", "      ,3"], ["1", "", "3"]),
+        (["  x = 1,", "      2"], ["1", "2"]),  # plain continuation: no null
+        (["  x = ,", ","], ["", ""]),  # both commas in the '='-gap are nulls
+        (["  x = ,", ", 5"], ["", "", "5"]),
+        (["  x = ,", ",", "5"], ["", "", "5"]),
+        (["  x = 1,", ", ,4"], ["1", "", "", "4"]),
+    ],
+)
+def test_null_values_across_lines(lines: list[str], expected: list[str]):
+    scan = _scan_namelist(["&g", *lines, "/"])
+    (assignment,) = scan.assignments
+    assert [str(v) for v in assignment.values] == expected
+
+
+def test_null_belongs_to_previous_assignment():
+    scan = _scan_namelist(["&g", "  x = 1,, y = 2", "/"])
+    assert [(a.key, [str(v) for v in a.values]) for a in scan.assignments] == [
+        ("x", ["1", ""]),
+        ("y", ["2"]),
+    ]
+
+
+def test_null_values_round_trip_and_format():
+    source = "&g\n  x = ,,3\n  y = 1,,\n/\n"
+    nml = NamelistFile.parse(source)
+    assert nml.render() == source
+    rendered = nml.namelists[0].render(NamelistFormatOptions())
+    assert "x = ,,3" in rendered
+    assert "y = 1,," in rendered
+
+
+class _Entry(NamelistArrayEntry):
+    FIELDS = ("f1", "f2", "f3")
+
+
+def test_null_positional_slot_leaves_field_unset():
+    group = NamelistArrayGroup(Namelist(name="t", lines=["&t", "  d(1) = 'a',,'c'", "/"]))
+    (entry,) = group._entries("d", _Entry)
+    assert str(entry.get("f1")) == "'a'"
+    assert entry.get("f2") is None
+    assert str(entry.get("f3")) == "'c'"
+
+
+def test_open_section_defaults_and_step_expand_entries():
+    group = NamelistArrayGroup(
+        Namelist(
+            name="t",
+            lines=["&t", "  d(:)%f1 = 'a' 'b' 'c'", "  d(2::2)%f2 = 'p' 'q'", "/"],
+        )
+    )
+    entries = group._entries("d", _Entry)
+    assert [e.index for e in entries] == [1, 2, 3, 4]
+    assert [str(e.components["f1"]) for e in entries if "f1" in e.components] == [
+        "'a'",
+        "'b'",
+        "'c'",
+    ]
+    assert [(e.index, str(e.components["f2"])) for e in entries if "f2" in e.components] == [
+        (2, "'p'"),
+        (4, "'q'"),
+    ]
 
 
 def test_empty_rhs_keeps_following_assignment():

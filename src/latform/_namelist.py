@@ -51,8 +51,11 @@ _RE_GROUP_END = re.compile(r"[&$]end", re.IGNORECASE)
 _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")  # one key-path segment: name(subscript)?
 _RE_NORMALIZE_KEY = re.compile(r"\s+")
 _RE_INT = re.compile(r"-?\d+")
-_RE_SLICE = re.compile(r"(-?\d+):(-?\d+)(?::(-?\d+))?")
-_RE_OPEN_SLICE = re.compile(r"(-?\d+):")
+# A 1-D array-section triplet: every part of start:stop:step is optional.
+# Declared bounds are unknown here, so a missing start defaults to the
+# Fortran default lower bound of 1; a missing stop makes the section
+# open-ended (see KeyComponent.open_slice).
+_RE_TRIPLET = re.compile(r"(-?\d+)?:(-?\d+)?(?::(-?\d+))?")
 # A namelist value field is a quoted string or a bare token; fields are
 # separated by whitespace/commas, which fall between the matches. Fortran
 # escapes a quote inside a string by doubling it ('it''s').
@@ -70,8 +73,9 @@ _RE_VALUE_FIELD = re.compile(
 )
 _RE_REPEAT_PREFIX = re.compile(r"\d+\*")
 # A bare (unquoted) run as the line lexers see it: stops at a whitespace/comma
-# separator, '=', '/', or a quote. Unlike _BARE_TOKEN, '=' and '/' stop it.
-_LEX_BARE = r"""[^ \t,=/'"]+"""
+# separator (an embedded newline acts as a blank), '=', '/', or a quote.
+# Unlike _BARE_TOKEN, '=' and '/' stop it.
+_LEX_BARE = r"""[^ \t\r\n,=/'"]+"""
 # One coarse lexical token: a quoted string, a bare run, or an '='/'/'.
 # Separators fall between matches. This deliberately ignores the stateful
 # rules (paren depth, designator blanks, repeat merges); `_lex_line` detects
@@ -354,10 +358,13 @@ class _ScanToken(NamedTuple):
     A ``strcont`` token is the continuation of a quoted string left open by
     the previous line; it starts at column zero, so its leading whitespace
     (which is string content) is preserved. A ``slash`` token is any group
-    terminator: a ``/`` or an ``&end``/``$end``.
+    terminator: a ``/`` or an ``&end``/``$end``. A ``null`` token spans the
+    comma denoting a Fortran null value (an element to skip): a comma beyond
+    the first in the separators after a value, or any comma directly after
+    ``=``.
     """
 
-    kind: Literal["open", "eq", "slash", "field", "strcont"]
+    kind: Literal["open", "eq", "slash", "field", "strcont", "null"]
     text: str
     line: int  # index into the scanned lines, not the source file
     column: int
@@ -431,7 +438,7 @@ def _read_field(code: str, start: int) -> int:
 
     paren_depth = 0
     i = start
-    whitespace = frozenset(" \t")
+    whitespace = frozenset(" \t\r\n")
     length = len(code)
     while i < length:
         char = code[i]
@@ -466,7 +473,7 @@ def _scan_line(code: str) -> Iterator[tuple[str, int, int]]:
     i = 0
     while i < len(code):
         char = code[i]
-        if char in " \t,":
+        if char in " \t\r\n,":
             i += 1
         elif char == "=":
             yield "eq", i, i + 1
@@ -571,9 +578,28 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
     zero, and only the rest of the line is comment-stripped and lexed.
     Scanning stops at the group terminator -- a ``/`` or an ``&end``/``$end``
     (both yielded as ``slash``).
+
+    Fortran null values are yielded as ``null`` tokens: within the separators
+    following a value, every comma beyond the first denotes one skipped
+    element, as does any comma directly after ``=``. The separator gap
+    carries across lines, so ``x = 1,`` continued by ``,3`` holds a null.
     """
     first = True
     open_quote: str | None = None
+    # What the current separator gap follows ("value"/"eq"/"none"), and
+    # whether the gap's separating comma has been seen yet.
+    gap_after = "none"
+    gap_comma_seen = False
+
+    def gap_nulls(code: str, lo: int, hi: int, index: int, offset: int) -> Iterator[_ScanToken]:
+        nonlocal gap_comma_seen
+        for i in range(lo, hi):
+            if code[i] != ",":
+                continue
+            if gap_after == "eq" or (gap_after == "value" and gap_comma_seen):
+                yield _ScanToken("null", ",", index, offset + i, offset + i + 1)
+            gap_comma_seen = True
+
     for index, line in enumerate(lines):
         offset = 0
         if open_quote is not None:
@@ -584,9 +610,13 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
             yield _ScanToken("strcont", line[:close], index, 0, close)
             open_quote = None
             offset = close
+            gap_after, gap_comma_seen = "value", False
         code, _ = _split_comment(line[offset:])
         last_field: str | None = None
+        prev_end = 0
         for kind, start, end in _lex_line(code):
+            yield from gap_nulls(code, prev_end, start, index, offset)
+            prev_end = end
             text = code[start:end]
             if kind == "field" and text[0] in "&$":
                 if first:
@@ -597,7 +627,12 @@ def _scan_group(lines: list[str]) -> Iterator[_ScanToken]:
             yield _ScanToken(kind, text, index, offset + start, offset + end)
             if kind == "slash":
                 return
-            last_field = text if kind == "field" else None
+            if kind == "field":
+                gap_after, last_field = "value", text
+            else:
+                gap_after, last_field = ("eq" if kind == "eq" else "none"), None
+            gap_comma_seen = False
+        yield from gap_nulls(code, prev_end, len(code), index, offset)
         if last_field is not None:
             open_quote = _unterminated_quote(last_field)
 
@@ -698,7 +733,7 @@ def _scan_namelist(
         pending.clear()
 
     for token in _scan_group(lines):
-        if token.kind in ("field", "strcont"):
+        if token.kind in ("field", "strcont", "null"):
             pending.append(token)
         elif token.kind == "eq":
             # The token just before '=' keys the next assignment; the rest of
@@ -766,33 +801,55 @@ class KeyComponent:
         The explicit integer indices this component designates.
 
         ``[i]`` for a single subscript ``name(i)``; the expanded, ``stop``-
-        inclusive range for a Fortran array section ``name(a:b)`` or
-        ``name(a:b:step)``. ``None`` when there is no subscript or it cannot be
-        enumerated (open-ended range, non-integer bound, a named parameter,
-        non-positive stride, ...).
+        inclusive range for an array section ``name(a:b)`` or
+        ``name(a:b:step)``. A missing ``a`` defaults to a lower bound of 1;
+        a negative step descends (``5:1:-2`` gives ``[5, 3, 1]``). The list
+        is empty when the section designates no elements (e.g. ``5:3``,
+        which gfortran itself rejects as a bad range). ``None`` when there
+        is no subscript or it cannot be enumerated: a non-integer or named
+        bound, a zero step, an open-ended section (see `open_slice`), or a
+        multi-dimensional subscript.
         """
         text = self.index_text
         if text is None:
             return None
         if _RE_INT.fullmatch(text):
             return [int(text)]
-        match = _RE_SLICE.fullmatch(text)
-        if match is None:
+        match = _RE_TRIPLET.fullmatch(text)
+        if match is None or match[2] is None:
             return None
-        start, stop = int(match[1]), int(match[2])
+        start = int(match[1]) if match[1] else 1
+        stop = int(match[2])
         step = int(match[3]) if match[3] else 1
-        if step <= 0:
+        if step == 0:
             return None
-        return list(range(start, stop + 1, step))
+        return list(range(start, stop + (1 if step > 0 else -1), step))
 
     @property
-    def slice_start(self) -> int | None:
-        """The ``a`` of an open-ended array section ``name(a:)``, or ``None``."""
+    def open_slice(self) -> tuple[int, int] | None:
+        """
+        ``(start, step)`` of an open-ended array section, or ``None``.
+
+        Open-ended means no stop bound: ``name(a:)``, ``name(:)``, or
+        ``name(a::step)``; a missing ``a`` defaults to a lower bound of 1.
+        ``None`` for a closed section, a non-section subscript, or a zero
+        step.
+        """
         text = self.index_text
         if text is None:
             return None
-        match = _RE_OPEN_SLICE.fullmatch(text)
-        return int(match[1]) if match is not None else None
+        match = _RE_TRIPLET.fullmatch(text)
+        if match is None or match[2] is not None:
+            return None
+        start = int(match[1]) if match[1] else 1
+        step = int(match[3]) if match[3] else 1
+        return (start, step) if step else None
+
+    @property
+    def slice_start(self) -> int | None:
+        """The start of an open-ended array section (see `open_slice`), or ``None``."""
+        open_slice = self.open_slice
+        return open_slice[0] if open_slice is not None else None
 
     def __str__(self) -> str:
         return self.name if self.index_text is None else f"{self.name}({self.index_text})"
@@ -868,13 +925,29 @@ class Assignment:
         The value fields, repeat counts expanded, with per-field locations.
 
         A quoted string continued across lines is one token, its per-line
-        texts joined with newlines.
+        texts joined with newlines. A Fortran null value -- ``,,``, a comma
+        directly after ``=``, or a bare repeat ``r*`` -- is an empty token
+        per skipped element, so positional slots stay honest.
         """
         filename = self.value.loc.filename
         base_line = self.base_line
+
+        def null_token(token: _ScanToken, count: int = 1) -> list[Token]:
+            loc = Location(
+                filename=filename,
+                line=base_line + token.line,
+                column=token.end_column,
+                end_line=base_line + token.line,
+                end_column=token.end_column,
+            )
+            return [Token("", loc=loc) for _ in range(count)]
+
         values: list[Token] = []
         for token in self.field_tokens:
             text = token.text
+            if token.kind == "null":
+                values.extend(null_token(token))
+                continue
             if token.kind == "strcont" and values:
                 prev = values[-1]
                 values[-1] = Token(
@@ -887,6 +960,10 @@ class Assignment:
                         end_column=token.end_column,
                     ),
                 )
+                continue
+            if _RE_REPEAT_PREFIX.fullmatch(text):
+                # A bare repeat count ("3*"): that many nulls.
+                values.extend(null_token(token, int(text[:-1])))
                 continue
             start, end, count = _field_value_span(text)
             loc = Location(
@@ -1278,7 +1355,10 @@ class NamelistArrayEntry:
         if name in self.FIELDS:
             position = self.FIELDS.index(name)
             if position < len(self.positional):
-                return self.positional[position]
+                token = self.positional[position]
+                # A null value (``,,`` or ``r*``) leaves the field unset;
+                # an explicitly blank string is the distinct token ``''``.
+                return token if str(token) else None
         return None
 
     def value(self, name: str) -> Token | None:
@@ -1333,12 +1413,13 @@ class NamelistArrayGroup:
             component = path.components[0]
             indices = component.indices
 
-            # An open-ended section ``name(a:)`` takes its extent from the
-            # number of supplied values.
+            # An open-ended section ``name(a:)`` or ``name(:)`` takes its
+            # extent from the number of supplied values.
             if indices is None and len(path.components) > 1:
-                start = component.slice_start
-                if start is not None:
-                    indices = list(range(start, start + len(assignment.values)))
+                open_slice = component.open_slice
+                if open_slice is not None:
+                    start, step = open_slice
+                    indices = [start + i * step for i in range(len(assignment.values))]
 
             # An empty array section (e.g. an ascending ``5:3`` slice) designates
             # no elements, so the assignment is a no-op.
