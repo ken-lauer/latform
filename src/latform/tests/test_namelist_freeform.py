@@ -214,6 +214,68 @@ def test_set_inserts_before_amp_end_terminator():
     assert group.render() == "&g\n  x = 1\n  y = 2\n&end"
 
 
+def test_midline_opener_after_raw_text():
+    source = "leading junk &g\n  x = 1\n/\n"
+    nml = NamelistFile.parse(source)
+    (group,) = nml.namelists
+    assert group.name == "g"
+    assert group.continues_line
+    assert group.lines[0] == "&g"
+    assert str(group.get("x").value) == "1"
+    raw = [item for item in nml.items if isinstance(item, str)]
+    assert raw[0] == "leading junk "
+    assert nml.render() == source
+
+
+def test_two_groups_on_one_line():
+    source = "&a x = 1 / &b y = 2 /\n"
+    nml = NamelistFile.parse(source)
+    assert [n.name for n in nml.namelists] == ["a", "b"]
+    assert str(nml.namelists[0].get("x").value) == "1"
+    assert str(nml.namelists[1].get("y").value) == "2"
+    assert nml.render() == source
+
+
+def test_junk_after_terminator_stays_with_closed_group():
+    source = "&a x = 1 / junk &b\n  y = 2\n/\n"
+    nml = NamelistFile.parse(source)
+    a, b = nml.namelists
+    assert a.lines == ["&a x = 1 / junk "]
+    assert str(b.get("y").value) == "2"
+    assert nml.render() == source
+
+
+def test_amp_end_then_new_group_on_one_line():
+    source = "&a x = 1 &end &b y = 2 /\n"
+    nml = NamelistFile.parse(source)
+    assert [n.name for n in nml.namelists] == ["a", "b"]
+    assert nml.render() == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "! &g\ntext\n",  # opener inside a comment outside any group
+        "&a x = 1 / ! &b\n",  # ...or after a close on the same line
+    ],
+)
+def test_opener_inside_comment_does_not_open(source: str):
+    nml = NamelistFile.parse(source)
+    assert [n.name for n in nml.namelists] == ([] if source.startswith("!") else ["a"])
+    assert nml.render() == source
+
+
+def test_set_on_midline_group():
+    nml = NamelistFile.parse("&a x = 1 / &b y = 2 /\n")
+    nml.namelists[1].set("z", "3")
+    assert nml.render() == "&a x = 1 / &b y = 2\n  z = 3\n/\n"
+
+
+def test_format_promotes_midline_group_to_own_line():
+    out = NamelistFile.parse("junk &g x=1 /\n").render(NamelistFormatOptions())
+    assert out == "junk \n&g\n  x = 1\n/\n"
+
+
 def test_dollar_group_opener_and_format_preserves_sigil():
     source = "$g\n  x = 1\n$END\n"
     nml = NamelistFile.parse(source)

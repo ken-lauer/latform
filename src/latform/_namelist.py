@@ -46,6 +46,9 @@ def is_namelist_file(path: pathlib.Path | str) -> bool:
 
 # '$' as the group sigil is a GNU extension accepted by gfortran.
 _RE_GROUP_OPEN = re.compile(r"\s*(?P<sigil>[&$])(?P<name>\w+)")
+# gfortran scans the character stream for the opener, so a group may open
+# mid-line after arbitrary text.
+_RE_GROUP_ANYWHERE = re.compile(r"[&$]\w+")
 # A group terminator equivalent to '/': '&end' or '$end', case-insensitive.
 _RE_GROUP_END = re.compile(r"[&$]end", re.IGNORECASE)
 _RE_COMPONENT = re.compile(r"([^()%]+)(?:\((.*)\))?")  # one key-path segment: name(subscript)?
@@ -1010,6 +1013,11 @@ class Namelist:
         The source filename, if applicable.
     start_line : int
         The absolute, 0-indexed line of the ``&name`` opener in the source file.
+    continues_line : bool
+        The group opened mid-line: ``lines[0]`` is the source line from the
+        opener onward, and rendering the file glues it onto the previous
+        item's last line instead of starting a new one. Column locations on
+        that first line are relative to the slice.
     """
 
     name: str
@@ -1018,6 +1026,7 @@ class Namelist:
     assignments: list[Assignment] = field(default_factory=list)
     filename: pathlib.Path | None = None
     start_line: int = 0
+    continues_line: bool = False
     # (line index into ``lines``, column) of the terminator ('/' or
     # '&end'/'$end'), or None.
     _terminator: tuple[int, int] | None = field(default=None, init=False, repr=False)
@@ -1184,25 +1193,61 @@ class NamelistFile:
 
         open_quote: str | None = None
         for idx, line in enumerate(text.split("\n")):
-            if current is None:
-                match = _RE_GROUP_OPEN.match(line)
-                if match is None:
-                    raw.append(line)
-                    continue
-                flush_raw()
-                current = Namelist(name=match["name"], lines=[line], filename=path, start_line=idx)
-                # Skip the opener token so a group named "end" is not read
-                # as its own terminator.
-                scan_text = line[match.end() :]
-            else:
-                current.lines.append(line)
-                scan_text = line
-            # '/' or '&end'/'$end' terminates the group anywhere outside a
-            # quoted string -- including one continued from a previous line --
-            # even on the opener line; anything after it stays verbatim.
-            terminator, open_quote = _scan_line_state(scan_text, open_quote)
-            if terminator is not None:
+            # A line may host raw text, several groups, or both (gfortran
+            # scans the character stream): consume it left to right.
+            pos = 0  # column where the unconsumed text begins
+            line_origin = 0  # slice origin of the active group's line here
+            closed: Namelist | None = None  # group closed earlier on this line
+            closed_origin = 0
+            while True:
+                if current is None:
+                    rest = line[pos:]
+                    # Outside a group, '!' comments out the rest of the line
+                    # (no quote semantics apply out here).
+                    match = _RE_GROUP_ANYWHERE.search(rest.split("!", 1)[0])
+                    if match is None:
+                        if closed is None and pos == 0:
+                            raw.append(line)
+                        # Otherwise the remainder stays verbatim in the
+                        # closed group's last line.
+                        break
+                    col = pos + match.start()
+                    continues = True
+                    if closed is not None:
+                        # A new group follows on the same line: the closed
+                        # group keeps the line only up to this opener. Its
+                        # parse is unaffected (scanning stopped at its
+                        # terminator), so no reparse is needed.
+                        closed.lines[-1] = line[closed_origin:col]
+                    elif line[:col].strip():
+                        raw.append(line[:col])  # junk before a mid-line opener
+                    else:
+                        continues = False  # only whitespace precedes: own the line
+                    flush_raw()
+                    line_origin = col if continues else 0
+                    current = Namelist(
+                        name=match.group()[1:],
+                        lines=[line[line_origin:]],
+                        filename=path,
+                        start_line=idx,
+                        continues_line=continues,
+                    )
+                    # Skip the opener token so a group named "end" is not
+                    # read as its own terminator.
+                    scan_start = pos + match.end()
+                else:
+                    current.lines.append(line)
+                    line_origin = 0
+                    scan_start = 0
+                # '/' or '&end'/'$end' terminates the group anywhere outside
+                # a quoted string -- including one continued from a previous
+                # line -- even on the opener line.
+                terminator, open_quote = _scan_line_state(line[scan_start:], open_quote)
+                if terminator is None:
+                    break
+                closed, closed_origin = current, line_origin
                 close()
+                pos = scan_start + terminator + 1
         close()
         flush_raw()
         return cls(items=items, filename=path)
@@ -1245,9 +1290,12 @@ class NamelistFile:
         options.
         """
         if options is None:
-            return "\n".join(
-                item.render() if isinstance(item, Namelist) else item for item in self.items
-            )
+            parts: list[str] = []
+            for item in self.items:
+                if parts and not (isinstance(item, Namelist) and item.continues_line):
+                    parts.append("\n")
+                parts.append(item.render() if isinstance(item, Namelist) else item)
+            return "".join(parts)
         return self._render_with_options(options)
 
     @property
