@@ -676,7 +676,7 @@ def create_server(
             "Install it with: pip install 'latform[lsp]'"
         ) from exc
 
-    server = LanguageServer(name, version)
+    server = LanguageServer(name, version, text_document_sync_kind=lsp.TextDocumentSyncKind.Full)
     workspace = Workspace()
 
     if client_log_level is not None:
@@ -700,7 +700,7 @@ def create_server(
         """Convert a latform `Location` (inclusive end_column) to an LSP range."""
         return lsp.Range(
             start=lsp.Position(line=loc.line, character=loc.column),
-            end=lsp.Position(line=loc.end_line, character=loc.end_column + 1),
+            end=lsp.Position(line=loc.end_line, character=loc.end_column),
         )
 
     def _related(diag: Diagnostic):
@@ -713,6 +713,8 @@ def create_server(
             if loc.filename is not None
         ]
         return info or None
+
+    open_uris: dict[pathlib.Path, str] = {}
 
     def _publish(uri: str) -> None:
         analyzed = workspace.analyze(_uri_to_path(uri))
@@ -732,27 +734,34 @@ def create_server(
 
     def _publish_all() -> None:
         # An edit in one project file can change diagnostics in its siblings.
-        for path in list(workspace.open_texts):
-            _publish(path.as_uri())
+        for uri in list(open_uris.values()):
+            _publish(uri)
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)
     def did_open(params: lsp.DidOpenTextDocumentParams) -> None:
-        logger.debug("didOpen %s", params.text_document.uri)
-        workspace.set_text(_uri_to_path(params.text_document.uri), params.text_document.text)
+        uri = params.text_document.uri
+        logger.debug("didOpen %s", uri)
+        open_uris[_uri_to_path(uri)] = uri
+        workspace.set_text(_uri_to_path(uri), params.text_document.text)
         _publish_all()
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)
     def did_change(params: lsp.DidChangeTextDocumentParams) -> None:
-        # Full-sync: the last content change holds the whole document.
-        logger.debug("didChange %s", params.text_document.uri)
-        workspace.set_text(_uri_to_path(params.text_document.uri), params.content_changes[-1].text)
+        # Full-sync (see create_server): the sole content change is the whole
+        # document.
+        uri = params.text_document.uri
+        logger.debug("didChange %s", uri)
+        open_uris[_uri_to_path(uri)] = uri
+        workspace.set_text(_uri_to_path(uri), params.content_changes[-1].text)
         _publish_all()
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
     def did_close(params: lsp.DidCloseTextDocumentParams) -> None:
-        logger.debug("didClose %s", params.text_document.uri)
-        workspace.close(_uri_to_path(params.text_document.uri))
-        server.publish_diagnostics(params.text_document.uri, [])
+        uri = params.text_document.uri
+        logger.debug("didClose %s", uri)
+        open_uris.pop(_uri_to_path(uri), None)
+        workspace.close(_uri_to_path(uri))
+        server.publish_diagnostics(uri, [])
         _publish_all()
 
     @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)

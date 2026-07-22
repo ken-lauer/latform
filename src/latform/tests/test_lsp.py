@@ -269,6 +269,18 @@ def test_create_server() -> None:
     assert server is not None
 
 
+def test_server_advertises_full_sync() -> None:
+    """
+    Full-document sync must be advertised.  Under pygls's default (incremental)
+    the change handler receives per-edit deltas it does not apply, so live edits
+    would silently fail to update diagnostics.
+    """
+    lsp_types = pytest.importorskip("lsprotocol.types")
+    server = lsp.create_server()
+    # pygls reads this (private) field when building server capabilities.
+    assert server._text_document_sync_kind == lsp_types.TextDocumentSyncKind.Full
+
+
 # --------------------------------------------------------------------------- #
 # Logging
 # --------------------------------------------------------------------------- #
