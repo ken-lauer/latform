@@ -726,6 +726,12 @@ class Files:
         """Hook to read file contents. default: read from disk."""
         return filepath.read_text()
 
+    def _parse_file(self, contents: str, filename: pathlib.Path) -> list[Statement]:
+        """
+        Parse a single file's contents (without annotation).
+        """
+        return list(parse(contents=contents, filename=filename, annotate=False))
+
     def parse(
         self,
         recurse: bool = True,
@@ -806,7 +812,7 @@ class Files:
                     statements: list[Statement] = [b.parse() for b in blocks]
                 else:
                     # We don't annotate individually here, we do it in bulk later
-                    statements = list(parse(contents=contents, filename=full_path, annotate=False))
+                    statements = self._parse_file(contents, full_path)
             except Exception as ex:
                 if hasattr(ex, "add_note"):  # py 3.11+
                     ex.add_note(f"Exception ocurred while parsing {full_path}")
@@ -830,17 +836,26 @@ class Files:
 
         return self.by_filename
 
+    def _annotate_file(
+        self,
+        filename: pathlib.Path,
+        named: dict[Token, Statement],
+        defined: dict[str, Element],
+    ):
+        statements = self.by_filename[filename]
+        for st in statements:
+            st.annotate(named=named)
+        _resolve_element_types(statements, defined)
+        _resolve_references(statements)
+
     def annotate(self):
         """
         Resolve named items across all parsed files.
         """
         named = self.get_named_items()
         defined: dict[str, Element] = {}
-        for statements in self.by_filename.values():
-            for st in statements:
-                st.annotate(named=named)
-            _resolve_element_types(statements, defined)
-            _resolve_references(statements)
+        for fn in self.by_filename:
+            self._annotate_file(fn, named, defined)
 
     def match_elements(self, pattern: str) -> list[Element] | None:
         """
