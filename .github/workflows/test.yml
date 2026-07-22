@@ -16,7 +16,7 @@ jobs:
 
       - uses: ./.github/actions/conda-setup
         with:
-          extra_packages: pytao
+          extra_packages: pytao pygls
 
       - uses: ./.github/actions/bmad-setup # -> sets ACC_ROOT_DIR
 
