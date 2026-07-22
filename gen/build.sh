@@ -3,7 +3,7 @@
 cmake -D CMAKE_BUILD_TYPE=Debug -B build . &&
   make -C build VERBOSE=1
 
-./build/gen_attrs >attrs.py
+./build/gen_attrs | python gen_attrs.py >attrs.py
 
 if command -v ruff; then
   ruff format attrs.py
