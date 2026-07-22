@@ -305,7 +305,7 @@ def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None
 
 def get_used_names(statements: Sequence[Statement]) -> frozenset[str]:
     """Uppercase names referenced anywhere in value/expression positions."""
-    return frozenset(str(tok.upper()) for tok in _iter_usage_tokens(statements))
+    return frozenset(str(tok).upper() for tok in _iter_usage_tokens(statements))
 
 
 def lint_unused_constants(
