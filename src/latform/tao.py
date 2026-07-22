@@ -40,6 +40,7 @@ __all__ = [
     "TaoV1Var",
     "TaoInit",
     "is_init_file",
+    "looks_like_namelist",
 ]
 
 # `tao_datum_input` fields in declaration order
@@ -112,6 +113,13 @@ NAMELIST_SOURCE: dict[str, str] = {
 def is_init_file(path: pathlib.Path | str) -> bool:
     """Whether ``path`` names a Tao namelist init file (``*.init``)."""
     return pathlib.Path(path).suffix.lower() == ".init"
+
+
+def looks_like_namelist(contents: str) -> bool:
+    """Whether ``contents`` looks like it could be a namelist."""
+    # Not a very accurate mechanism, but we at least know that lattice files
+    # won't start out with ampersands
+    return any(line.lstrip().startswith("&") for line in contents.splitlines())
 
 
 def _read_if_exists(path: pathlib.Path) -> str | None:
