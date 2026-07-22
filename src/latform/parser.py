@@ -760,7 +760,7 @@ class Files:
             if full_path in processed:
                 continue
 
-            logger.debug("Processing %s", full_path)
+            logger.debug("Parsing %s", full_path)
             processed.add(full_path)
 
             try:
