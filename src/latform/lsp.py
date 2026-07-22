@@ -29,6 +29,7 @@ from .const import named_physical_constants
 from .funcs import BUILTIN_CONSTANTS, INTRINSIC_FUNCTIONS
 from .lint import Lint, get_used_names, lint_statements
 from .location import Location
+from .output import format_statements
 from .parser import MemoryFiles, _expand_element_type, _resolve_lattice_paths, implicit_location
 from .statements import (
     BUILTIN_TARGETS,
@@ -496,6 +497,62 @@ def find_references(
 
     results.sort(key=lambda loc: (str(loc.filename), loc.line, loc.column))
     return results
+
+
+def prepare_rename(analyzed: AnalyzedDocument, line: int, char: int) -> Location | None:
+    """
+    The range of the renameable name under a 0-indexed position, or ``None``.
+
+    Only element/constant/line names (``Role.name_``) with a real source
+    location can be renamed — not keywords, attributes, or builtins.
+    """
+    if analyzed.files is None:
+        return None
+    tok = token_at_position(analyzed.statements, line, char)
+    if tok is None or tok.role != Role.name_ or tok.loc is None:
+        return None
+    if tok.loc.filename == implicit_location.filename:
+        return None
+    return tok.loc
+
+
+def _statement_line_span(statement: Statement) -> tuple[int, int] | None:
+    """The ``(start_line, end_line)`` a statement occupies, or ``None``."""
+    locs = [tok.loc for tok in _statement_tokens(statement) if tok.loc is not None]
+    if not locs:
+        return None
+    return min(loc.line for loc in locs), max(loc.end_line for loc in locs)
+
+
+def format_document(analyzed: AnalyzedDocument) -> str | None:
+    """The whole document reformatted per project settings, or ``None``."""
+    if analyzed.files is None:
+        return None
+    return format_statements(analyzed.statements, _format_options(analyzed.config))
+
+
+def format_range(
+    analyzed: AnalyzedDocument, start_line: int, end_line: int
+) -> tuple[int, int, str] | None:
+    """
+    Reformat the statements intersecting 0-indexed lines ``[start_line, end_line]``.
+
+    Returns ``(first_line, last_line, formatted_text)`` spanning the full lines
+    of the affected statements, or ``None`` if nothing there can be formatted.
+    """
+    if analyzed.files is None:
+        return None
+    selected = []
+    for statement in analyzed.statements:
+        span = _statement_line_span(statement)
+        if span is not None and span[0] <= end_line and span[1] >= start_line:
+            selected.append((span[0], span[1], statement))
+    if not selected:
+        return None
+    first = min(span_start for span_start, _, _ in selected)
+    last = max(span_end for _, span_end, _ in selected)
+    text = format_statements([st for _, _, st in selected], _format_options(analyzed.config))
+    return first, last, text
 
 
 def hover_text(
@@ -1331,6 +1388,57 @@ def create_server(
             "completion %s @ %d:%d -> %d item(s)", uri, pos.line, pos.character, len(items)
         )
         return lsp.CompletionList(is_incomplete=False, items=items)
+
+    @server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)
+    def prepare_rename_(params: lsp.PrepareRenameParams):
+        analyzed = workspace.analyze(_uri_to_path(params.text_document.uri))
+        loc = prepare_rename(analyzed, params.position.line, params.position.character)
+        return _range(loc) if loc is not None else None
+
+    @server.feature(lsp.TEXT_DOCUMENT_RENAME, lsp.RenameOptions(prepare_provider=True))
+    def rename(params: lsp.RenameParams):
+        pos = params.position
+        analyzed = workspace.analyze(_uri_to_path(params.text_document.uri))
+        locs = find_references(analyzed, pos.line, pos.character, include_declaration=True)
+        changes: dict[str, list] = {}
+        for loc in locs:
+            if loc.filename is None:
+                continue
+            uri = loc.filename.resolve().as_uri()
+            changes.setdefault(uri, []).append(
+                lsp.TextEdit(range=_range(loc), new_text=params.new_name)
+            )
+        logger.debug(
+            "rename -> %d edit(s) across %d file(s)", sum(map(len, changes.values())), len(changes)
+        )
+        return lsp.WorkspaceEdit(changes=changes) if changes else None
+
+    def _full_document_edit(doc: str, formatted: str) -> "lsp.TextEdit":
+        lines = doc.split("\n")
+        end = lsp.Position(line=len(lines) - 1, character=len(lines[-1]))
+        return lsp.TextEdit(range=lsp.Range(lsp.Position(0, 0), end), new_text=formatted)
+
+    @server.feature(lsp.TEXT_DOCUMENT_FORMATTING)
+    def formatting(params: lsp.DocumentFormattingParams):
+        path = _uri_to_path(params.text_document.uri)
+        formatted = format_document(workspace.analyze(path))
+        if formatted is None:
+            return None
+        return [_full_document_edit(workspace.text_of(path), formatted)]
+
+    @server.feature(lsp.TEXT_DOCUMENT_RANGE_FORMATTING)
+    def range_formatting(params: lsp.DocumentRangeFormattingParams):
+        path = _uri_to_path(params.text_document.uri)
+        result = format_range(
+            workspace.analyze(path), params.range.start.line, params.range.end.line
+        )
+        if result is None:
+            return None
+        first, last, formatted = result
+        lines = workspace.text_of(path).split("\n")
+        end_char = len(lines[last]) if last < len(lines) else 0
+        rng = lsp.Range(lsp.Position(first, 0), lsp.Position(last, end_char))
+        return [lsp.TextEdit(range=rng, new_text=formatted)]
 
     _WATCH_GLOBS = ("**/*.bmad", "**/*.lat", "**/latform.toml", "**/pyproject.toml")
 

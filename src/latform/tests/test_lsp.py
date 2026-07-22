@@ -464,6 +464,68 @@ def test_complete_robust_without_parse(tmp_path: pathlib.Path) -> None:
     assert "k1" in _labels(analyzed, "q0[", kind="attribute", doc=doc)  # type scanned from text
 
 
+# --------------------------------------------------------------------------- #
+# Rename & formatting
+# --------------------------------------------------------------------------- #
+
+RENAME_DOC = "q0: quad, k1 = 1\nll: line = (q0, q0)\nuse, ll\n"
+
+
+@pytest.fixture
+def rename_doc(tmp_path: pathlib.Path) -> lsp.AnalyzedDocument:
+    return lsp.analyze(tmp_path / "r.bmad", RENAME_DOC)
+
+
+@pytest.mark.parametrize(
+    ("needle", "line", "renameable"),
+    [
+        ("q0", 0, True),  # element definition name
+        ("ll", 1, True),  # line name
+        ("q0", 1, True),  # a reference
+        ("quad", 0, False),  # element-type keyword
+        ("k1", 0, False),  # attribute name
+        ("line", 1, False),  # the 'line' keyword
+    ],
+)
+def test_prepare_rename(
+    rename_doc: lsp.AnalyzedDocument, needle: str, line: int, renameable: bool
+) -> None:
+    col = RENAME_DOC.splitlines()[line].index(needle)
+    assert (lsp.prepare_rename(rename_doc, line, col) is not None) == renameable
+
+
+def test_rename_finds_all_occurrences(rename_doc: lsp.AnalyzedDocument) -> None:
+    col = RENAME_DOC.splitlines()[0].index("q0")
+    locs = lsp.find_references(rename_doc, 0, col, include_declaration=True)
+    assert len(locs) == 3  # the definition plus two references in the line
+    assert (0, 0) in [(loc.line, loc.column) for loc in locs]
+
+
+def test_format_document_applies_case(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "latform.toml").write_text('[format]\nname-case = "upper"\nkind-case = "lower"\n')
+    doc = "q0:quad,k1=1,l=2\n"
+    path = tmp_path / "x.bmad"
+    path.write_text(doc)
+    workspace = lsp.Workspace()
+    workspace.set_text(path, doc)
+    assert lsp.format_document(workspace.analyze(path)) == "Q0: quad, k1=1, L=2\n"
+
+
+def test_format_document_none_on_parse_error(tmp_path: pathlib.Path) -> None:
+    analyzed = lsp.analyze(tmp_path / "b.bmad", "q0: quad, k1=(((")
+    assert lsp.format_document(analyzed) is None
+
+
+def test_format_range_subset(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad\nq1: quad\nq2: quad\n"
+    analyzed = lsp.analyze(tmp_path / "x.bmad", doc)
+    result = lsp.format_range(analyzed, 1, 1)  # only the middle statement
+    assert result is not None
+    first, last, text = result
+    assert (first, last) == (1, 1)
+    assert "Q1" in text and "Q0" not in text
+
+
 def test_create_server() -> None:
     pytest.importorskip("pygls")
     server = lsp.create_server()
