@@ -17,25 +17,35 @@ import argparse
 import logging
 import os
 import pathlib
+import re
 import sys
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from typing import Generator, Sequence
 
+from .attrs import element_key_to_attrs
 from .config import LatformProjectConfig, discover_config
+from .const import named_physical_constants
+from .funcs import BUILTIN_CONSTANTS, INTRINSIC_FUNCTIONS
 from .lint import Lint, get_used_names, lint_statements
 from .location import Location
-from .parser import MemoryFiles, _resolve_lattice_paths, implicit_location
+from .parser import MemoryFiles, _expand_element_type, _resolve_lattice_paths, implicit_location
 from .statements import (
+    BUILTIN_TARGETS,
     Constant,
     Element,
     ElementList,
     Line,
+    Parameter,
     Statement,
 )
 from .tao import TaoInit, is_init_file, looks_like_namelist
 from .token import Role, Token
-from .types import CallName, Seq
+from .types import CallName, FormatOptions, Seq
 from .walk import walk
+
+_ELEMENT_TYPES = frozenset(k for k in element_key_to_attrs if not k.startswith("!"))
+_FORMAT_OPTION_FIELDS = frozenset(f.name for f in dataclass_fields(FormatOptions))
 
 logger = logging.getLogger(__name__)
 
@@ -83,20 +93,97 @@ def configure_logging(level: str = "warning", log_file: str | pathlib.Path | Non
 # --------------------------------------------------------------------------- #
 
 
+ParseCache = dict[pathlib.Path, "tuple[str, list[Statement]]"]
+
+
+def _definition_signature(by_filename: dict) -> tuple:
+    """
+    A signature of everything that affects cross-file annotation.
+
+    Two builds with the same signature annotate identically: the set of defined
+    names, their kinds, element inheritance keywords, and file order.  When it is
+    unchanged, files whose contents did not change keep their prior annotation.
+    """
+    sig: list[tuple] = []
+    for filename, statements in by_filename.items():
+        for st in statements:
+            if isinstance(st, Element):
+                sig.append((filename, "E", str(st.name).upper(), str(st.keyword).upper()))
+            elif isinstance(st, Constant):
+                sig.append((filename, "C", str(st.name).upper()))
+            elif isinstance(st, (Line, ElementList)):
+                tok = definition_name_token(st)
+                sig.append((filename, "L", str(tok).upper() if tok is not None else ""))
+    return tuple(sig)
+
+
 class _OverlayFiles(MemoryFiles):
     """
-    `MemoryFiles` whose overlay lookup tolerates non-canonical include paths.
+    `MemoryFiles` with overlay-tolerant reads and incremental parse/annotate.
 
-    ``call`` targets may resolve to paths containing ``..`` or symlinks that do
-    not match the canonicalized keys used for open editor buffers; falling back
-    to a resolved lookup ensures unsaved edits in included files are still used.
+    Overlay lookup falls back to a resolved path so ``call`` targets containing
+    ``..`` or symlinks still match open editor buffers.
+
+    With ``_parse_cache`` set, per-file parsing reuses cached statements for
+    files whose contents are unchanged, so an edit only re-parses the changed
+    file.  With ``_annotate_state`` also set, the cross-file annotation pass
+    re-annotates only the re-parsed files when the definition signature is
+    unchanged (an edit that touched no definition), reusing the prior annotation
+    of every other file.
     """
+
+    _parse_cache: ParseCache | None = None
+    _annotate_state: dict | None = None
+    _reparsed: set | None = None
+    _named_cache: dict | None = None
 
     def _get_file_contents(self, filepath: pathlib.Path) -> str:
         for candidate in (filepath, filepath.resolve()):
             if candidate in self.initial_contents:
                 return self.initial_contents[candidate]
         return filepath.read_text()
+
+    def get_named_items(self) -> dict:
+        # Memoize for this build: statements do not change after parsing, and a
+        # publish resolves several documents against the same file set.
+        if self._named_cache is None:
+            self._named_cache = super().get_named_items()
+        return self._named_cache
+
+    def _parse_file(self, contents: str, filename: pathlib.Path) -> list[Statement]:
+        cache = self._parse_cache
+        if cache is None:
+            return super()._parse_file(contents, filename)
+        cached = cache.get(filename)
+        if cached is not None and cached[0] == contents:
+            return cached[1]
+        statements = super()._parse_file(contents, filename)
+        cache[filename] = (contents, statements)
+        if self._reparsed is not None:
+            self._reparsed.add(filename)
+        return statements
+
+    def annotate(self):
+        state = self._annotate_state
+        if state is None or self._reparsed is None:
+            return super().annotate()
+
+        named = self.get_named_items()
+        signature = _definition_signature(self.by_filename)
+        # Only reuse prior annotation when no definition changed anywhere.
+        incremental = state.get("signature") == signature
+        state["signature"] = signature
+
+        defined: dict[str, Element] = {}
+        for filename, statements in self.by_filename.items():
+            if incremental and filename not in self._reparsed:
+                # Prior annotation is still valid; just feed the type accumulator
+                # so re-parsed files can resolve inheritance from this one.
+                for st in statements:
+                    if isinstance(st, Element):
+                        defined[str(st.name).upper()] = st
+                continue
+            self._annotate_file(filename, named, defined)
 
 
 @dataclass
@@ -147,10 +234,16 @@ def _document_key(files: MemoryFiles, resolved: pathlib.Path) -> pathlib.Path | 
 
 
 def _parse_files(
-    top_files: list[pathlib.Path], contents: dict[pathlib.Path, str]
+    top_files: list[pathlib.Path],
+    contents: dict[pathlib.Path, str],
+    parse_cache: ParseCache | None = None,
+    annotate_state: dict | None = None,
 ) -> tuple[MemoryFiles | None, Exception | None]:
     """Parse and annotate a file set, returning ``(files, error)``."""
     files = _OverlayFiles(top_files=top_files, initial_contents=dict(contents))
+    files._parse_cache = parse_cache
+    files._annotate_state = annotate_state
+    files._reparsed = set() if annotate_state is not None else None
     try:
         files.parse(raise_if_missing=False)
         files.annotate()
@@ -191,11 +284,14 @@ def _expand_top_files(
 
 
 def _build_project(
-    config: LatformProjectConfig, contents: dict[pathlib.Path, str]
+    config: LatformProjectConfig,
+    contents: dict[pathlib.Path, str],
+    parse_cache: ParseCache | None = None,
+    annotate_state: dict | None = None,
 ) -> tuple[MemoryFiles | None, Exception | None]:
     """Parse a project's lattice tree, expanding any ``tao.init`` entries."""
     top_files, tao_inits = _expand_top_files(config, contents)
-    files, error = _parse_files(top_files, contents)
+    files, error = _parse_files(top_files, contents, parse_cache, annotate_state)
     if files is not None and tao_inits:
         # TODO: with several tao.init entries, associate each with its own tree.
         files.tao_init = tao_inits[0]
@@ -208,6 +304,7 @@ def analyze(
     overlay: dict[pathlib.Path, str] | None = None,
     *,
     config: LatformProjectConfig | None = None,
+    parse_cache: ParseCache | None = None,
 ) -> AnalyzedDocument:
     """
     Parse ``text`` as the document at ``path``, following ``call`` includes.
@@ -240,7 +337,7 @@ def analyze(
     contents[resolved] = text
 
     if config is not None and config.top_level:
-        files, error = _build_project(config, contents)
+        files, error = _build_project(config, contents, parse_cache)
         if files is not None:
             key = _document_key(files, resolved)
             if key is not None:
@@ -253,7 +350,7 @@ def analyze(
                 "Project parse failed (%s); using standalone for %s", config.source, resolved
             )
 
-    files, error = _parse_files([resolved], contents)
+    files, error = _parse_files([resolved], contents, parse_cache)
     if files is None:
         logger.debug("Parse failed for %s: %s", resolved, error)
         return AnalyzedDocument(path=resolved, files=None, error=error, config=config)
@@ -282,13 +379,16 @@ def _statement_tokens(statement: Statement) -> list[Token]:
     return [item.node for item in walk(statement) if isinstance(item.node, Token)]
 
 
-def token_at_position(statements: Sequence[Statement], line: int, char: int) -> Token | None:
+def _locate(
+    statements: Sequence[Statement], line: int, char: int
+) -> tuple[Token | None, Statement | None]:
     """
-    The innermost `Token` covering a 0-indexed ``(line, char)`` position.
+    The innermost `Token` covering a 0-indexed position and its statement.
 
     Ties (a position covered by nested tokens) resolve to the smallest span.
     """
     best: Token | None = None
+    best_statement: Statement | None = None
     best_width: int | None = None
     for statement in statements:
         for tok in _statement_tokens(statement):
@@ -298,8 +398,17 @@ def token_at_position(statements: Sequence[Statement], line: int, char: int) -> 
             width = (loc.end_line - loc.line, loc.end_column - loc.column)
             flat = width[0] * 1_000_000 + width[1]
             if best_width is None or flat < best_width:
-                best, best_width = tok, flat
-    return best
+                best, best_statement, best_width = tok, statement, flat
+    return best, best_statement
+
+
+def token_at_position(statements: Sequence[Statement], line: int, char: int) -> Token | None:
+    """
+    The innermost `Token` covering a 0-indexed ``(line, char)`` position.
+
+    Ties (a position covered by nested tokens) resolve to the smallest span.
+    """
+    return _locate(statements, line, char)[0]
 
 
 def definition_name_token(statement: Statement) -> Token | None:
@@ -389,21 +498,60 @@ def find_references(
     return results
 
 
-def hover_text(analyzed: AnalyzedDocument, line: int, char: int) -> str | None:
+def hover_text(
+    analyzed: AnalyzedDocument, line: int, char: int, document_text: str = ""
+) -> str | None:
     """
     Markdown hover text for the symbol under a 0-indexed position, or ``None``.
+
+    Resolves, in order: attribute names (element-type metadata), user-defined
+    element/constant/line names, element-type keywords, and builtin functions
+    and constants.
+
+    ``document_text`` enables resolving an attribute inside ``NAME[…]`` from the
+    line even when the statement has not parsed as a `Parameter` (mid-edit it
+    may be a `Simple`/unknown statement, or the line may not parse at all).
     """
-    if analyzed.files is None:
-        return None
-    tok = token_at_position(analyzed.statements, line, char)
+    named = analyzed.files.get_named_items() if analyzed.files is not None else {}
+    tok, statement = _locate(analyzed.statements, line, char)
+
+    # 1) An attribute in a fully parsed statement (element body or Parameter).
+    if tok is not None and tok.role == Role.attribute_name:
+        hover = _attribute_hover(tok, statement, named)
+        if hover is not None:
+            return hover
+
+    # 2) An attribute inside ``NAME[…]``, resolved from the line text — robust to
+    #    the statement not parsing as a Parameter yet.
+    lines = document_text.splitlines()
+    line_text = lines[line] if 0 <= line < len(lines) else ""
+    owner = _bracket_owner(line_text, char)
+    if owner is not None:
+        attr = str(tok) if tok is not None else _word_at(line_text, char)
+        if attr:
+            hover = _attribute_of_target(owner, attr, named, document_text)
+            if hover is not None:
+                return hover
+
     if tok is None:
         return None
 
-    named = analyzed.files.get_named_items()
-    statement = named.get(str(tok).upper())
-    if statement is None:
-        return None
+    # User definitions take precedence over builtins of the same name.
+    defined = named.get(str(tok).upper())
+    if defined is not None:
+        return _named_hover(defined)
 
+    if tok.role == Role.kind:
+        element_type = _expand_element_type(str(tok))
+        if element_type is not None:
+            count = len(element_key_to_attrs.get(element_type, {}))
+            return f"**{element_type}** — element type · {count} attributes"
+
+    return _builtin_hover(tok)
+
+
+def _named_hover(statement: Statement) -> str | None:
+    """Hover text for a user-defined element/constant/line/list."""
     if isinstance(statement, Element):
         kind = statement.element_type or str(statement.keyword)
         return f"**{statement.name}** — element (`{kind}`)"
@@ -411,6 +559,95 @@ def hover_text(analyzed: AnalyzedDocument, line: int, char: int) -> str | None:
         return f"**{statement.name}** — constant = `{_seq_text(statement.value)}`"
     if isinstance(statement, (Line, ElementList)):
         return f"**{definition_name_token(statement)}** — {type(statement).__name__.lower()}"
+    return None
+
+
+_KNOWN_PARAMETERS = {
+    (str(param.target).lower(), str(param.name).lower()): param for param in Parameter.known
+}
+
+
+def _bracket_owner(line_text: str, col: int) -> str | None:
+    """The ``NAME`` whose ``[`` encloses column ``col`` on this line, or ``None``."""
+    open_idx = line_text.rfind("[", 0, col)
+    if open_idx == -1 or "]" in line_text[open_idx:col]:
+        return None
+    match = re.search(r"([A-Za-z_][\w.%]*)\s*$", line_text[:open_idx])
+    return match.group(1) if match else None
+
+
+def _word_at(line_text: str, col: int) -> str:
+    """The identifier spanning column ``col`` on this line."""
+    start, end = col, col
+    while start > 0 and (line_text[start - 1].isalnum() or line_text[start - 1] in "_.%"):
+        start -= 1
+    while end < len(line_text) and (line_text[end].isalnum() or line_text[end] in "_.%"):
+        end += 1
+    return line_text[start:end]
+
+
+def _attribute_hover(tok: Token, statement: Statement | None, named: dict) -> str | None:
+    """Hover for an attribute in a parsed element body or `Parameter`."""
+    if isinstance(statement, Element) and statement.element_type:
+        return _element_attribute_hover(statement.element_type, tok)
+    if isinstance(statement, Parameter):
+        return _attribute_of_target(str(statement.target), str(tok), named)
+    return None
+
+
+def _attribute_of_target(
+    target: str, attr: str, named: dict, document_text: str = ""
+) -> str | None:
+    """
+    Hover for attribute ``attr`` of ``target``.
+
+    ``target`` may be a defined element (its type's attribute metadata) or a
+    builtin target such as ``parameter`` (whose attributes come from a separate
+    table).  The element type is resolved from the symbol table or, failing
+    that, by scanning ``document_text`` — so this works before the statement
+    parses.
+    """
+    element_type = _element_type_of(target, named, document_text)
+    if element_type is not None:
+        hover = _element_attribute_hover(element_type, Token(attr))
+        if hover is not None:
+            return hover
+    known = _KNOWN_PARAMETERS.get((target.lower(), attr.lower()))
+    if known is not None:
+        type_name = known.type.__name__ if isinstance(known.type, type) else str(known.type)
+        comment = f" — {known.comment}" if known.comment else ""
+        return f"**{known.name}** — `{target}` parameter · {type_name}{comment}"
+    return None
+
+
+def _element_attribute_hover(element_type: str, tok: Token) -> str | None:
+    attr = element_key_to_attrs.get(element_type, {}).get(str(tok).upper())
+    if attr is None:
+        return None
+    kind = getattr(getattr(attr, "kind", None), "name", "")
+    parts = [part for part in (kind.lower() if kind else "", attr.units or "") if part]
+    desc = f": {attr.desc}" if attr.desc else ""
+    detail = f" · {' · '.join(parts)}" if parts else ""
+    return f"**{attr.name}** — attribute of `{element_type}`{detail}{desc}"
+
+
+def _builtin_hover(tok: Token) -> str | None:
+    """Hover for a builtin function, physical constant, or target."""
+    name = str(tok)
+    lower = name.lower()
+
+    function = INTRINSIC_FUNCTIONS.get(lower)
+    if function is not None:
+        signature = f"{function.name}({', '.join(function.arguments)})"
+        description = f" — {function.description}" if function.description else ""
+        return f"**{signature}** — function{description}"
+
+    if lower in named_physical_constants:
+        return f"**{name}** — builtin constant = `{named_physical_constants[lower]:.10g}`"
+    if lower in BUILTIN_CONSTANTS:
+        return f"**{name}** — builtin constant"
+    if lower in BUILTIN_TARGETS:
+        return f"**{name}** — builtin target"
     return None
 
 
@@ -432,6 +669,21 @@ class Diagnostic:
     related: list[tuple[Location, str]] = field(default_factory=list)
 
 
+def _used_names(files: MemoryFiles) -> frozenset[str]:
+    """
+    Project-wide used names, memoized per build.
+
+    ``get_used_names`` walks every token, so caching it on the (per-build) files
+    keeps publishing diagnostics for several open documents from re-scanning the
+    whole project each time.
+    """
+    cached = getattr(files, "_used_names_cache", None)
+    if cached is None:
+        cached = get_used_names([st for sts in files.by_filename.values() for st in sts])
+        files._used_names_cache = cached
+    return cached
+
+
 def iter_diagnostics(analyzed: AnalyzedDocument) -> Generator[Diagnostic, None, None]:
     """
     Yield diagnostics for the analyzed document (parse errors and lints).
@@ -446,13 +698,12 @@ def iter_diagnostics(analyzed: AnalyzedDocument) -> Generator[Diagnostic, None, 
     statements = analyzed.statements
     named = analyzed.files.get_named_items()
     config = analyzed.config
-    all_statements = [st for sts in analyzed.files.by_filename.values() for st in sts]
     lints = lint_statements(
         list(statements),
         named=named,
         assume_defined=False,
         ignore=config.ignores_for(analyzed.path) if config is not None else (),
-        used_names=get_used_names(all_statements),
+        used_names=_used_names(analyzed.files),
         min_name_length=config.min_name_length if config is not None else 1,
         builtin_constant_rtol=config.builtin_constant_rtol if config is not None else 1e-4,
     )
@@ -527,6 +778,212 @@ def document_symbols(analyzed: AnalyzedDocument) -> list[tuple[str, str, Locatio
 
 
 # --------------------------------------------------------------------------- #
+# Completion (pure latform)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class Completion:
+    """A single completion candidate."""
+
+    label: str
+    kind: str  # "type" | "attribute" | "element" | "line" | "list" | "constant" | "function"
+    detail: str | None = None
+
+
+# ``NAME[`` with the cursor inside the (still-open) brackets.
+_ATTR_BRACKET_RE = re.compile(r"([A-Za-z_][\w.%]*)\[[^\]\[]*$")
+# ``NAME:`` at the start of a line (an element/line definition).
+_ELEMENT_DEF_RE = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*:\s*(.*)$")
+
+
+def _open_context(prefix: str, opener: str, closer: str) -> bool:
+    """Whether the cursor sits inside an unclosed ``opener`` on this line."""
+    depth = 0
+    for ch in prefix:
+        if ch == opener:
+            depth += 1
+        elif ch == closer and depth > 0:
+            depth -= 1
+    return depth > 0
+
+
+def _element_type_of(name: str, named: dict, document_text: str, _depth: int = 0) -> str | None:
+    """
+    The canonical element type of ``name``.
+
+    Uses the parsed symbol table when available, else falls back to scanning the
+    buffer for ``name: <keyword>`` so completion still works while the current
+    line (and thus the parse) is incomplete.  Follows one level of inheritance.
+    """
+    statement = named.get(name.upper())
+    if isinstance(statement, Element) and statement.element_type:
+        return statement.element_type
+
+    match = re.search(
+        rf"^\s*{re.escape(name)}\s*:\s*([A-Za-z_][\w.]*)",
+        document_text,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if match is None:
+        return None
+    keyword = match.group(1)
+    expanded = _expand_element_type(keyword)
+    if expanded is not None:
+        return expanded
+    if _depth < 3 and keyword.upper() != name.upper():
+        return _element_type_of(keyword, named, document_text, _depth + 1)  # base element
+    return None
+
+
+def _attribute_completions(element_type: str) -> list[Completion]:
+    out = []
+    for attr_name, attr in element_key_to_attrs.get(element_type, {}).items():
+        kind = getattr(getattr(attr, "kind", None), "name", "")
+        units = getattr(attr, "units", "") or ""
+        detail = " · ".join(part for part in (kind.lower() if kind else "", units) if part)
+        # Raw (uppercase) label; project casing is applied by `complete`.
+        out.append(Completion(label=attr_name, kind="attribute", detail=detail or None))
+    return out
+
+
+def _type_completions() -> list[Completion]:
+    return [Completion(label=t, kind="type", detail="element type") for t in _ELEMENT_TYPES]
+
+
+def _symbol_completions(named: dict, kinds: tuple[str, ...] | None = None) -> list[Completion]:
+    out = []
+    for statement in named.values():
+        name_token = definition_name_token(statement)
+        if name_token is None:
+            continue
+        if isinstance(statement, Element):
+            kind, detail = "element", statement.element_type or str(statement.keyword)
+        elif isinstance(statement, Line):
+            kind, detail = "line", "beamline"
+        elif isinstance(statement, ElementList):
+            kind, detail = "list", "element list"
+        elif isinstance(statement, Constant):
+            kind, detail = "constant", _seq_text(statement.value)
+        else:
+            continue
+        if kinds and kind not in kinds:
+            continue
+        out.append(Completion(label=str(name_token), kind=kind, detail=detail))
+    return out
+
+
+def _value_completions(named: dict) -> list[Completion]:
+    out = _symbol_completions(named, kinds=("constant",))
+    out += [
+        Completion(label=name, kind="function", detail="function") for name in INTRINSIC_FUNCTIONS
+    ]
+    out += [
+        Completion(label=name, kind="builtin", detail="builtin constant")
+        for name in BUILTIN_CONSTANTS
+    ]
+    return out
+
+
+# Completion kind -> the `FormatOptions` case field that governs its label.
+_CASE_FIELD_BY_KIND = {
+    "type": "kind_case",
+    "attribute": "attribute_case",
+    "element": "name_case",
+    "line": "name_case",
+    "list": "name_case",
+    "constant": "name_case",
+    "function": "builtin_case",
+    "builtin": "builtin_case",
+}
+
+
+def _format_options(config: LatformProjectConfig | None) -> FormatOptions:
+    """`FormatOptions` from a project config (defaults when none applies)."""
+    if config is None:
+        return FormatOptions()
+    return FormatOptions(**{k: v for k, v in config.format.items() if k in _FORMAT_OPTION_FIELDS})
+
+
+def _apply_case(text: str, case: str) -> str:
+    """
+    Case ``text`` per a `NameCase` setting, mirroring `output.py`.
+
+    The length attribute ``l`` is always rendered ``L`` regardless of the
+    setting, matching the formatter's special case.
+    """
+    if case == "upper" or text.lower() == "l":
+        return text.upper()
+    if case == "lower":
+        return text.lower()
+    return text
+
+
+def complete(
+    analyzed: AnalyzedDocument, line_prefix: str, document_text: str = ""
+) -> list[Completion]:
+    """
+    Completion candidates for a cursor at the end of ``line_prefix``.
+
+    Context is inferred from the text before the cursor (which stays reliable
+    while the document is mid-edit):
+
+    - inside ``NAME[…`` → attribute names of ``NAME``'s element type;
+    - inside ``(…`` → beamline/element names (line contents);
+    - ``NAME: <first token>`` → element types and element names (base elements);
+    - after an attribute comma → attribute names (or values after ``=``);
+    - otherwise → all defined names (references).
+
+    Labels are cased to match the project's format settings (e.g. uppercased
+    element names, lowercased builtins), so an accepted completion reads the
+    same as formatted output.
+    """
+    if "!" in line_prefix:  # cursor is within a comment
+        return []
+
+    candidates = _context_completions(analyzed, line_prefix, document_text)
+    options = _format_options(analyzed.config)
+    for candidate in candidates:
+        case = getattr(options, _CASE_FIELD_BY_KIND.get(candidate.kind, ""), "same")
+        candidate.label = _apply_case(candidate.label, case)
+    return candidates
+
+
+def _context_completions(
+    analyzed: AnalyzedDocument, line_prefix: str, document_text: str
+) -> list[Completion]:
+    named = analyzed.files.get_named_items() if analyzed.files is not None else {}
+
+    bracket = _ATTR_BRACKET_RE.search(line_prefix)
+    if bracket is not None and _open_context(line_prefix, "[", "]"):
+        element_type = _element_type_of(bracket.group(1), named, document_text)
+        return _attribute_completions(element_type) if element_type else []
+
+    if _open_context(line_prefix, "(", ")"):
+        return _symbol_completions(named, kinds=("element", "line", "list"))
+
+    definition = _ELEMENT_DEF_RE.match(line_prefix)
+    if definition is not None:
+        rest = definition.group(2)
+        if "," not in rest and "=" not in rest:
+            # type / base-element position (first token after the colon)
+            return _type_completions() + _symbol_completions(named, kinds=("element",))
+        segment = rest.rsplit(",", 1)[-1]
+        if "=" in segment:
+            return _value_completions(named)
+        keyword = rest.split(",", 1)[0].strip()
+        element_type = _expand_element_type(keyword) or _element_type_of(
+            keyword, named, document_text
+        )
+        return _attribute_completions(element_type) if element_type else []
+
+    if re.match(r"^\s*use\b", line_prefix, re.IGNORECASE):
+        return _symbol_completions(named, kinds=("line", "element", "list"))
+
+    return _symbol_completions(named)
+
+
+# --------------------------------------------------------------------------- #
 # Workspace: open-buffer state + project discovery (pure latform)
 # --------------------------------------------------------------------------- #
 
@@ -549,6 +1006,13 @@ class Workspace:
     _project_cache: dict[pathlib.Path | None, tuple[tuple, MemoryFiles]] = field(
         default_factory=dict
     )
+    # Per-file parse cache: path -> (contents, statements). Survives edits so an
+    # edit only re-parses the changed file; unchanged files reuse their
+    # statements.
+    _parse_cache: ParseCache = field(default_factory=dict)
+    # Incremental-annotation state (last definition signature). Lets a rebuild
+    # re-annotate only the re-parsed files when no definition changed.
+    _annotate_state: dict = field(default_factory=dict)
 
     def set_text(self, path: pathlib.Path | str, text: str) -> pathlib.Path:
         """Record the current text of an open document; returns its resolved path."""
@@ -571,6 +1035,8 @@ class Workspace:
         """
         self._config_by_dir.clear()
         self._project_cache.clear()
+        self._parse_cache.clear()
+        self._annotate_state.clear()
 
     def config_for(self, path: pathlib.Path | str) -> LatformProjectConfig:
         """Discover (and cache) the project config applicable to ``path``."""
@@ -580,6 +1046,10 @@ class Workspace:
                 start=directory, enabled=self.config_enabled
             )
         return self._config_by_dir[directory]
+
+    def text_of(self, path: pathlib.Path | str) -> str:
+        """Current text of an open document, or its on-disk contents."""
+        return self._text_of(pathlib.Path(path).resolve())
 
     def _text_of(self, resolved: pathlib.Path) -> str:
         text = self.open_texts.get(resolved)
@@ -599,7 +1069,9 @@ class Workspace:
         cached = self._project_cache.get(config.source)
         if cached is not None and cached[0] == signature:
             return cached[1]
-        files, error = _build_project(config, self.open_texts)
+        files, error = _build_project(
+            config, self.open_texts, self._parse_cache, self._annotate_state
+        )
         if files is None:
             logger.debug("Project parse failed (%s): %s", config.source, error)
             return None
@@ -635,7 +1107,7 @@ class Workspace:
             logger.debug("Analyze %s: no project config; standalone", resolved)
 
         overlay = {p: t for p, t in self.open_texts.items() if p != resolved}
-        return analyze(resolved, text, overlay, config=config)
+        return analyze(resolved, text, overlay, config=config, parse_cache=self._parse_cache)
 
 
 # --------------------------------------------------------------------------- #
@@ -694,6 +1166,16 @@ def create_server(
         "line": lsp.SymbolKind.Array,
         "list": lsp.SymbolKind.Array,
         "constant": lsp.SymbolKind.Constant,
+    }
+    _COMPLETION_KIND = {
+        "type": lsp.CompletionItemKind.Class,
+        "attribute": lsp.CompletionItemKind.Field,
+        "element": lsp.CompletionItemKind.Variable,
+        "line": lsp.CompletionItemKind.Module,
+        "list": lsp.CompletionItemKind.Module,
+        "constant": lsp.CompletionItemKind.Constant,
+        "function": lsp.CompletionItemKind.Function,
+        "builtin": lsp.CompletionItemKind.Constant,
     }
 
     def _range(loc: Location) -> "lsp.Range":
@@ -799,8 +1281,9 @@ def create_server(
     def hover(params: lsp.HoverParams):
         pos = params.position
         logger.debug("hover %s @ %d:%d", params.text_document.uri, pos.line, pos.character)
-        analyzed = workspace.analyze(_uri_to_path(params.text_document.uri))
-        text = hover_text(analyzed, pos.line, pos.character)
+        path = _uri_to_path(params.text_document.uri)
+        analyzed = workspace.analyze(path)
+        text = hover_text(analyzed, pos.line, pos.character, workspace.text_of(path))
         if text is None:
             return None
         return lsp.Hover(contents=lsp.MarkupContent(kind=lsp.MarkupKind.Markdown, value=text))
@@ -821,6 +1304,33 @@ def create_server(
                 )
             )
         return symbols
+
+    @server.feature(
+        lsp.TEXT_DOCUMENT_COMPLETION,
+        # A space is a trigger so attribute completion reopens after ``, `` (the
+        # canonical spacing), not only on the comma itself.
+        lsp.CompletionOptions(trigger_characters=[":", "[", ",", "(", " "]),
+    )
+    def completion(params: lsp.CompletionParams):
+        uri = params.text_document.uri
+        pos = params.position
+        path = _uri_to_path(uri)
+        text = workspace.text_of(path)
+        lines = text.splitlines()
+        line_prefix = lines[pos.line][: pos.character] if pos.line < len(lines) else ""
+        analyzed = workspace.analyze(path)
+        items = [
+            lsp.CompletionItem(
+                label=candidate.label,
+                kind=_COMPLETION_KIND.get(candidate.kind, lsp.CompletionItemKind.Text),
+                detail=candidate.detail,
+            )
+            for candidate in complete(analyzed, line_prefix, text)
+        ]
+        logger.debug(
+            "completion %s @ %d:%d -> %d item(s)", uri, pos.line, pos.character, len(items)
+        )
+        return lsp.CompletionList(is_incomplete=False, items=items)
 
     _WATCH_GLOBS = ("**/*.bmad", "**/*.lat", "**/latform.toml", "**/pyproject.toml")
 

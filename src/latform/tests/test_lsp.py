@@ -111,6 +111,96 @@ def test_hover_element_and_constant(fodo: lsp.AnalyzedDocument) -> None:
     assert "constant" in hover
 
 
+HOVER_DOC = (
+    "q0: quad, k1 = 0.5, L = 1\nq0[tilt] = 0.1\nc = pi * sqrt(2)\nparameter[geometry] = closed\n"
+)
+
+
+@pytest.fixture
+def hover_doc(tmp_path: pathlib.Path) -> lsp.AnalyzedDocument:
+    return lsp.analyze(tmp_path / "h.bmad", HOVER_DOC)
+
+
+def _hover(analyzed: lsp.AnalyzedDocument, needle: str, occurrence: int = 0) -> str:
+    lines = HOVER_DOC.splitlines()
+    seen = -1
+    for line_idx, line in enumerate(lines):
+        col = line.find(needle)
+        while col != -1:
+            seen += 1
+            if seen == occurrence:
+                return lsp.hover_text(analyzed, line_idx, col) or ""
+            col = line.find(needle, col + 1)
+    raise AssertionError(f"{needle!r} occurrence {occurrence} not found")
+
+
+def test_hover_attribute_in_definition(hover_doc: lsp.AnalyzedDocument) -> None:
+    hover = _hover(hover_doc, "k1")
+    assert "K1" in hover
+    assert "QUADRUPOLE" in hover
+    assert "1/m^2" in hover  # units
+
+
+def test_hover_attribute_in_brackets(hover_doc: lsp.AnalyzedDocument) -> None:
+    hover = _hover(hover_doc, "tilt")
+    assert "TILT" in hover and "attribute" in hover
+
+
+def test_hover_length_attribute(hover_doc: lsp.AnalyzedDocument) -> None:
+    hover = _hover(hover_doc, "L = 1")  # the standalone length attribute
+    assert "**L**" in hover
+    assert "QUADRUPOLE" in hover
+
+
+def test_hover_builtin_function(hover_doc: lsp.AnalyzedDocument) -> None:
+    hover = _hover(hover_doc, "sqrt")
+    assert "sqrt(x)" in hover
+    assert "function" in hover
+    assert "Square Root" in hover
+
+
+def test_hover_builtin_constant(hover_doc: lsp.AnalyzedDocument) -> None:
+    hover = _hover(hover_doc, "pi")
+    assert "builtin constant" in hover
+    assert "3.14159" in hover
+
+
+def test_hover_parameter_attribute(hover_doc: lsp.AnalyzedDocument) -> None:
+    hover = _hover(hover_doc, "geometry")
+    assert "geometry" in hover
+    assert "Open or closed" in hover  # from Parameter.known metadata
+
+
+def test_hover_element_type_keyword(hover_doc: lsp.AnalyzedDocument) -> None:
+    assert "element type" in _hover(hover_doc, "quad")
+
+
+def test_hover_attribute_in_simple_statement(tmp_path: pathlib.Path) -> None:
+    # ``ele[attr]`` with no value parses as a Simple statement, not a Parameter;
+    # hover still resolves the attribute from the bracket context.
+    doc = "q0: quad\nq0[k1]\n"
+    analyzed = lsp.analyze(tmp_path / "s.bmad", doc)
+    hover = lsp.hover_text(analyzed, 1, doc.splitlines()[1].index("k1"), doc) or ""
+    assert "K1" in hover and "QUADRUPOLE" in hover
+
+
+def test_hover_attribute_when_document_unparsed(tmp_path: pathlib.Path) -> None:
+    # An incomplete ``ele[attr] = `` fails to parse; the element type is still
+    # recovered by scanning the buffer text.
+    doc = "q0: quad\nq0[tilt] = \n"
+    analyzed = lsp.analyze(tmp_path / "e.bmad", doc)
+    assert analyzed.files is None  # the document did not parse
+    hover = lsp.hover_text(analyzed, 1, doc.splitlines()[1].index("tilt"), doc) or ""
+    assert "TILT" in hover
+
+
+def test_hover_owner_still_resolves_in_simple_statement(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad\nq0[k1]\n"
+    analyzed = lsp.analyze(tmp_path / "s.bmad", doc)
+    hover = lsp.hover_text(analyzed, 1, 0, doc) or ""  # cursor on the owner 'q0'
+    assert "element" in hover
+
+
 def test_document_symbols(fodo: lsp.AnalyzedDocument) -> None:
     symbols = {name: kind for name, kind, _ in lsp.document_symbols(fodo)}
     assert symbols["q0"] == "element"
@@ -261,6 +351,117 @@ def test_files_parse_skips_namelist_top_level(tmp_path: pathlib.Path) -> None:
     files.parse(raise_if_missing=False)  # must not raise
     files.annotate()
     assert files.by_filename[tao] == []
+
+
+# --------------------------------------------------------------------------- #
+# Completion
+# --------------------------------------------------------------------------- #
+
+COMPLETE_DOC = "L_tot = 2\nq0: quad, k1 = 0.5\nq1: q0\nfodo: line = (q0, q1)\n"
+
+
+@pytest.fixture
+def complete_doc(tmp_path: pathlib.Path) -> lsp.AnalyzedDocument:
+    return lsp.analyze(tmp_path / "c.bmad", COMPLETE_DOC)
+
+
+def _labels(
+    analyzed: lsp.AnalyzedDocument, prefix: str, kind: str | None = None, doc: str = COMPLETE_DOC
+) -> set[str]:
+    return {c.label for c in lsp.complete(analyzed, prefix, doc) if kind is None or c.kind == kind}
+
+
+# Labels are cased per the default FormatOptions (names upper; types, attributes
+# and builtins lower; length ``l`` always ``L``).
+
+
+def test_complete_element_types(complete_doc: lsp.AnalyzedDocument) -> None:
+    labels = _labels(complete_doc, "qz: ")
+    assert {"quadrupole", "sbend", "marker"} <= labels  # element types (kind-case: lower)
+    assert "Q0" in labels  # existing element (name-case: upper), for inheritance
+
+
+def test_complete_attributes_in_body(complete_doc: lsp.AnalyzedDocument) -> None:
+    labels = _labels(complete_doc, "qz: quad, ", kind="attribute")
+    assert {"k1", "tilt"} <= labels  # attribute-case: lower
+
+
+def test_complete_special_cases_length_l(complete_doc: lsp.AnalyzedDocument) -> None:
+    # ``l`` (length) is always rendered ``L``, like the formatter, even though
+    # other attributes are lowercased.
+    labels = _labels(complete_doc, "qz: quad, ", kind="attribute")
+    assert "L" in labels
+    assert "l" not in labels
+
+
+def test_complete_attributes_in_brackets(complete_doc: lsp.AnalyzedDocument) -> None:
+    assert "k1" in _labels(complete_doc, "q0[", kind="attribute")
+
+
+def test_complete_attributes_follow_inheritance(complete_doc: lsp.AnalyzedDocument) -> None:
+    # q1 inherits q0 (a quadrupole), so its attribute set is the quadrupole's.
+    assert "k1" in _labels(complete_doc, "q1[k", kind="attribute")
+
+
+def test_complete_line_contents(complete_doc: lsp.AnalyzedDocument) -> None:
+    labels = _labels(complete_doc, "beam: line = (")
+    assert {"Q0", "Q1", "FODO"} <= labels  # name-case: upper
+
+
+def test_complete_value_context(complete_doc: lsp.AnalyzedDocument) -> None:
+    labels = _labels(complete_doc, "qz: quad, k1 = ")
+    assert "sqrt" in labels  # intrinsic function (builtin-case: lower)
+    assert "L_TOT" in labels  # defined constant (name-case: upper)
+
+
+def test_complete_respects_project_case(tmp_path: pathlib.Path) -> None:
+    """
+    Completion labels follow the project's ``[format]`` case settings.
+    """
+    (tmp_path / "latform.toml").write_text('[format]\nname-case = "lower"\nkind-case = "upper"\n')
+    doc = "q0: quad, k1 = 0.5\n"
+    path = tmp_path / "a.bmad"
+    path.write_text(doc)
+    workspace = lsp.Workspace()
+    workspace.set_text(path, doc)
+    analyzed = workspace.analyze(path)
+
+    types = {c.label for c in lsp.complete(analyzed, "zz: ", doc) if c.kind == "type"}
+    names = {c.label for c in lsp.complete(analyzed, "zz: ", doc) if c.kind == "element"}
+    assert "QUADRUPOLE" in types  # kind-case: upper
+    assert "q0" in names  # name-case: lower
+
+
+def test_complete_after_comma_space(complete_doc: lsp.AnalyzedDocument) -> None:
+    # The canonical spacing is ``, `` — attribute completion must be available
+    # once the space is typed, not only immediately after the comma.
+    assert _labels(complete_doc, "qz: quad,", kind="attribute")
+    assert _labels(complete_doc, "qz: quad, ", kind="attribute")
+
+
+def test_complete_suppressed_in_comment(complete_doc: lsp.AnalyzedDocument) -> None:
+    assert lsp.complete(complete_doc, "qz: quad ! a comment ", COMPLETE_DOC) == []
+
+
+def test_complete_attribute_in_bracket_midedit(tmp_path: pathlib.Path) -> None:
+    # ``ele[attr`` mid-edit completes attributes even though the line has not
+    # parsed as a Parameter (the element type is resolved from the buffer text).
+    doc = "q0: quad, k1=1\nq0[k\n"
+    analyzed = lsp.analyze(tmp_path / "m.bmad", doc)
+    labels = {c.label for c in lsp.complete(analyzed, "q0[k", doc) if c.kind == "attribute"}
+    assert "k1" in labels
+
+
+def test_complete_robust_without_parse(tmp_path: pathlib.Path) -> None:
+    """
+    Completions are available even when the document does not parse (mid-edit):
+    element types and attributes come from the buffer text, not the AST.
+    """
+    doc = "q0: quad, k1 = 0.5\n"
+    analyzed = lsp.AnalyzedDocument(path=tmp_path / "b.bmad", files=None)  # parse failed
+    assert "quadrupole" in _labels(analyzed, "zz: ", doc=doc)
+    assert "k1" in _labels(analyzed, "zz: quad, ", kind="attribute", doc=doc)
+    assert "k1" in _labels(analyzed, "q0[", kind="attribute", doc=doc)  # type scanned from text
 
 
 def test_create_server() -> None:
@@ -480,6 +681,74 @@ def test_workspace_invalidate_picks_up_disk_change(project: pathlib.Path) -> Non
     after = workspace.analyze(sub)
     assert after.files is not before
     assert "Q9" in after.files.get_named_items()
+
+
+def test_workspace_reparses_only_changed_file(project: pathlib.Path) -> None:
+    """
+    Editing one file reuses cached statements for unchanged files; only the
+    edited file is re-parsed (the cross-file annotation pass still re-runs).
+    """
+    main = project / "main.bmad"
+    sub = project / "sub.bmad"
+    workspace = lsp.Workspace()
+    workspace.set_text(main, MAIN_BMAD)
+    workspace.set_text(sub, SUB_BMAD)
+
+    files = workspace.analyze(main).files
+    sub_ids = [id(st) for st in files.by_filename[sub.resolve()]]
+    main_ids = [id(st) for st in files.by_filename[main.resolve()]]
+
+    workspace.set_text(main, MAIN_BMAD + "extra_const = 5\n")  # edit main only
+    files2 = workspace.analyze(main).files
+    assert [id(st) for st in files2.by_filename[sub.resolve()]] == sub_ids  # reused
+    assert [id(st) for st in files2.by_filename[main.resolve()]] != main_ids  # re-parsed
+
+    # Cross-file resolution and diagnostics remain correct after the edit.
+    loc = lsp.resolve_definition(workspace.analyze(sub), 0, SUB_BMAD.index("q0"))
+    assert loc is not None and loc.filename.name == "main.bmad"
+
+
+def test_incremental_annotation_correctness(tmp_path: pathlib.Path) -> None:
+    """
+    Incremental annotation keeps cross-file resolution correct: a non-definition
+    edit reuses unchanged files' annotation, while a definition change forces a
+    full re-annotation so references update.
+    """
+    (tmp_path / "latform.toml").write_text('top-level = ["main.bmad"]\n')
+    main = tmp_path / "main.bmad"
+    sub = tmp_path / "sub.bmad"
+    main.write_text("q0: quad, k1 = 1\ncall, file = sub.bmad\n")
+    sub.write_text("q1: q0\nll: line = (q0, q1)\nuse, ll\n")
+
+    workspace = lsp.Workspace()
+    workspace.set_text(main, main.read_text())
+    workspace.set_text(sub, sub.read_text())
+
+    def q0_def_file() -> str | None:
+        loc = lsp.resolve_definition(workspace.analyze(sub), 0, workspace.text_of(sub).index("q0"))
+        return loc.filename.name if loc is not None else None
+
+    assert q0_def_file() == "main.bmad"
+
+    # Non-definition edit to main (sub is not re-parsed → its annotation is
+    # reused); sub's reference to q0 must still resolve into main.
+    workspace.set_text(main, "q0: quad, k1 = 99\ncall, file = sub.bmad\n")
+    assert q0_def_file() == "main.bmad"
+
+    # Renaming the definition changes the signature → full re-annotation.
+    workspace.set_text(main, "q9: quad, k1 = 1\ncall, file = sub.bmad\n")
+    named = workspace.analyze(sub).files.get_named_items()
+    assert "Q9" in named and "Q0" not in named
+
+
+def test_workspace_invalidate_clears_parse_cache(project: pathlib.Path) -> None:
+    sub = project / "sub.bmad"
+    workspace = lsp.Workspace()
+    workspace.set_text(sub, SUB_BMAD)
+    workspace.analyze(sub)
+    assert workspace._parse_cache  # populated
+    workspace.invalidate()
+    assert not workspace._parse_cache  # cleared
 
 
 def test_workspace_caches_project_parse(project: pathlib.Path) -> None:
