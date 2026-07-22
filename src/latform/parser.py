@@ -28,7 +28,7 @@ from .statements import (
     annotate_controller_variables,
     get_call_filename,
 )
-from .tao import TaoInit, is_init_file
+from .tao import TaoInit, is_init_file, looks_like_namelist
 from .token import Comments, Role, Token
 from .tokenizer import tokenize
 from .types import (
@@ -443,7 +443,8 @@ def parse_items(items: list[TokenizerItem]):
                     comments=comments,
                 )
 
-    raise ValueError("Unhandled - unknown")
+    unknown = " ".join(str(item) for item in items)
+    raise ValueError(f"Unhandled - unknown: {unknown[:100]}")
 
 
 def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
@@ -775,6 +776,11 @@ class Files:
                     raise FileNotFoundError(
                         f"Could not find file: {full_path} (parent={parent_dir} file={filename_part})"
                     ) from None
+                continue
+
+            if is_init_file(full_path) or looks_like_namelist(contents):
+                logger.debug("Skipping non-lattice (namelist) file: %s", full_path)
+                self.by_filename[full_path] = []
                 continue
 
             try:
