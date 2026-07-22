@@ -101,7 +101,7 @@ def lint_statement(st: Statement) -> list[Lint]:
                 Lint(
                     code=LintCode.unknown_statement,
                     context=st,
-                    message=f"Statement type is unknown; this may indicate an error in parsing: {st.statement}",
+                    message=f"Statement type unknown or parsing issue: {st.statement}",
                     relevant_tokens=[st.statement],
                 )
             ]
