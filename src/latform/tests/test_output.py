@@ -1,12 +1,8 @@
 import textwrap
+from typing import Literal
 
 import pytest
 import rich
-
-try:
-    from typing import Literal
-except ImportError:
-    from typing_extensions import Literal
 
 from ..const import COMMA, OPEN_TO_CLOSE, SPACE
 from ..output import _flatten_output_nodes, format_nodes

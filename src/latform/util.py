@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import pathlib
 import typing
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from .const import CLOSE_TO_OPEN, COMMA
 from .exceptions import ExtraCloseDelimiter, MismatchedDelimiter
@@ -115,3 +116,46 @@ def flatten(item: Seq | Attribute | Token | CallName | None) -> list[Token]:
         raise NotImplementedError(type(item))
 
     return res
+
+
+LoadFormat = Literal["json", "toml", "yaml"]
+
+
+def load_json_or_similar(fn: pathlib.Path | str, *, format: LoadFormat | None = None):
+    path = pathlib.Path(fn)
+    suffix = path.suffix.lower()
+
+    if not format:
+        if suffix in {".yaml", ".yml"}:
+            format = "yaml"
+        elif suffix in {".json"}:
+            format = "json"
+        elif suffix in {".toml"}:
+            format = "toml"
+        else:
+            raise ValueError(
+                f"File format not specified and file extension not recognized: {suffix} ({fn}"
+            )
+
+    if format == "yaml":
+        import yaml
+
+        loader = yaml.safe_load
+
+    elif format == "toml":
+        try:
+            import tomllib
+        except ImportError:  # python 3.10 (tomllib was based on tomli)
+            import tomli as tomllib
+
+        loader = tomllib.load
+
+    elif format == "json":
+        import json
+
+        loader = json.load
+    else:
+        raise NotImplementedError(f"Format {format}")
+
+    with open(path, "rb") as fp:
+        return loader(fp)

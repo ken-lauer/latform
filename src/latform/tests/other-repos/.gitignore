@@ -1,0 +1,5 @@
+# Local-only: developers may drop symlinks to lattice repositories here (e.g.
+# `ln -s ~/Repos/bmad bmad`). The round-trip tests glob `**/tao.init` from this
+# directory. Nothing here is version-controlled except this .gitignore.
+*
+!.gitignore

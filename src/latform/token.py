@@ -4,16 +4,16 @@ import enum
 import typing
 from typing import Any, ClassVar, Sequence, SupportsIndex
 
-try:
-    from typing import Self
-except ImportError:
-    from typing_extensions import Self
-
 from .comments import Comments
 from .location import Location
 
 if typing.TYPE_CHECKING:
     from .types import Block
+
+    try:
+        from typing import Self
+    except ImportError:
+        from typing_extensions import Self
 
 
 class Role(str, enum.Enum):

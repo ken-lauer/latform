@@ -16,7 +16,7 @@ from .debug import print_blocks
 from .lint import lint_files
 from .output import format_statements
 from .parser import Files, build_files
-from .types import FormatOptions, NameCase
+from .types import FormatOptions, NameCase, NamelistFormatOptions
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ def process_files(
     assume_defined: bool = True,
     lint: bool = False,
     ignore_lints: Collection[str] = (),
+    format_namelist: bool = True,
     config: LatformProjectConfig | None = None,
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
@@ -129,6 +130,13 @@ def process_files(
             formatted_text = format_statements(statements, options)
             original_text = files_obj._get_file_contents(fn)
             results[fn] = (original_text, formatted_text)
+
+    if files_obj.tao_init is not None and files_obj.tao_init.filename is not None:
+        init_path = files_obj.tao_init.filename
+        init_original = files_obj.tao_init.render()
+        init_formatted = files_obj.tao_init.render(options.namelist if format_namelist else None)
+        results[init_path] = (init_original, init_formatted)
+        top_set.add(init_path)
 
     if output and not in_place and len(top_set & set(results)) > 1:
         raise ValueError(
@@ -195,6 +203,8 @@ def main(
     assume_defined: bool = True,
     lint: bool = False,
     ignore_lints: list[str] | None = None,
+    format_namelist: bool = True,
+    namelist_options: NamelistFormatOptions | None = None,
     config: LatformProjectConfig | None = None,
 ) -> None:
     if verbose >= 4:
@@ -234,6 +244,8 @@ def main(
         flatten_inline=flatten or flatten_inline,
         strip_comments=strip_comments,
     )
+    if namelist_options is not None:
+        options.namelist = namelist_options
     recursive = recursive or options.flatten_call  # implied
 
     for files_obj in build_files(filenames, combine=combine):
@@ -249,6 +261,7 @@ def main(
             assume_defined=assume_defined,
             lint=lint,
             ignore_lints=ignore_codes,
+            format_namelist=format_namelist,
             config=config,
         )
 
@@ -387,6 +400,7 @@ def _build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Remove comments from the output",
     )
+    cli.add_namelist_format_arguments(parser)
     parser.add_argument(
         "--lint",
         action="store_true",
@@ -409,7 +423,7 @@ def cli_main(args: list[str] | None = None) -> None:
     Parameters
     ----------
     args : list of str, optional
-        Command-line arguments to parse and pass to :func:`main()`.
+        Command-line arguments to parse and pass to `main()`.
     """
     from . import cli
 
@@ -430,6 +444,13 @@ def cli_main(args: list[str] | None = None) -> None:
     kwargs.pop("config", None)
     kwargs.pop("use_config", None)
     filenames = kwargs.pop("filename")
+
+    # The individual namelist flags are folded into a single options object;
+    # `format_namelist` stays as its own toggle passed straight through.
+    kwargs["namelist_options"] = cli.build_namelist_options(parsed)
+    for dest in cli.NAMELIST_FORMAT_DESTS:
+        if dest != "format_namelist":
+            kwargs.pop(dest, None)
 
     filenames, from_top_level = cli.require_input_files(filenames, config)
     if from_top_level:

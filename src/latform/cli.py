@@ -111,6 +111,71 @@ def configure_logging(level: str) -> None:
     logging.basicConfig()
 
 
+#: Argparse dests added by :func:`add_namelist_format_arguments`.
+NAMELIST_FORMAT_DESTS = (
+    "format_namelist",
+    "namelist_indent",
+    "namelist_field_case",
+    "namelist_align_equals",
+    "namelist_align_comments",
+)
+
+
+def add_namelist_format_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the ``tao.init`` / namelist reformatting flags shared by the CLIs."""
+    group = parser.add_argument_group("namelist (*.init/*.nml) formatting")
+    group.add_argument(
+        "--no-format-namelist",
+        dest="format_namelist",
+        action="store_false",
+        default=True,
+        help="Preserve namelist layout verbatim (default: reformat it)",
+    )
+    group.add_argument(
+        "--namelist-indent",
+        dest="namelist_indent",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Field indent width (default: 2)",
+    )
+    group.add_argument(
+        "--namelist-field-case",
+        dest="namelist_field_case",
+        choices=CASE_CHOICES,
+        default=None,
+        help="Case for field names, e.g. global%%plot_on (default: lower)",
+    )
+    group.add_argument(
+        "--namelist-align-equals",
+        dest="namelist_align_equals",
+        action="store_true",
+        default=False,
+        help="Align '=' into a column within each run of fields (default: off)",
+    )
+    group.add_argument(
+        "--no-namelist-align-comments",
+        dest="namelist_align_comments",
+        action="store_false",
+        default=True,
+        help="Do not align trailing '!' comments into a column (default: aligned)",
+    )
+
+
+def build_namelist_options(parsed: argparse.Namespace):
+    """Fold the :func:`add_namelist_format_arguments` flags into options."""
+    from .types import NamelistFormatOptions
+
+    options = NamelistFormatOptions()
+    if getattr(parsed, "namelist_indent", None) is not None:
+        options.indent_size = parsed.namelist_indent
+    if getattr(parsed, "namelist_field_case", None) is not None:
+        options.field_case = parsed.namelist_field_case
+    options.align_equals = getattr(parsed, "namelist_align_equals", options.align_equals)
+    options.align_comments = getattr(parsed, "namelist_align_comments", options.align_comments)
+    return options
+
+
 def resolve_ignore_codes(ignore_lints: Sequence[str] | None) -> list[str]:
     """Flatten repeated / comma-separated ``--ignore`` values into codes."""
     return [
@@ -148,6 +213,10 @@ def resolve_input_files(
         return list(filenames), False
     if config.top_level:
         return [str(path) for path in config.resolve_top_level()], True
+    if config.tao_init:
+        # The tao.init paths are expanded to their lattice files downstream by
+        # ``build_files`` (any ``*.init`` argument is auto-expanded).
+        return [str(path) for path in config.resolve_tao_init()], True
     return [], False
 
 

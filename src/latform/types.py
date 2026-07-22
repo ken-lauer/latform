@@ -3,20 +3,21 @@ from __future__ import annotations
 import pathlib
 import typing
 from dataclasses import dataclass, field
+from typing import Literal
 
 from .const import COMMA, EQUALS, SPACE
 from .exceptions import UnexpectedCallName
 from .token import Comments, Delimiter, Location, Role, Token
 from .util import delimit, flatten, partition_items, split_items
 
-try:
-    from typing import Literal, Self
-except ImportError:
-    from typing_extensions import Literal, Self
-
 if typing.TYPE_CHECKING:
     from .output import FormatOptions
     from .statements import Statement
+
+    try:
+        from typing import Self
+    except ImportError:
+        from typing_extensions import Self
 
 
 def _flatten_blocks(
@@ -442,6 +443,24 @@ class Block:
 NameCase = Literal["upper", "lower", "same"]
 
 
+@dataclass
+class NamelistFormatOptions:
+    """
+    Formatting options for Fortran-namelist (``*.init``/``*.nml``) files.
+
+    These control only the field section between a ``&name`` opener and its ``/``
+    terminator; the opener and terminator are always emitted at column zero and
+    values are never modified.
+    """
+
+    indent_size: int = 2
+    indent_char: str = " "
+    blank_line_after_group: bool = True
+    field_case: NameCase = "lower"
+    align_equals: bool = False
+    align_comments: bool = True
+
+
 @dataclass()
 class FormatOptions:
     line_length: int = 100
@@ -466,6 +485,13 @@ class FormatOptions:
     flatten_inline: bool = False
     newline_at_eof: bool = True
     strip_comments: bool = False
+    namelist: NamelistFormatOptions = field(default_factory=NamelistFormatOptions)
+    # For now, reuses indent_size/indent_char for field indentation
+    # namelist_indent_size: int = 2
+    # namelist_indent_char: str = " "
+    namelist_field_case: NameCase = "lower"
+    namelist_align_equals: bool = False
+    namelist_align_comments: bool = True  # uses comment_col
 
 
 @dataclass

@@ -39,15 +39,18 @@ latform --diff my_lattice.bmad
 
 latform provides these CLI commands:
 
-- [**latform**](cli.md#latform) -- Format Bmad lattice files
-- [**latform-lint**](cli.md#latform-lint) -- Lint lattice files without reformatting
-- [**latform-dump**](cli.md#latform-dump) -- Extract parameters and element information
-- [**latform-diff**](cli.md#latform-diff) -- Compare two lattice files
-- [**latform-gitdiff**](cli.md#latform-gitdiff) -- Compare a lattice file across git revisions
-- [**latform-graph**](cli.md#latform-graph) -- Visualize file dependency trees
+- [**latform**](cli/latform.md) -- Format Bmad lattice files (and `tao.init` namelists)
+- [**latform-lint**](cli/lint.md) -- Lint lattice files without reformatting
+- [**latform-apply**](cli/templating.md#latform-apply) -- Apply overrides/renames to a template file
+- [**latform-template**](cli/templating.md#latform-template) -- Expand a template set across instances
+- [**latform-dump**](cli/inspection.md#latform-dump) -- Extract parameters and element information
+- [**latform-diff**](cli/inspection.md#latform-diff) -- Compare two lattice files
+- [**latform-gitdiff**](cli/inspection.md#latform-gitdiff) -- Compare a lattice file across git revisions
+- [**latform-graph**](cli/inspection.md#latform-graph) -- Visualize file dependency trees
 
 ## Documentation
 
-- [CLI Reference](cli.md) -- Full command-line usage for all tools
+- [CLI Reference](cli/index.md) -- Full command-line usage for all tools
+- [Configuration](configuration.md) -- Project settings via latform.toml / pyproject.toml
 - [Python API](api.md) -- Using latform as a library
 - [Style Guide](style_guide.md) -- The formatting rules latform applies

@@ -11,6 +11,7 @@ from ..lint import (
     lint_ambiguous_names,
     lint_attribute_overrides,
     lint_builtin_constants,
+    lint_datums,
     lint_duplicate_attributes,
     lint_element_attributes,
     lint_files,
@@ -18,6 +19,7 @@ from ..lint import (
     lint_undefined_references,
     lint_unknown_element_types,
     lint_unused_constants,
+    lint_variables,
 )
 from ..parser import MemoryFiles
 
@@ -182,11 +184,13 @@ def test_unknown_type_skips_attribute_lint():
     assert lint_element_attributes(element) == []
 
 
-def test_controller_default_missing_reported():
-    (statements,) = _files("o1: overlay = {q1[k1]}, var = {x, y}, x = 0").by_filename.values()
+def test_controller_all_zero():
+    (statements,) = _files(
+        "o1: overlay = {q1[k1]}, var = {x, y}, x = 0, y = 0"
+    ).by_filename.values()
     (element,) = statements
     lints = lint_element_attributes(element)
-    assert [lint.code for lint in lints] == [LintCode.controller_default_missing]
+    assert [lint.code for lint in lints] == [LintCode.controller_all_zero_defaults]
     assert "y" in lints[0].message
 
 
@@ -608,3 +612,160 @@ def test_main_lint_flag_gates_warnings(tmp_path, capsys, caplog):
     with caplog.at_level(logging.WARNING, logger="latform.main"):
         main(filename=str(path), lint=True)
     assert any("LF004" in rec.getMessage() for rec in caplog.records)
+
+
+TAO_DEFAULT_LATTICE = "R0_MAR_END: marker\nml: line = (R0_MAR_END)\nuse, ml\n"
+
+
+def _tao_files(tao_init: str, lattice: str = TAO_DEFAULT_LATTICE) -> MemoryFiles:
+    files = MemoryFiles.from_tao_init_contents(
+        tao_init,
+        "proj/tao.init",
+        lattice_contents={"ring.lat.bmad": lattice},
+    )
+    files.parse()
+    files.annotate()
+    return files
+
+
+def _datum_init(ele_name: str) -> str:
+    return (
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'ring.lat.bmad'\n"
+        "/\n\n"
+        "&tao_d1_data\n"
+        "  ix_d1_data = 1\n"
+        "  d1_data%name = 'x'\n"
+        f"  datum(1) = 'orbit.x' '' '' '{ele_name}' 'target' 0 1e1\n"
+        "/\n"
+    )
+
+
+def test_datum_undefined_element_reported():
+    files = _tao_files(_datum_init("MISSING"))
+    lints = lint_datums(files, files.get_named_items())
+    assert [lint.code for lint in lints] == [LintCode.undefined_reference]
+    assert "MISSING" in lints[0].message
+
+
+def test_datum_defined_element_not_reported():
+    files = _tao_files(_datum_init("R0_MAR_END"))
+    assert lint_datums(files, files.get_named_items()) == []
+
+
+def test_datum_element_index_suffix_stripped():
+    """The ``\\N`` slice suffix is not itself treated as an element reference."""
+    files = _tao_files(_datum_init("R0_MAR_END\\2"))
+    assert lint_datums(files, files.get_named_items()) == []
+
+
+def test_datum_component_form_undefined_reported():
+    tao_init = (
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'ring.lat.bmad'\n"
+        "/\n\n"
+        "&tao_d1_data\n"
+        "  d1_data%name = 'x'\n"
+        "  datum(1)%data_type = 'orbit.x'\n"
+        "  datum(1)%ele_name = 'MISSING'\n"
+        "/\n"
+    )
+    files = _tao_files(tao_init)
+    lints = lint_datums(files, files.get_named_items())
+    assert [lint.code for lint in lints] == [LintCode.undefined_reference]
+
+
+def test_datum_lints_surfaced_through_lint_files():
+    files = _tao_files(_datum_init("MISSING"))
+    reported = list(lint_files(files, assume_defined=False))
+    codes = [lint.code for _fn, lint in reported]
+    assert LintCode.undefined_reference in codes
+    # The datum lint is attributed to the tao.init file.
+    (init_fn,) = {fn for fn, lint in reported if lint.code is LintCode.undefined_reference}
+    assert init_fn.name == "tao.init"
+
+
+def test_no_datum_lints_without_tao_init():
+    files = MemoryFiles.from_contents(TAO_DEFAULT_LATTICE, "test.bmad")
+    files.parse()
+    files.annotate()
+    assert lint_datums(files, files.get_named_items()) == []
+
+
+def _var_init(ele_name: str) -> str:
+    return (
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'ring.lat.bmad'\n"
+        "/\n\n"
+        "&tao_var\n"
+        "  v1_var%name = 'q'\n"
+        f"  var(1) = '{ele_name}' 'k1' '' 1e2 1e-4\n"
+        "/\n"
+    )
+
+
+def test_variable_undefined_element_reported():
+    files = _tao_files(_var_init("MISSING"))
+    lints = lint_variables(files, files.get_named_items())
+    assert [lint.code for lint in lints] == [LintCode.undefined_reference]
+    assert "MISSING" in lints[0].message
+
+
+def test_variable_defined_element_not_reported():
+    files = _tao_files(_var_init("R0_MAR_END"))
+    assert lint_variables(files, files.get_named_items()) == []
+
+
+def test_variable_component_form_undefined_reported():
+    tao_init = (
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'ring.lat.bmad'\n"
+        "/\n\n"
+        "&tao_var\n"
+        "  v1_var%name = 'q'\n"
+        "  var(1)%ele_name = 'MISSING'\n"
+        "  var(1)%attribute = 'k1'\n"
+        "/\n"
+    )
+    files = _tao_files(tao_init)
+    lints = lint_variables(files, files.get_named_items())
+    assert [lint.code for lint in lints] == [LintCode.undefined_reference]
+
+
+def test_variable_lints_surfaced_through_lint_files():
+    files = _tao_files(_var_init("MISSING"))
+    reported = list(lint_files(files, assume_defined=False))
+    codes = [lint.code for _fn, lint in reported]
+    assert LintCode.undefined_reference in codes
+    (init_fn,) = {fn for fn, lint in reported if lint.code is LintCode.undefined_reference}
+    assert init_fn.name == "tao.init"
+
+
+def test_datum_lint_attributed_to_split_data_file():
+    """A datum from a split-out data_file is attributed to that file, not tao.init."""
+    contents = (
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'ring.lat.bmad'\n"
+        "/\n\n"
+        "&tao_start\n"
+        "  data_file = 'x.dat.bmad'\n"
+        "/\n"
+    )
+    files = MemoryFiles.from_tao_init_contents(
+        contents,
+        "proj/tao.init",
+        lattice_contents={
+            "ring.lat.bmad": TAO_DEFAULT_LATTICE,
+            "x.dat.bmad": (
+                "&tao_d1_data\n"
+                "  d1_data%name = 'x'\n"
+                "  datum(1) = 'orbit.x' '' '' 'MISSING' 'target'\n"
+                "/\n"
+            ),
+        },
+    )
+    files.parse()
+    files.annotate()
+    reported = list(lint_files(files, assume_defined=False))
+    (data_fn,) = {fn for fn, lint in reported if lint.code is LintCode.undefined_reference}
+    assert data_fn.name == "x.dat.bmad"
