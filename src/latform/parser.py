@@ -248,7 +248,7 @@ def fix_parameter_value(
     return value
 
 
-def parse_items(items: list[TokenizerItem]):
+def parse_items(items: list[TokenizerItem], *, match_unhandled: bool = True):
     if not items:
         raise ValueError("No items provided")
 
@@ -443,8 +443,24 @@ def parse_items(items: list[TokenizerItem]):
                     comments=comments,
                 )
 
-    unknown = " ".join(str(item) for item in items)
-    raise ValueError(f"Unhandled - unknown: {unknown[:100]}")
+    if match_unhandled:
+        args = items[1:]
+
+        if args[0] == COMMA:
+            args = args[1:]
+
+        attrs = _make_attribute_list(args)
+        assert isinstance(first, Token)
+
+        return Simple(
+            comments=comments,
+            statement=first,
+            arguments=attrs,
+        )
+
+    # unknown = " ".join(str(item) for item in items)
+    # raise ValueError(f"Unhandled - unknown: {unknown[:100]}")
+    return Simple(statement=[items[0]], arguments=items[1:])
 
 
 def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
