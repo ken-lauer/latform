@@ -652,8 +652,8 @@ def test_client_log_handler_forwards_to_client() -> None:
         def __init__(self) -> None:
             self.messages: list[tuple] = []
 
-        def show_message_log(self, message: str, msg_type) -> None:
-            self.messages.append((msg_type, message))
+        def window_log_message(self, params) -> None:
+            self.messages.append((params.type, params.message))
 
     server = FakeServer()
     lsp._attach_client_log_handler(server, lsp_types, logging.DEBUG)

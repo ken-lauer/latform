@@ -1253,7 +1253,7 @@ def create_server(
     """
     try:
         from lsprotocol import types as lsp
-        from pygls.server import LanguageServer
+        from pygls.lsp.server import LanguageServer
         from pygls.uris import to_fs_path
     except ImportError as exc:  # pragma: no cover - exercised only without pygls
         raise ImportError(
@@ -1325,7 +1325,9 @@ def create_server(
             for diag in iter_diagnostics(analyzed)
         ]
         logger.debug("Publishing %d diagnostic(s) for %s", len(diagnostics), uri)
-        server.publish_diagnostics(uri, diagnostics)
+        server.text_document_publish_diagnostics(
+            lsp.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
+        )
 
     def _publish_all() -> None:
         # An edit in one project file can change diagnostics in its siblings.
@@ -1356,7 +1358,9 @@ def create_server(
         logger.debug("didClose %s", uri)
         open_uris.pop(_uri_to_path(uri), None)
         workspace.close(_uri_to_path(uri))
-        server.publish_diagnostics(uri, [])
+        server.text_document_publish_diagnostics(
+            lsp.PublishDiagnosticsParams(uri=uri, diagnostics=[])
+        )
         _publish_all()
 
     @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)
@@ -1522,7 +1526,7 @@ def create_server(
         # Ask the client to notify us when lattice or config files change on
         # disk, so cached parses of unopened files stay fresh.
         try:
-            server.register_capability(
+            server.client_register_capability(
                 lsp.RegistrationParams(
                     registrations=[
                         lsp.Registration(
@@ -1575,7 +1579,9 @@ def _attach_client_log_handler(server, lsp, level: int) -> None:
         def emit(self, record: logging.LogRecord) -> None:
             try:
                 kind = msg_type.get(record.levelno, lsp.MessageType.Log)
-                server.show_message_log(self.format(record), kind)
+                server.window_log_message(
+                    lsp.LogMessageParams(type=kind, message=self.format(record))
+                )
             except Exception:  # never let logging break request handling
                 pass
 

@@ -7,7 +7,7 @@ dependencies:
   - python=3.12
   - pyyaml
   # For the language server:
-  - pygls
+  - pygls >2.0
   - rich
   # For testing and documentation:
   - pytao
