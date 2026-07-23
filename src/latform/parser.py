@@ -14,7 +14,7 @@ from .const import EQUALS
 from .exceptions import UnexpectedAssignment
 from .location import Location
 from .statements import (
-    BUILTIN_TARGETS,
+    BUILTIN_TARGETS_UPPER,
     Assignment,
     Constant,
     Element,
@@ -365,7 +365,7 @@ def parse_items(items: list[TokenizerItem], *, match_unhandled: bool = True):
             return Simple(comments=comments, statement=stmt, arguments=[])
 
     if isinstance(first, Token):
-        if first.lower() in {"print", "parser_debug"}:
+        if first._upper in {"PRINT", "PARSER_DEBUG"}:
             args = items[1:]
             if args[0] == COMMA:
                 args = args[1:]
@@ -597,7 +597,7 @@ def _resolve_element_types(
 def _resolve_references(statements: Sequence[Statement]) -> None:
     """Annotate ``NAME[attr]`` references as names (or builtins)."""
     for _statement, name in _iter_element_references(statements):
-        name.role = Role.builtin if name.lower() in BUILTIN_TARGETS else Role.name_
+        name.role = Role.builtin if name._upper in BUILTIN_TARGETS_UPPER else Role.name_
 
     for statement in statements:
         if isinstance(statement, Element) and statement.is_controller:

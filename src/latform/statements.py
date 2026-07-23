@@ -33,6 +33,9 @@ BUILTIN_TARGETS = frozenset(
 
 CONTROLLER_TYPES = frozenset({"overlay", "group", "ramper"})
 
+BUILTIN_TARGETS_UPPER = frozenset(target.upper() for target in BUILTIN_TARGETS)
+CONTROLLER_TYPES_UPPER = frozenset(type_.upper() for type_ in CONTROLLER_TYPES)
+
 
 @dataclass(kw_only=True)
 class Statement:
@@ -99,7 +102,7 @@ class Simple(Statement):
 
     def annotate(self, named: dict[Token, Statement]):
         self.statement = self.statement.with_(role=Role.builtin)
-        if self.statement.lower() == "call":
+        if self.statement._upper == "CALL":
             try:
                 filename = self.get_named_attribute("filename", partial_match=True)
             except KeyError:
@@ -112,14 +115,14 @@ class Simple(Statement):
                     filename.value.role = Role.filename
                 elif all(isinstance(arg, Token) for arg in filename.value.items):
                     filename.value = Token.join(filename.value.items, role=Role.filename)
-        elif self.statement.lower() == "setenv":
+        elif self.statement._upper == "SETENV":
             for arg in self.arguments:
                 if isinstance(arg, Attribute):
                     if isinstance(arg.name, Token):
                         arg.name.role = Role.env_var
                     if isinstance(arg.value, Token):
                         arg.value.role = None
-        elif self.statement.lower() == "use":
+        elif self.statement._upper == "USE":
             for arg in self.arguments:
                 arg.annotate(named=named)
         else:
@@ -138,7 +141,7 @@ class Simple(Statement):
     @staticmethod
     def is_known_statement(name: Token) -> bool:
         # TODO: can these be shortened?
-        return name.lower() in Simple.known_statements
+        return name._upper in KNOWN_STATEMENTS_UPPER
 
     def to_output_nodes(self):
         if self.statement.lower() in {"print"}:
@@ -153,6 +156,9 @@ class Simple(Statement):
         for idx in range(len(nodes) - 1, 0, -1):
             nodes.insert(idx, COMMA)
         return nodes
+
+
+KNOWN_STATEMENTS_UPPER = frozenset(s.upper() for s in Simple.known_statements)
 
 
 @dataclass
@@ -247,7 +253,7 @@ class Parameter(Statement):
     ]
 
     def annotate(self, named: dict[Token, Statement]):
-        if isinstance(self.target, Token) and self.target.lower() in BUILTIN_TARGETS:
+        if isinstance(self.target, Token) and self.target._upper in BUILTIN_TARGETS_UPPER:
             self.target = self.target.with_(role=Role.builtin)
         else:
             self.target = self.target.with_(role=Role.name_)
@@ -326,13 +332,13 @@ class Element(Statement):
     @property
     def is_controller(self) -> bool:
         """Whether this is an overlay/group/ramper."""
-        resolved = self.element_type or str(self.keyword)
-        return resolved.lower() in CONTROLLER_TYPES
+        resolved = self.element_type or self.keyword._upper
+        return resolved.upper() in CONTROLLER_TYPES_UPPER
 
     def annotate(self, named: dict[Token, Statement]):
         self.name.role = Role.name_
 
-        if self.keyword.upper() in named:
+        if self.keyword._upper in named:
             self.keyword.role = Role.name_
         else:
             self.keyword.role = Role.kind
@@ -421,7 +427,7 @@ def annotate_controller_variables(element: Element) -> None:
     """
     from .walk import iter_tokens
 
-    var_names = {var.lower() for var in get_controller_variables(element)}
+    var_names = {var._upper for var in get_controller_variables(element)}
     if not var_names:
         return
 
@@ -433,11 +439,11 @@ def annotate_controller_variables(element: Element) -> None:
             yield from iter_tokens(attr)
 
     for tok in get_tokens():
-        if tok.role is None and tok.lower() in var_names:
+        if tok.role is None and tok._upper in var_names:
             tok.role = Role.controller_variable
 
     for attr in element.attributes:
         if attr is var_attr:
             continue
-        if isinstance(attr.name, Token) and attr.name.lower() in var_names:
+        if isinstance(attr.name, Token) and attr.name._upper in var_names:
             attr.name.role = Role.controller_variable

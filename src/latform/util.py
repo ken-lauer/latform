@@ -86,7 +86,8 @@ def partition_items(
     items: list[T],
     delimiter: Delimiter | str = COMMA,
 ) -> tuple[list[T], Delimiter, list[T]]:
-    delimiter = Delimiter(delimiter)
+    if not isinstance(delimiter, Delimiter):
+        delimiter = Delimiter(delimiter)
     try:
         pos = items.index(delimiter)
     except ValueError as ex:

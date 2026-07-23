@@ -273,11 +273,11 @@ def _filter_species_calls(items):
     for idx, item in enumerate(items[:-1]):
         if isinstance(item, Seq):
             _filter_species_calls(item.items)
-        elif isinstance(item, Token) and item.lower() in {
-            "mass_of",
-            "charge_of",
-            "anomalous_moment_of",
-            "species",
+        elif isinstance(item, Token) and item._upper in {
+            "MASS_OF",
+            "CHARGE_OF",
+            "ANOMALOUS_MOMENT_OF",
+            "SPECIES",
         }:
             nxt = items[idx + 1]
             if (
