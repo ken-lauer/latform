@@ -530,12 +530,14 @@ def test_format_range_subset(tmp_path: pathlib.Path) -> None:
 # Semantic tokens
 # --------------------------------------------------------------------------- #
 
-SEMANTIC_DOC = "L_tot = 2\nq0: quad, k1 = sqrt(2)\nq1: q0\nq1[k1] = 3\nuse, q1\n"
+SEMANTIC_DOC = "L_tot = 2\nq0: quad, k1 = sqrt(2)\nq1: q0\nll: line = (q0, undef)\nuse, ll\n"
 
 
-def _semantic(tmp_path: pathlib.Path) -> dict[tuple[int, int], tuple[str, bool]]:
-    """Map (line, col) -> (token-type-name, is_definition) for SEMANTIC_DOC."""
-    analyzed = lsp.analyze(tmp_path / "s.bmad", SEMANTIC_DOC)
+def _semantic(
+    tmp_path: pathlib.Path, doc: str = SEMANTIC_DOC
+) -> dict[tuple[int, int], tuple[str, bool]]:
+    """Map (line, col) -> (token-type-name, is_definition) for a document."""
+    analyzed = lsp.analyze(tmp_path / "s.bmad", doc)
     return {
         (ln, col): (lsp.SEMANTIC_TOKEN_TYPES[ti], bool(mods))
         for ln, col, _length, ti, mods in lsp.semantic_tokens(analyzed)
@@ -544,12 +546,21 @@ def _semantic(tmp_path: pathlib.Path) -> dict[tuple[int, int], tuple[str, bool]]
 
 def test_semantic_tokens_classify_roles(tmp_path: pathlib.Path) -> None:
     tokens = _semantic(tmp_path)
-    assert tokens[(0, 0)] == ("variable", True)  # L_tot definition
-    assert tokens[(1, 0)] == ("variable", True)  # q0 definition
+    assert tokens[(0, 0)] == ("variable", True)  # L_tot constant definition
+    assert tokens[(1, 0)] == ("class", True)  # q0 element definition
     assert tokens[(1, 4)] == ("type", False)  # quad (element type)
     assert tokens[(1, 10)] == ("property", False)  # k1 attribute
     assert tokens[(1, 15)] == ("function", False)  # sqrt builtin
-    assert tokens[(2, 4)] == ("variable", False)  # q0 reference (not a definition)
+    assert tokens[(2, 4)] == ("class", False)  # q0 reference -> a defined element
+    assert tokens[(3, 0)] == ("namespace", True)  # ll line definition
+
+
+def test_semantic_tokens_valid_names_stand_out(tmp_path: pathlib.Path) -> None:
+    # A reference that resolves to an element is `class`; an unresolved name
+    # stays a plain `variable`, so valid element names are visibly distinct.
+    tokens = _semantic(tmp_path)
+    assert tokens[(3, 12)] == ("class", False)  # q0 (defined) inside the line
+    assert tokens[(3, 16)] == ("variable", False)  # undef (not defined)
 
 
 def test_semantic_tokens_lengths_and_order(tmp_path: pathlib.Path) -> None:
@@ -566,9 +577,11 @@ def test_semantic_tokens_lengths_and_order(tmp_path: pathlib.Path) -> None:
 
 
 def test_semantic_tokens_parameter_attr_not_definition(tmp_path: pathlib.Path) -> None:
-    # k1 in `q1[k1] = 3` is an attribute (property), not a definition.
-    tokens = _semantic(tmp_path)
-    assert tokens[(3, 3)] == ("property", False)
+    # k1 in `q1[k1] = 3` is an attribute (property), not a definition; q1 is the
+    # element (class).
+    tokens = _semantic(tmp_path, "q1: quad\nq1[k1] = 3\n")
+    assert tokens[(1, 0)] == ("class", False)  # q1 (element reference)
+    assert tokens[(1, 3)] == ("property", False)  # k1 attribute, not a definition
 
 
 def test_create_server() -> None:

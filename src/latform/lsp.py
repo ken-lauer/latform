@@ -499,12 +499,13 @@ def find_references(
     return results
 
 
-# Semantic-token legend: token types (index = position) and modifiers, plus the
-# mapping from latform `Role` to a type index.  Kept in sync with the legend
-# advertised to the client in `create_server`.
+# Semantic-token legend: token types (index = position) and modifiers, kept in
+# sync with the legend advertised to the client in `create_server`.
 SEMANTIC_TOKEN_TYPES = (
     "variable",
     "type",
+    "class",
+    "namespace",
     "property",
     "function",
     "keyword",
@@ -513,16 +514,33 @@ SEMANTIC_TOKEN_TYPES = (
 )
 SEMANTIC_TOKEN_MODIFIERS = ("definition",)
 _DEFINITION_MODIFIER = 1  # 1 << index("definition")
+_TYPE_INDEX = {name: index for index, name in enumerate(SEMANTIC_TOKEN_TYPES)}
+# Roles other than `name_` map to a fixed token type; ``name_`` is resolved by
+# what it refers to (see `_name_token_type`) so valid element names stand out.
 _ROLE_TOKEN_TYPE = {
-    Role.name_: SEMANTIC_TOKEN_TYPES.index("variable"),
-    Role.kind: SEMANTIC_TOKEN_TYPES.index("type"),
-    Role.attribute_name: SEMANTIC_TOKEN_TYPES.index("property"),
-    Role.builtin: SEMANTIC_TOKEN_TYPES.index("function"),
-    Role.statement_definition: SEMANTIC_TOKEN_TYPES.index("keyword"),
-    Role.controller_variable: SEMANTIC_TOKEN_TYPES.index("parameter"),
-    Role.env_var: SEMANTIC_TOKEN_TYPES.index("parameter"),
-    Role.filename: SEMANTIC_TOKEN_TYPES.index("string"),
+    Role.kind: _TYPE_INDEX["type"],
+    Role.attribute_name: _TYPE_INDEX["property"],
+    Role.builtin: _TYPE_INDEX["function"],
+    Role.statement_definition: _TYPE_INDEX["keyword"],
+    Role.controller_variable: _TYPE_INDEX["parameter"],
+    Role.env_var: _TYPE_INDEX["parameter"],
+    Role.filename: _TYPE_INDEX["string"],
 }
+
+
+def _name_token_type(target: Statement | None) -> int:
+    """
+    Token type for a ``name_`` token, by what it resolves to.
+
+    Elements become ``class`` and lines/lists ``namespace`` (both distinctly
+    themed), so a *valid* element name is visibly highlighted; a constant or an
+    unresolved reference stays a plain ``variable``.
+    """
+    if isinstance(target, Element):
+        return _TYPE_INDEX["class"]
+    if isinstance(target, (Line, ElementList)):
+        return _TYPE_INDEX["namespace"]
+    return _TYPE_INDEX["variable"]
 
 
 def semantic_tokens(analyzed: AnalyzedDocument) -> list[tuple[int, int, int, int, int]]:
@@ -530,11 +548,13 @@ def semantic_tokens(analyzed: AnalyzedDocument) -> list[tuple[int, int, int, int
     Role-classified tokens for semantic highlighting.
 
     Returns ``(line, start_char, length, type_index, modifiers)`` per token,
-    sorted by position.  Uses the parser's `Role` annotations, so highlighting
-    matches how latform actually understands each token (e.g. a name reference
-    vs. an element-type keyword vs. an attribute).  Multi-line tokens are skipped
-    (the LSP encoding is single-line).
+    sorted by position.  Uses the parser's `Role` annotations (so highlighting
+    matches how latform understands each token), and resolves ``name_`` tokens
+    against the symbol table so defined element/line names are coloured as
+    ``class``/``namespace`` while unresolved references stay plain.  Multi-line
+    tokens are skipped (the LSP encoding is single-line).
     """
+    named = analyzed.files.get_named_items() if analyzed.files is not None else {}
     out: list[tuple[int, int, int, int, int]] = []
     for statement in analyzed.statements:
         # Only true definition statements carry a "definition" name (a Parameter's
@@ -542,9 +562,15 @@ def semantic_tokens(analyzed: AnalyzedDocument) -> list[tuple[int, int, int, int
         is_definition = isinstance(statement, (Element, Constant, Line, ElementList))
         def_token = definition_name_token(statement) if is_definition else None
         for tok in _statement_tokens(statement):
-            type_index = _ROLE_TOKEN_TYPE.get(tok.role)
             loc = tok.loc
-            if type_index is None or loc is None or loc.line != loc.end_line:
+            if loc is None or loc.line != loc.end_line:
+                continue
+            if tok.role == Role.name_:
+                target = statement if tok is def_token else named.get(str(tok).upper())
+                type_index = _name_token_type(target)
+            else:
+                type_index = _ROLE_TOKEN_TYPE.get(tok.role)
+            if type_index is None:
                 continue
             length = loc.end_column - loc.column  # end_column is exclusive
             if length <= 0:
