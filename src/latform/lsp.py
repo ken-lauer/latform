@@ -692,7 +692,12 @@ def hover_text(
 def _named_hover(statement: Statement) -> str | None:
     """Hover text for a user-defined element/constant/line/list."""
     if isinstance(statement, Element):
-        kind = statement.element_type or str(statement.keyword)
+        if statement.element_type and not statement.element_type.lower().startswith(
+            statement.keyword.lower()
+        ):
+            kind = f"{statement.element_type} from {statement.keyword}"
+        else:
+            kind = statement.element_type or str(statement.keyword)
         return f"**{statement.name}** — element (`{kind}`)"
     if isinstance(statement, Constant):
         return f"**{statement.name}** — constant = `{_seq_text(statement.value)}`"
