@@ -499,6 +499,55 @@ def find_references(
     return results
 
 
+def document_highlights(
+    analyzed: AnalyzedDocument, line: int, char: int
+) -> list[tuple[Location, bool]]:
+    """
+    Occurrences of the name under a 0-indexed position within *this* document.
+
+    Returns ``(location, is_definition)`` per occurrence.  Unlike
+    `find_references`, this is scoped to the current file (that is what an editor
+    highlights) and distinguishes the defining occurrence.
+    """
+    if analyzed.files is None:
+        return []
+    tok = token_at_position(analyzed.statements, line, char)
+    if tok is None or tok.role != Role.name_:
+        return []
+    target = str(tok).upper()
+    out: list[tuple[Location, bool]] = []
+    for statement in analyzed.statements:
+        is_definition = isinstance(statement, (Element, Constant, Line, ElementList))
+        def_token = definition_name_token(statement) if is_definition else None
+        for candidate in _statement_tokens(statement):
+            if candidate.role != Role.name_ or candidate.loc is None:
+                continue
+            if str(candidate).upper() == target:
+                out.append((candidate.loc, candidate is def_token))
+    return out
+
+
+def file_dependencies(analyzed: AnalyzedDocument) -> dict | None:
+    """
+    The project's ``call`` include graph for the analyzed document.
+
+    Returns a dict with a rendered ``tree`` (text), a ``mermaid`` diagram, and
+    the raw ``edges`` (``[caller, callee]`` display-name pairs), or ``None`` if
+    the document did not parse.  Built from the same graph machinery as
+    ``latform-graph``.
+    """
+    from .graph import _generate_mermaid, _generate_tree_text
+
+    files = analyzed.files
+    if files is None or not files.top_files:
+        return None
+    return {
+        "tree": _generate_tree_text(files),
+        "mermaid": _generate_mermaid(files),
+        "edges": [list(edge) for edge in files.call_graph_edges],
+    }
+
+
 # Semantic-token legend: token types (index = position) and modifiers, kept in
 # sync with the legend advertised to the client in `create_server`.
 SEMANTIC_TOKEN_TYPES = (
@@ -1459,6 +1508,22 @@ def create_server(
         logger.debug("references -> %d occurrence(s)", len(found))
         return found or None
 
+    @server.feature(lsp.TEXT_DOCUMENT_DOCUMENT_HIGHLIGHT)
+    def document_highlight(params: lsp.DocumentHighlightParams):
+        pos = params.position
+        analyzed = workspace.analyze(_uri_to_path(params.text_document.uri))
+        return [
+            lsp.DocumentHighlight(
+                range=_range(loc),
+                kind=(
+                    lsp.DocumentHighlightKind.Write
+                    if is_definition
+                    else lsp.DocumentHighlightKind.Read
+                ),
+            )
+            for loc, is_definition in document_highlights(analyzed, pos.line, pos.character)
+        ] or None
+
     @server.feature(lsp.TEXT_DOCUMENT_HOVER)
     def hover(params: lsp.HoverParams):
         pos = params.position
@@ -1612,6 +1677,14 @@ def create_server(
             data.extend((delta_line, delta_char, length, ttype, mods))
             prev_line, prev_char = line, char
         return lsp.SemanticTokens(data=data)
+
+    @server.command("latform.fileDependencies")
+    def latform_file_dependencies(uri: str):
+        # Invoked via workspace/executeCommand with ``arguments: [uri]``; returns
+        # the ``call`` include graph (text tree + mermaid + edges) for the
+        # document's project, or null if it did not parse.
+        logger.debug("command latform.fileDependencies %s", uri)
+        return file_dependencies(workspace.analyze(_uri_to_path(uri)))
 
     _WATCH_GLOBS = ("**/*.bmad", "**/*.lat", "**/latform.toml", "**/pyproject.toml")
 

@@ -618,6 +618,57 @@ def test_workspace_symbols_none_when_unparsed(tmp_path: pathlib.Path) -> None:
     assert lsp.workspace_symbols(analyzed, "") == []
 
 
+# --------------------------------------------------------------------------- #
+# Document highlight & file dependencies
+# --------------------------------------------------------------------------- #
+
+
+def test_document_highlights_marks_occurrences(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad\nq1: q0\nll: line = (q0, q1)\nq0[k1] = 1\n"
+    analyzed = lsp.analyze(tmp_path / "a.bmad", doc)
+    col = doc.splitlines()[1].index("q0")  # a reference
+    highlights = lsp.document_highlights(analyzed, 1, col)
+    by_line = {loc.line: is_def for loc, is_def in highlights}
+    assert set(by_line) == {0, 1, 2, 3}  # definition + three references
+    assert by_line[0] is True  # the definition
+    assert by_line[1] is False
+
+
+def test_document_highlights_scoped_to_current_file(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "latform.toml").write_text('top-level = ["main.bmad"]\n')
+    (tmp_path / "main.bmad").write_text("q0: quad\ncall, file = sub.bmad\n")
+    sub = tmp_path / "sub.bmad"
+    sub.write_text("q1: q0\nll: line = (q0)\nuse, ll\n")
+
+    workspace = lsp.Workspace()
+    workspace.set_text(sub, sub.read_text())
+    analyzed = workspace.analyze(sub)
+    highlights = lsp.document_highlights(analyzed, 0, sub.read_text().index("q0"))
+    # Only occurrences in sub.bmad (the current file), not the definition in main.
+    assert {loc.filename.name for loc, _ in highlights} == {"sub.bmad"}
+    assert all(not is_def for _, is_def in highlights)  # the definition is elsewhere
+
+
+def test_file_dependencies_tree(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "latform.toml").write_text('top-level = ["main.bmad"]\n')
+    main = tmp_path / "main.bmad"
+    main.write_text("q0: quad\ncall, file = sub.bmad\n")
+    (tmp_path / "sub.bmad").write_text("q1: quad\n")
+
+    workspace = lsp.Workspace()
+    workspace.set_text(main, main.read_text())
+    deps = lsp.file_dependencies(workspace.analyze(main))
+    assert deps is not None
+    assert "sub.bmad" in deps["tree"]
+    assert ["main.bmad", "sub.bmad"] in deps["edges"]
+    assert deps["mermaid"].startswith("graph LR")
+
+
+def test_file_dependencies_none_on_parse_error(tmp_path: pathlib.Path) -> None:
+    analyzed = lsp.AnalyzedDocument(path=tmp_path / "b.bmad", files=None)
+    assert lsp.file_dependencies(analyzed) is None
+
+
 def test_create_server() -> None:
     pytest.importorskip("pygls")
     server = lsp.create_server()
