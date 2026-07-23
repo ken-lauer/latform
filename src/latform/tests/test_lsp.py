@@ -584,6 +584,40 @@ def test_semantic_tokens_parameter_attr_not_definition(tmp_path: pathlib.Path) -
     assert tokens[(1, 3)] == ("property", False)  # k1 attribute, not a definition
 
 
+# --------------------------------------------------------------------------- #
+# Workspace symbols
+# --------------------------------------------------------------------------- #
+
+
+def test_workspace_symbols_span_project(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "latform.toml").write_text('top-level = ["main.bmad"]\n')
+    (tmp_path / "main.bmad").write_text("L_tot = 2\nq0: quad\ncall, file = sub.bmad\n")
+    sub = tmp_path / "sub.bmad"
+    sub.write_text("q1: q0\nfodo: line = (q0, q1)\nuse, fodo\n")
+
+    workspace = lsp.Workspace()
+    workspace.set_text(sub, sub.read_text())
+    syms = {
+        name: (kind, loc.filename.name)
+        for name, kind, loc in lsp.workspace_symbols(workspace.analyze(sub), "")
+    }
+    assert syms["q0"] == ("element", "main.bmad")  # defined in a sibling file
+    assert syms["q1"] == ("element", "sub.bmad")
+    assert syms["fodo"] == ("line", "sub.bmad")
+    assert syms["L_tot"] == ("constant", "main.bmad")
+
+
+def test_workspace_symbols_query_filters(tmp_path: pathlib.Path) -> None:
+    analyzed = lsp.analyze(tmp_path / "a.bmad", "q0: quad\nqf: quad\ndrift1: drift\n")
+    assert [name for name, _, _ in lsp.workspace_symbols(analyzed, "q")] == ["q0", "qf"]
+    assert lsp.workspace_symbols(analyzed, "zzz") == []
+
+
+def test_workspace_symbols_none_when_unparsed(tmp_path: pathlib.Path) -> None:
+    analyzed = lsp.AnalyzedDocument(path=tmp_path / "b.bmad", files=None)
+    assert lsp.workspace_symbols(analyzed, "") == []
+
+
 def test_create_server() -> None:
     pytest.importorskip("pygls")
     server = lsp.create_server()

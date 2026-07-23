@@ -896,28 +896,62 @@ def _context_location(context: object) -> Location | None:
     return Location.from_items(tokens) if tokens else None
 
 
+def _symbol_kind(statement: Statement) -> str | None:
+    """
+    The symbol kind of a definition statement, or ``None`` if it isn't one.
+
+    One of ``"element"``, ``"line"``, ``"list"``, ``"constant"``.
+    """
+    if isinstance(statement, Element):
+        return "element"
+    if isinstance(statement, Line):
+        return "line"
+    if isinstance(statement, ElementList):
+        return "list"
+    if isinstance(statement, Constant):
+        return "constant"
+    return None
+
+
 def document_symbols(analyzed: AnalyzedDocument) -> list[tuple[str, str, Location]]:
     """
     Named symbols defined in the document as ``(name, kind, location)`` tuples.
-
-    ``kind`` is one of ``"element"``, ``"line"``, ``"list"``, ``"constant"``.
     """
     out: list[tuple[str, str, Location]] = []
     for statement in analyzed.statements:
+        kind = _symbol_kind(statement)
         name_token = definition_name_token(statement)
-        if name_token is None or name_token.loc is None:
-            continue
-        if isinstance(statement, Element):
-            kind = "element"
-        elif isinstance(statement, Line):
-            kind = "line"
-        elif isinstance(statement, ElementList):
-            kind = "list"
-        elif isinstance(statement, Constant):
-            kind = "constant"
-        else:
+        if kind is None or name_token is None or name_token.loc is None:
             continue
         out.append((str(name_token), kind, name_token.loc))
+    return out
+
+
+def workspace_symbols(analyzed: AnalyzedDocument, query: str) -> list[tuple[str, str, Location]]:
+    """
+    Project-wide symbols matching ``query`` as ``(name, kind, location)`` tuples.
+
+    Searches every element/line/list/constant definition across the analyzed
+    project tree (case-insensitive substring match; an empty query returns all).
+    The client typically re-ranks, so ordering here is by name.
+    """
+    if analyzed.files is None:
+        return []
+    needle = query.lower()
+    out: list[tuple[str, str, Location]] = []
+    for statements in analyzed.files.by_filename.values():
+        for statement in statements:
+            kind = _symbol_kind(statement)
+            name_token = definition_name_token(statement)
+            if kind is None or name_token is None or name_token.loc is None:
+                continue
+            if name_token.loc.filename == implicit_location.filename:
+                continue  # implicit BEGINNING/END have no real location
+            name = str(name_token)
+            if needle and needle not in name.lower():
+                continue
+            out.append((name, kind, name_token.loc))
+    out.sort(key=lambda item: item[0].lower())
     return out
 
 
@@ -1452,6 +1486,36 @@ def create_server(
                 )
             )
         return symbols
+
+    @server.feature(lsp.WORKSPACE_SYMBOL)
+    def workspace_symbol(params: lsp.WorkspaceSymbolParams):
+        logger.debug("workspaceSymbol query=%r", params.query)
+        # One open document per project surfaces that project's whole symbol
+        # table (the tree is shared); analyze one per project and dedupe.
+        seen_projects: set = set()
+        results = []
+        for path in list(workspace.open_texts):
+            analyzed = workspace.analyze(path)
+            if analyzed.files is None:
+                continue
+            project_key = analyzed.project_root or analyzed.path
+            if project_key in seen_projects:
+                continue
+            seen_projects.add(project_key)
+            for name, kind, loc in workspace_symbols(analyzed, params.query):
+                if loc.filename is None:
+                    continue
+                results.append(
+                    lsp.WorkspaceSymbol(
+                        name=name,
+                        kind=_SYMBOL_KIND.get(kind, lsp.SymbolKind.Variable),
+                        location=lsp.Location(
+                            uri=loc.filename.resolve().as_uri(), range=_range(loc)
+                        ),
+                    )
+                )
+        logger.debug("workspaceSymbol -> %d result(s)", len(results))
+        return results
 
     @server.feature(
         lsp.TEXT_DOCUMENT_COMPLETION,
