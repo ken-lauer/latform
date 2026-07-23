@@ -6,7 +6,7 @@ channels:
 dependencies:
   - python=3.12
   - pyyaml
-  - nmlform >=0.0.2
+  - nmlform >=0.0.3
   # For the language server:
   - pygls >2.0
   - rich

@@ -17,7 +17,7 @@ dependencies = [
   'typing_extensions; python_version < "3.11"',
   'tomli; python_version < "3.11"',
   "pyyaml",
-  "nmlform >=0.0.2",
+  "nmlform >=0.0.3",
 ]
 description = "Bmad lattice parser/formatter tool"
 dynamic = ["version"]
