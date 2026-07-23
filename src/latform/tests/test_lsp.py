@@ -526,6 +526,51 @@ def test_format_range_subset(tmp_path: pathlib.Path) -> None:
     assert "Q1" in text and "Q0" not in text
 
 
+# --------------------------------------------------------------------------- #
+# Semantic tokens
+# --------------------------------------------------------------------------- #
+
+SEMANTIC_DOC = "L_tot = 2\nq0: quad, k1 = sqrt(2)\nq1: q0\nq1[k1] = 3\nuse, q1\n"
+
+
+def _semantic(tmp_path: pathlib.Path) -> dict[tuple[int, int], tuple[str, bool]]:
+    """Map (line, col) -> (token-type-name, is_definition) for SEMANTIC_DOC."""
+    analyzed = lsp.analyze(tmp_path / "s.bmad", SEMANTIC_DOC)
+    return {
+        (ln, col): (lsp.SEMANTIC_TOKEN_TYPES[ti], bool(mods))
+        for ln, col, _length, ti, mods in lsp.semantic_tokens(analyzed)
+    }
+
+
+def test_semantic_tokens_classify_roles(tmp_path: pathlib.Path) -> None:
+    tokens = _semantic(tmp_path)
+    assert tokens[(0, 0)] == ("variable", True)  # L_tot definition
+    assert tokens[(1, 0)] == ("variable", True)  # q0 definition
+    assert tokens[(1, 4)] == ("type", False)  # quad (element type)
+    assert tokens[(1, 10)] == ("property", False)  # k1 attribute
+    assert tokens[(1, 15)] == ("function", False)  # sqrt builtin
+    assert tokens[(2, 4)] == ("variable", False)  # q0 reference (not a definition)
+
+
+def test_semantic_tokens_lengths_and_order(tmp_path: pathlib.Path) -> None:
+    analyzed = lsp.analyze(tmp_path / "s.bmad", SEMANTIC_DOC)
+    lines = SEMANTIC_DOC.splitlines()
+    toks = lsp.semantic_tokens(analyzed)
+    # Lengths cover exactly the token text.
+    assert lines[0][0:6] == "L_tot "  # sanity on the doc
+    for ln, col, length, _ti, _mods in toks:
+        assert lines[ln][col : col + length].strip() == lines[ln][col : col + length]
+    assert lines[1][15 : 15 + 4] == "sqrt"
+    # Sorted by (line, col) so delta encoding is monotonic.
+    assert toks == sorted(toks, key=lambda t: (t[0], t[1]))
+
+
+def test_semantic_tokens_parameter_attr_not_definition(tmp_path: pathlib.Path) -> None:
+    # k1 in `q1[k1] = 3` is an attribute (property), not a definition.
+    tokens = _semantic(tmp_path)
+    assert tokens[(3, 3)] == ("property", False)
+
+
 def test_create_server() -> None:
     pytest.importorskip("pygls")
     server = lsp.create_server()

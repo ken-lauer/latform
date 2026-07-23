@@ -499,6 +499,62 @@ def find_references(
     return results
 
 
+# Semantic-token legend: token types (index = position) and modifiers, plus the
+# mapping from latform `Role` to a type index.  Kept in sync with the legend
+# advertised to the client in `create_server`.
+SEMANTIC_TOKEN_TYPES = (
+    "variable",
+    "type",
+    "property",
+    "function",
+    "keyword",
+    "parameter",
+    "string",
+)
+SEMANTIC_TOKEN_MODIFIERS = ("definition",)
+_DEFINITION_MODIFIER = 1  # 1 << index("definition")
+_ROLE_TOKEN_TYPE = {
+    Role.name_: SEMANTIC_TOKEN_TYPES.index("variable"),
+    Role.kind: SEMANTIC_TOKEN_TYPES.index("type"),
+    Role.attribute_name: SEMANTIC_TOKEN_TYPES.index("property"),
+    Role.builtin: SEMANTIC_TOKEN_TYPES.index("function"),
+    Role.statement_definition: SEMANTIC_TOKEN_TYPES.index("keyword"),
+    Role.controller_variable: SEMANTIC_TOKEN_TYPES.index("parameter"),
+    Role.env_var: SEMANTIC_TOKEN_TYPES.index("parameter"),
+    Role.filename: SEMANTIC_TOKEN_TYPES.index("string"),
+}
+
+
+def semantic_tokens(analyzed: AnalyzedDocument) -> list[tuple[int, int, int, int, int]]:
+    """
+    Role-classified tokens for semantic highlighting.
+
+    Returns ``(line, start_char, length, type_index, modifiers)`` per token,
+    sorted by position.  Uses the parser's `Role` annotations, so highlighting
+    matches how latform actually understands each token (e.g. a name reference
+    vs. an element-type keyword vs. an attribute).  Multi-line tokens are skipped
+    (the LSP encoding is single-line).
+    """
+    out: list[tuple[int, int, int, int, int]] = []
+    for statement in analyzed.statements:
+        # Only true definition statements carry a "definition" name (a Parameter's
+        # ``name`` is an attribute, not a definition).
+        is_definition = isinstance(statement, (Element, Constant, Line, ElementList))
+        def_token = definition_name_token(statement) if is_definition else None
+        for tok in _statement_tokens(statement):
+            type_index = _ROLE_TOKEN_TYPE.get(tok.role)
+            loc = tok.loc
+            if type_index is None or loc is None or loc.line != loc.end_line:
+                continue
+            length = loc.end_column - loc.column  # end_column is exclusive
+            if length <= 0:
+                continue
+            modifiers = _DEFINITION_MODIFIER if tok is def_token else 0
+            out.append((loc.line, loc.column, length, type_index, modifiers))
+    out.sort(key=lambda item: (item[0], item[1]))
+    return out
+
+
 def prepare_rename(analyzed: AnalyzedDocument, line: int, char: int) -> Location | None:
     """
     The range of the renameable name under a 0-indexed position, or ``None``.
@@ -1439,6 +1495,24 @@ def create_server(
         end_char = len(lines[last]) if last < len(lines) else 0
         rng = lsp.Range(lsp.Position(first, 0), lsp.Position(last, end_char))
         return [lsp.TextEdit(range=rng, new_text=formatted)]
+
+    @server.feature(
+        lsp.TEXT_DOCUMENT_SEMANTIC_TOKENS_FULL,
+        lsp.SemanticTokensLegend(
+            token_types=list(SEMANTIC_TOKEN_TYPES),
+            token_modifiers=list(SEMANTIC_TOKEN_MODIFIERS),
+        ),
+    )
+    def semantic_tokens_full(params: lsp.SemanticTokensParams):
+        analyzed = workspace.analyze(_uri_to_path(params.text_document.uri))
+        data: list[int] = []
+        prev_line = prev_char = 0
+        for line, char, length, ttype, mods in semantic_tokens(analyzed):
+            delta_line = line - prev_line
+            delta_char = char - prev_char if delta_line == 0 else char
+            data.extend((delta_line, delta_char, length, ttype, mods))
+            prev_line, prev_char = line, char
+        return lsp.SemanticTokens(data=data)
 
     _WATCH_GLOBS = ("**/*.bmad", "**/*.lat", "**/latform.toml", "**/pyproject.toml")
 
