@@ -8,8 +8,7 @@ Tao (the Bmad simulation front-end) is configured through Fortran-namelist
 ``tao.init`` as a source of lattice filenames lets every latform tool operate on
 a Tao project without the user re-listing each lattice.
 
-This module layers the small conveniences on top of the generic
-:mod:`latform._namelist` model.
+This module layers the small conveniences on top of the nmlform package's Namelist.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from ._namelist import (
+from nmlform import (
     Assignment,
     Namelist,
     NamelistArrayEntry,
@@ -29,7 +28,9 @@ from ._namelist import (
     quote_value,
     unquote_value,
 )
-from .token import Token
+from nmlform import (
+    Token as NmlToken,
+)
 
 __all__ = [
     "DATUM_FIELDS",
@@ -137,31 +138,31 @@ class TaoDatum(NamelistArrayEntry):
     FIELDS: ClassVar[tuple[str, ...]] = DATUM_FIELDS
 
     @property
-    def data_type(self) -> Token | None:
+    def data_type(self) -> NmlToken | None:
         return self.value("data_type")
 
     @property
-    def ele_ref_name(self) -> Token | None:
+    def ele_ref_name(self) -> NmlToken | None:
         return self.value("ele_ref_name")
 
     @property
-    def ele_start_name(self) -> Token | None:
+    def ele_start_name(self) -> NmlToken | None:
         return self.value("ele_start_name")
 
     @property
-    def ele_name(self) -> Token | None:
+    def ele_name(self) -> NmlToken | None:
         return self.value("ele_name")
 
     @property
-    def merit_type(self) -> Token | None:
+    def merit_type(self) -> NmlToken | None:
         return self.value("merit_type")
 
     @property
-    def meas(self) -> Token | None:
+    def meas(self) -> NmlToken | None:
         return self.value("meas")
 
     @property
-    def weight(self) -> Token | None:
+    def weight(self) -> NmlToken | None:
         return self.value("weight")
 
 
@@ -172,35 +173,35 @@ class TaoVariable(NamelistArrayEntry):
     FIELDS: ClassVar[tuple[str, ...]] = VAR_FIELDS
 
     @property
-    def ele_name(self) -> Token | None:
+    def ele_name(self) -> NmlToken | None:
         return self.value("ele_name")
 
     @property
-    def attribute(self) -> Token | None:
+    def attribute(self) -> NmlToken | None:
         return self.value("attribute")
 
     @property
-    def universe(self) -> Token | None:
+    def universe(self) -> NmlToken | None:
         return self.value("universe")
 
     @property
-    def weight(self) -> Token | None:
+    def weight(self) -> NmlToken | None:
         return self.value("weight")
 
     @property
-    def step(self) -> Token | None:
+    def step(self) -> NmlToken | None:
         return self.value("step")
 
     @property
-    def low_lim(self) -> Token | None:
+    def low_lim(self) -> NmlToken | None:
         return self.value("low_lim")
 
     @property
-    def high_lim(self) -> Token | None:
+    def high_lim(self) -> NmlToken | None:
         return self.value("high_lim")
 
     @property
-    def merit_type(self) -> Token | None:
+    def merit_type(self) -> NmlToken | None:
         return self.value("merit_type")
 
 
@@ -209,45 +210,45 @@ class TaoD1Data(NamelistArrayGroup):
     """A ``&tao_d1_data`` group: one d1 array of `TaoDatum` entries."""
 
     @property
-    def name(self) -> Token | None:
+    def name(self) -> NmlToken | None:
         """The ``d1_data%name`` value (the d1 name, e.g. ``'12'``)."""
         return self._scalar("d1_data%name")
 
     @property
-    def ix_d1_data(self) -> Token | None:
+    def ix_d1_data(self) -> NmlToken | None:
         """The ``ix_d1_data`` index within the parent d2 group."""
         return self._scalar("ix_d1_data")
 
     @property
-    def ix_min_data(self) -> Token | None:
+    def ix_min_data(self) -> NmlToken | None:
         return self._scalar("ix_min_data")
 
     @property
-    def ix_max_data(self) -> Token | None:
+    def ix_max_data(self) -> NmlToken | None:
         return self._scalar("ix_max_data")
 
     @property
-    def search_for_lat_eles(self) -> Token | None:
+    def search_for_lat_eles(self) -> NmlToken | None:
         return self._scalar("search_for_lat_eles")
 
     @property
-    def use_same_lat_eles_as(self) -> Token | None:
+    def use_same_lat_eles_as(self) -> NmlToken | None:
         return self._scalar("use_same_lat_eles_as")
 
     @property
-    def default_data_type(self) -> Token | None:
+    def default_data_type(self) -> NmlToken | None:
         return self._scalar("default_data_type")
 
     @property
-    def default_merit_type(self) -> Token | None:
+    def default_merit_type(self) -> NmlToken | None:
         return self._scalar("default_merit_type")
 
     @property
-    def default_weight(self) -> Token | None:
+    def default_weight(self) -> NmlToken | None:
         return self._scalar("default_weight")
 
     @property
-    def default_data_source(self) -> Token | None:
+    def default_data_source(self) -> NmlToken | None:
         return self._scalar("default_data_source")
 
     @property
@@ -261,40 +262,40 @@ class TaoV1Var(NamelistArrayGroup):
     """A ``&tao_var`` group: one v1 array of `TaoVariable` entries."""
 
     @property
-    def name(self) -> Token | None:
+    def name(self) -> NmlToken | None:
         """The ``v1_var%name`` value (the v1 name)."""
         return self._scalar("v1_var%name")
 
     @property
-    def ix_min_var(self) -> Token | None:
+    def ix_min_var(self) -> NmlToken | None:
         return self._scalar("ix_min_var")
 
     @property
-    def ix_max_var(self) -> Token | None:
+    def ix_max_var(self) -> NmlToken | None:
         return self._scalar("ix_max_var")
 
     @property
-    def search_for_lat_eles(self) -> Token | None:
+    def search_for_lat_eles(self) -> NmlToken | None:
         return self._scalar("search_for_lat_eles")
 
     @property
-    def use_same_lat_eles_as(self) -> Token | None:
+    def use_same_lat_eles_as(self) -> NmlToken | None:
         return self._scalar("use_same_lat_eles_as")
 
     @property
-    def default_attribute(self) -> Token | None:
+    def default_attribute(self) -> NmlToken | None:
         return self._scalar("default_attribute")
 
     @property
-    def default_merit_type(self) -> Token | None:
+    def default_merit_type(self) -> NmlToken | None:
         return self._scalar("default_merit_type")
 
     @property
-    def default_weight(self) -> Token | None:
+    def default_weight(self) -> NmlToken | None:
         return self._scalar("default_weight")
 
     @property
-    def default_universe(self) -> Token | None:
+    def default_universe(self) -> NmlToken | None:
         return self._scalar("default_universe")
 
     @property
@@ -329,7 +330,7 @@ class TaoInit(NamelistFile):
         """The ``&tao_start`` group (the first, if repeated)."""
         return self.get_namelist("tao_start")
 
-    def _start_value(self, key: str) -> Token | None:
+    def _start_value(self, key: str) -> NmlToken | None:
         start = self.tao_start
         if start is None:
             return None
@@ -337,41 +338,41 @@ class TaoInit(NamelistFile):
         return unquote_value(assignment.value.strip()) if assignment is not None else None
 
     @property
-    def data_file(self) -> Token | None:
+    def data_file(self) -> NmlToken | None:
         """``&tao_start`` ``data_file`` (where ``&tao_d1_data`` lives), if named."""
         return self._start_value("data_file")
 
     @property
-    def var_file(self) -> Token | None:
+    def var_file(self) -> NmlToken | None:
         """``&tao_start`` ``var_file`` (where ``&tao_var`` lives), if named."""
         return self._start_value("var_file")
 
     @property
-    def plot_file(self) -> Token | None:
+    def plot_file(self) -> NmlToken | None:
         return self._start_value("plot_file")
 
     @property
-    def beam_file(self) -> Token | None:
+    def beam_file(self) -> NmlToken | None:
         return self._start_value("beam_file")
 
     @property
-    def building_wall_file(self) -> Token | None:
+    def building_wall_file(self) -> NmlToken | None:
         return self._start_value("building_wall_file")
 
     @property
-    def startup_file(self) -> Token | None:
+    def startup_file(self) -> NmlToken | None:
         return self._start_value("startup_file")
 
     @property
-    def hook_init_file(self) -> Token | None:
+    def hook_init_file(self) -> NmlToken | None:
         return self._start_value("hook_init_file")
 
     @property
-    def init_name(self) -> Token | None:
+    def init_name(self) -> NmlToken | None:
         return self._start_value("init_name")
 
     @property
-    def n_universes(self) -> Token | None:
+    def n_universes(self) -> NmlToken | None:
         return self._start_value("n_universes")
 
     def load_sources(

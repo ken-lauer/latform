@@ -439,8 +439,10 @@ def annotate_controller_variables(element: Element) -> None:
             yield from iter_tokens(attr)
 
     for tok in get_tokens():
-        if tok.role is None and tok._upper in var_names:
+        print(repr(tok))
+        if (tok.role is None or tok.role == Role.name_) and tok._upper in var_names:
             tok.role = Role.controller_variable
+            print("set role", repr(tok))
 
     for attr in element.attributes:
         if attr is var_attr:

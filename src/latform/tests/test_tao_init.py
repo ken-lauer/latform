@@ -4,11 +4,11 @@ import os
 import pathlib
 
 import pytest
+from nmlform import KeyPath, Namelist, NamelistFile
+from nmlform import Token as NmlToken
 
-from .._namelist import KeyPath, Namelist, NamelistFile
 from ..parser import Files, MemoryFiles, build_files
 from ..tao import TaoInit, is_init_file
-from ..token import Token
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parent
 FILES = MODULE_PATH / "files" / "tao_init"
@@ -320,7 +320,7 @@ def test_datum_value_token_keeps_location():
     tao = TaoInit.parse(source)
     (datum,) = tao.d1_data[0].datums
     ele = datum.ele_name
-    assert isinstance(ele, Token)
+    assert isinstance(ele, NmlToken)
     assert ele == "END\\2"
     # The unquoted token still carries a source location pointing at the field.
     assert ele.loc.get_string(source) == "'END\\2'"

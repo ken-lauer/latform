@@ -5,6 +5,8 @@ import typing
 from dataclasses import dataclass, field
 from typing import Literal
 
+from nmlform.types import NamelistFormatOptions
+
 from .const import COMMA, EQUALS, SPACE
 from .exceptions import UnexpectedCallName
 from .token import Comments, Delimiter, Location, Role, Token
@@ -441,24 +443,6 @@ class Block:
 
 
 NameCase = Literal["upper", "lower", "same"]
-
-
-@dataclass
-class NamelistFormatOptions:
-    """
-    Formatting options for Fortran-namelist (``*.init``/``*.nml``) files.
-
-    These control only the field section between a ``&name`` opener and its ``/``
-    terminator; the opener and terminator are always emitted at column zero and
-    values are never modified.
-    """
-
-    indent_size: int = 2
-    indent_char: str = " "
-    blank_line_after_group: bool = True
-    field_case: NameCase = "lower"
-    align_equals: bool = False
-    align_comments: bool = True
 
 
 @dataclass()

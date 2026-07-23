@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Collection, Generator, Iterable, Sequence
 
-from ._namelist import Namelist
+from nmlform import Namelist
+
 from .attrs import element_key_to_attrs
 from .const import named_physical_constants
 from .statements import (
