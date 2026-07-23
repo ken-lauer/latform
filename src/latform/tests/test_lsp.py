@@ -669,6 +669,134 @@ def test_file_dependencies_none_on_parse_error(tmp_path: pathlib.Path) -> None:
     assert lsp.file_dependencies(analyzed) is None
 
 
+# --------------------------------------------------------------------------- #
+# Code actions
+# --------------------------------------------------------------------------- #
+
+
+def _actions(tmp_path: pathlib.Path, doc: str, line: int, char: int) -> list[lsp.CodeAction]:
+    analyzed = lsp.analyze(tmp_path / "a.bmad", doc)
+    return lsp.code_actions(analyzed, line, char, line, char)
+
+
+def _titles(actions: list[lsp.CodeAction]) -> list[str]:
+    return [a.title for a in actions]
+
+
+def _apply(doc: str, action: lsp.CodeAction) -> str:
+    """Apply an action's edits (single-file) to ``doc`` and return the result."""
+    lines = doc.split("\n")
+
+    def offset(ln: int, col: int) -> int:
+        return sum(len(line) + 1 for line in lines[:ln]) + col
+
+    spans = sorted(
+        (
+            offset(e.location.line, e.location.column),
+            offset(e.location.end_line, e.location.end_column),
+            e.new_text,
+        )
+        for e in action.edits
+    )
+    result = doc
+    for start, end, text in reversed(spans):
+        result = result[:start] + text + result[end:]
+    return result
+
+
+def _find(actions: list[lsp.CodeAction], substring: str) -> lsp.CodeAction:
+    for action in actions:
+        if substring in action.title:
+            return action
+    raise AssertionError(f"no action titled like {substring!r} in {_titles(actions)}")
+
+
+def test_code_action_remove_duplicate_attribute(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad, k1 = 1, k1 = 2\n"
+    action = _find(_actions(tmp_path, doc, 0, 18), "Remove duplicate attribute")
+    assert action.diagnostic_code == "LF006"
+    assert _apply(doc, action).count("k1") == 1
+
+
+def test_code_action_remove_unused_constant(tmp_path: pathlib.Path) -> None:
+    doc = "junk = 5\nq0: quad\nuse, q0\n"
+    action = _find(_actions(tmp_path, doc, 0, 0), "Remove unused constant")
+    assert "junk" not in _apply(doc, action)
+
+
+def test_code_action_remove_override(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad, k1 = 1\nq0[k1] = 2\n"
+    action = _find(_actions(tmp_path, doc, 1, 0), "Remove overriding")
+    assert "q0[k1]" not in _apply(doc, action)
+
+
+def test_code_action_use_builtin_constant(tmp_path: pathlib.Path) -> None:
+    doc = "x = 3.14159265\n"
+    action = _find(_actions(tmp_path, doc, 0, 4), "built-in constant 'pi'")
+    assert "pi" in _apply(doc, action)
+    assert "3.14159265" not in _apply(doc, action)
+
+
+def test_code_action_unknown_attribute_suggestion(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad, kk1 = 1\n"
+    action = _find(_actions(tmp_path, doc, 0, 10), "Change to 'k1'")
+    assert action.diagnostic_code == "LF004"
+    assert "k1 = 1" in _apply(doc, action)
+
+
+def test_code_action_unknown_element_type_suggestion(tmp_path: pathlib.Path) -> None:
+    actions = _actions(tmp_path, "q0: quadrupolee\n", 0, 4)
+    assert any(a.diagnostic_code == "LF003" and a.title.startswith("Change to") for a in actions)
+
+
+def test_code_action_undefined_reference_create_stub(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad\nqc: quad, k1 = qundef[k1]\nuse, q0\n"
+    action = _find(
+        _actions(tmp_path, doc, 1, doc.splitlines()[1].index("qundef")), "Create element"
+    )
+    assert "qundef: marker" in _apply(doc, action)
+
+
+def test_code_action_inline_constant(tmp_path: pathlib.Path) -> None:
+    doc = "Lq = 0.1\nq0: quad, l = Lq\nuse, q0\n"
+    action = _find(_actions(tmp_path, doc, 0, 0), "Inline constant")
+    result = _apply(doc, action)
+    assert "Lq" not in result and "0.1" in result
+
+
+def test_code_action_expand_abbreviation(tmp_path: pathlib.Path) -> None:
+    doc = "c0: rfcavity, volt = 1e6\n"  # 'volt' is an unambiguous abbrev of 'voltage'
+    action = _find(_actions(tmp_path, doc, 0, 14), "Expand to 'voltage'")
+    assert "voltage = 1e6" in _apply(doc, action)
+
+
+def test_code_action_extract_constant(tmp_path: pathlib.Path) -> None:
+    doc = "q0: quad, l = 0.5\nuse, q0\n"
+    action = _find(_actions(tmp_path, doc, 0, 14), "Extract to constant")
+    result = _apply(doc, action)
+    assert result.startswith("new_const = 0.5\n")
+    assert "l = new_const" in result
+
+
+def test_code_action_reformat_statement(tmp_path: pathlib.Path) -> None:
+    assert any(a.title == "Reformat statement" for a in _actions(tmp_path, "q0:quad,k1=1\n", 0, 0))
+
+
+def test_code_action_suppress_lint(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "latform.toml").write_text('top-level = ["a.bmad"]\n[lint]\nignore = []\n')
+    doc = "q0: quad, k1 = 1, k1 = 2\nuse, q0\n"
+    path = tmp_path / "a.bmad"
+    path.write_text(doc)
+    workspace = lsp.Workspace()
+    workspace.set_text(path, doc)
+    analyzed = workspace.analyze(path)
+    actions = lsp.code_actions(analyzed, 0, 18, 0, 18)
+    suppress = _find(actions, "Suppress LF006")
+    edit = suppress.edits[0]
+    assert edit.location.filename.name == "latform.toml"
+    assert edit.new_text == '"LF006"'
+
+
 def test_create_server() -> None:
     pytest.importorskip("pygls")
     server = lsp.create_server()
