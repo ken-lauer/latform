@@ -472,13 +472,8 @@ class FormatOptions:
     flatten_inline: bool = False
     newline_at_eof: bool = True
     strip_comments: bool = False
+    # All namelist (*.init/*.nml) formatting lives on this sub-dataclass.
     namelist: NamelistFormatOptions = field(default_factory=NamelistFormatOptions)
-    # For now, reuses indent_size/indent_char for field indentation
-    # namelist_indent_size: int = 2
-    # namelist_indent_char: str = " "
-    namelist_field_case: NameCase = "lower"
-    namelist_align_equals: bool = False
-    namelist_align_comments: bool = True  # uses comment_col
 
 
 @dataclass
