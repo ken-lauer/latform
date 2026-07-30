@@ -604,10 +604,6 @@ def cli_main(args: list[str] | None = None) -> None:
     config = cli.resolve_config(parsed)
     filenames, from_top_level = cli.require_input_files(parsed.filename, config)
 
-    recursive = parsed.recursive
-    if recursive is None:
-        recursive = from_top_level
-
     found = False
     try:
         files_sets = build_files(filenames, combine=parsed.combine)
@@ -616,8 +612,11 @@ def cli_main(args: list[str] | None = None) -> None:
         raise SystemExit(1) from None
 
     for files_obj in files_sets:
+        this_recursive = parsed.recursive
+        if this_recursive is None:
+            this_recursive = files_obj.tao_init is not None
         files_obj.parse(
-            recurse=recursive or files_obj.tao_init is not None,
+            recurse=this_recursive,
             raise_if_missing=parsed.error_if_missing,
         )
         files_obj.annotate()

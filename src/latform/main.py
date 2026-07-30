@@ -255,14 +255,17 @@ def main(
     if namelist_options is not None:
         options.namelist = namelist_options
 
-    if recursive is None:
-        recursive = options.flatten_call  # implied
-
     for files_obj in build_files(filenames, combine=combine):
+        this_recursive = recursive
+        if recursive is None:
+            this_recursive = options.flatten_call or files_obj.tao_init is not None  # implied
+        else:
+            this_recursive = recursive
+
         process_files(
             files_obj,
             options,
-            recursive=recursive,
+            recursive=this_recursive,
             verbose=verbose,
             in_place=in_place,
             diff=diff,
