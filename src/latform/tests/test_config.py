@@ -170,6 +170,92 @@ def test_empty_config_when_none_found(tmp_path: pathlib.Path):
     assert config.source is None
 
 
+# --- namelist format settings ------------------------------------------------
+
+
+def test_namelist_format_keys_parsed(tmp_path: pathlib.Path):
+    (tmp_path / "latform.toml").write_text(
+        "[format]\n"
+        "format-namelist = false\n"
+        "namelist-indent = 4\n"
+        'namelist-field-case = "upper"\n'
+        "namelist-align-equals = false\n"
+        "namelist-align-comments = false\n"
+    )
+    fmt = discover_config(tmp_path).format
+    assert fmt == {
+        "format_namelist": False,
+        "namelist_indent": 4,
+        "namelist_field_case": "upper",
+        "namelist_align_equals": False,
+        "namelist_align_comments": False,
+    }
+
+
+def test_namelist_logicals_default(project: pathlib.Path):
+    assert discover_config(project).namelist_logicals == ("T", "F")
+
+
+def test_namelist_logicals_pair_parsed(tmp_path: pathlib.Path):
+    (tmp_path / "latform.toml").write_text('[format]\nnamelist-logicals = [".true.", ".false."]\n')
+    config = discover_config(tmp_path)
+    assert config.namelist_logicals == (".true.", ".false.")
+    assert "namelist_logicals" not in config.format  # not folded into argparse dests
+
+
+def test_namelist_logicals_false_disables(tmp_path: pathlib.Path):
+    (tmp_path / "latform.toml").write_text("[format]\nnamelist-logicals = false\n")
+    assert discover_config(tmp_path).namelist_logicals is None
+
+
+@pytest.mark.parametrize("value", ['["T"]', '"T"', "true", "[1, 2]"])
+def test_invalid_namelist_logicals_raises(tmp_path: pathlib.Path, value: str):
+    (tmp_path / "latform.toml").write_text(f"[format]\nnamelist-logicals = {value}\n")
+    with pytest.raises(ConfigError):
+        discover_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'namelist-indent = "x"',
+        "namelist-indent = -1",
+        "namelist-align-equals = 1",
+        'format-namelist = "yes"',
+        'namelist-field-case = "Upper"',
+    ],
+)
+def test_invalid_namelist_format_raises(tmp_path: pathlib.Path, line: str):
+    (tmp_path / "latform.toml").write_text(f"[format]\n{line}\n")
+    with pytest.raises(ConfigError):
+        discover_config(tmp_path)
+
+
+def test_cli_applies_namelist_config(tmp_path, monkeypatch, capsys):
+    from ..main import cli_main
+
+    (tmp_path / "latform.toml").write_text(
+        '[format]\nnamelist-field-case = "upper"\nnamelist-logicals = [".true.", ".false."]\n'
+    )
+    (tmp_path / "ring.bmad").write_text("q1: quadrupole, l=1\ncl: line=(q1)\nuse, cl\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'ring.bmad'\n"
+        "/\n\n"
+        "&tao_params\n"
+        "  global%n_opti_cycles = 100\n"
+        "  bmad_com%radiation_damping_on = T\n"
+        "/\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    cli_main(["tao.init"])
+    out = capsys.readouterr().out
+    assert "GLOBAL%N_OPTI_CYCLES" in out  # field-case "upper" from config
+    assert ".true." in out  # logicals pair from config (T -> .true.)
+    assert "= T\n" not in out  # the default pair was overridden
+
+
 # --- CLI integration ---------------------------------------------------------
 
 

@@ -13,6 +13,10 @@ Example ``latform.toml``::
     [format]
     line-length = 100
     name-case = "upper"
+    # Tao/namelist formatting (read by ``latform``):
+    namelist-field-case = "lower"
+    namelist-align-equals = true
+    namelist-logicals = ["T", "F"]   # (true, false) tokens, or false to disable
 
     [lint]
     ignore = ["LF002"]
@@ -62,6 +66,13 @@ _FORMAT_KEYS = frozenset(
         "flatten",
         "flatten_call",
         "flatten_inline",
+        # Namelist (*.init/*.nml) formatting; map to the same argparse dests as
+        # the shared --namelist-* / --no-format-namelist CLI flags.
+        "format_namelist",
+        "namelist_indent",
+        "namelist_field_case",
+        "namelist_align_equals",
+        "namelist_align_comments",
     }
 )
 
@@ -72,6 +83,29 @@ _CASE_KEYS = frozenset(
         "kind_case",
         "builtin_case",
         "controller_variable_case",
+        "namelist_field_case",
+    }
+)
+
+_FORMAT_BOOL_KEYS = frozenset(
+    {
+        "compact",
+        "strip_comments",
+        "flatten",
+        "flatten_call",
+        "flatten_inline",
+        "format_namelist",
+        "namelist_align_equals",
+        "namelist_align_comments",
+    }
+)
+
+_FORMAT_INT_KEYS = frozenset(
+    {
+        "line_length",
+        "max_line_length",
+        "section_break_width",
+        "namelist_indent",
     }
 )
 
@@ -93,6 +127,9 @@ class LatformProjectConfig:
     top_level: list[str] = field(default_factory=list)
     tao_init: list[str] = field(default_factory=list)
     format: dict[str, Any] = field(default_factory=dict)
+    # Canonical (true, false) tokens for logical namelist values, or None to
+    # leave logicals untouched. Consumed by the ``latform`` formatter.
+    namelist_logicals: tuple[str, str] | None = ("T", "F")
     lint_ignore: list[str] = field(default_factory=list)
     per_file_ignores: dict[str, list[str]] = field(default_factory=dict)
     min_name_length: int = 1
@@ -131,10 +168,16 @@ class LatformProjectConfig:
         fmt: dict[str, Any] = {}
         for key, value in raw_format.items():
             norm = _normalize_key(key)
+            # ``namelist-logicals`` is not an argparse dest, so it is stored on
+            # the config rather than folded into ``format``.
+            if norm == "namelist_logicals":
+                config.namelist_logicals = _parse_logicals(path, value)
+                continue
             if norm not in _FORMAT_KEYS:
                 logger.warning("%s: unknown format setting %r (ignored)", path, key)
                 continue
             fmt[norm] = value
+        _validate_format_types(path, fmt)
         _parse_case_fields(path, fmt)
         config.format = fmt
 
@@ -250,6 +293,35 @@ def _parse_case_fields(source: pathlib.Path, fmt: dict[str, Any]) -> None:
             raise ConfigError(
                 f"{source}: format.{key} must be one of {sorted(_CASE_VALUES)}, got {fmt[key]!r}"
             )
+
+
+def _validate_format_types(source: pathlib.Path, fmt: dict[str, Any]) -> None:
+    """Type-check the boolean and integer ``[format]`` settings."""
+    for key in _FORMAT_BOOL_KEYS & fmt.keys():
+        if not isinstance(fmt[key], bool):
+            raise ConfigError(f"{source}: format.{key} must be a boolean, got {fmt[key]!r}")
+    for key in _FORMAT_INT_KEYS & fmt.keys():
+        value = fmt[key]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"{source}: format.{key} must be an integer, got {value!r}")
+        if key == "namelist_indent" and value < 0:
+            raise ConfigError(f"{source}: format.namelist-indent must be >= 0, got {value!r}")
+
+
+def _parse_logicals(source: pathlib.Path, value: Any) -> tuple[str, str] | None:
+    """Parse ``namelist-logicals``: a ``[true, false]`` string pair, or ``false``."""
+    if value is False:
+        return None
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) == 2
+        and all(isinstance(item, str) for item in value)
+    ):
+        return (value[0], value[1])
+    raise ConfigError(
+        f"{source}: format.namelist-logicals must be a [true, false] pair of strings "
+        f"or false to disable, got {value!r}"
+    )
 
 
 def discover_config(

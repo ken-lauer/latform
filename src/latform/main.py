@@ -124,11 +124,13 @@ def process_files(
 
     if files_obj.tao_init is not None and files_obj.tao_init.filename is not None:
         init_path = files_obj.tao_init.filename
+        logicals = config.namelist_logicals if config is not None else ("T", "F")
         init_original = files_obj.tao_init.render()
         init_formatted = format_tao_namelist(
             files_obj.tao_init,
             options=options.namelist if format_namelist else None,
             fix_types=format_namelist,
+            logicals=logicals,
         )
         results[init_path] = (init_original, init_formatted)
         top_set.add(init_path)
