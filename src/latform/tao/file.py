@@ -33,7 +33,13 @@ from nmlform import Token as NmlToken
 
 from ._schema import STRUCTS
 from .enums import integer_enum_for_field
-from .schema import PathComponent, check_value, is_known_namelist, resolve_path
+from .schema import (
+    PathComponent,
+    check_value,
+    is_known_namelist,
+    logical_value,
+    resolve_path,
+)
 
 __all__ = [
     "TaoDatum",
@@ -522,7 +528,7 @@ def _fix_character_value(value: str, enum: dict[int, str] | None) -> str:
         index = _enum_index(value)
         if index is not None:
             name = enum.get(index)
-            return quote_value(name) if name is not None else value
+            return quote_value(name) if name is not None else value.lower()
     if check_value("character", value):
         return value
     return quote_value(value)
@@ -556,8 +562,41 @@ def _fixed_character_value(assignment: Assignment, enum: dict[int, str] | None) 
     return " ".join(parts) if changed else None
 
 
-def _fix_namelist_group(group: Namelist) -> None:
-    """Normalize character assignments (quoting, enum index -> name) in a group."""
+def _fix_logical_token(text: str, pair: tuple[str, str]) -> str:
+    """
+    Rewrite a logical value literal to the canonical ``pair`` (true, false).
+
+    Any Fortran ``n*`` repeat prefix is preserved. A literal that is not a valid
+    logical is returned unchanged, so the validator can still flag it.
+    """
+    count, star, value = text.partition("*")
+    if star and count.strip().lstrip("+-").isdigit():
+        prefix, value = f"{count}*", value
+    else:
+        prefix, value = "", text
+    truth = logical_value(value)
+    if truth is None:
+        return text
+    return prefix + (pair[0] if truth else pair[1])
+
+
+def _fixed_logical_value(assignment: Assignment, pair: tuple[str, str]) -> str | None:
+    """
+    The assignment's right-hand side with each logical value canonicalized.
+
+    Returns ``None`` when nothing changed, so the caller can skip the edit.
+    """
+    changed = False
+    parts = []
+    for token in assignment.field_tokens:
+        fixed = _fix_logical_token(token.text, pair)
+        parts.append(fixed)
+        changed = changed or fixed != token.text
+    return " ".join(parts) if changed else None
+
+
+def _fix_namelist_group(group: Namelist, logicals: tuple[str, str] | None) -> None:
+    """Normalize character (quoting, enum index -> name) and logical assignments."""
     if not is_known_namelist(group.name):
         return
     # `Namelist.set` reparses (invalidating `group.assignments`), so collect the
@@ -566,17 +605,26 @@ def _fix_namelist_group(group: Namelist) -> None:
     for assignment in group.assignments:
         components = path_components(assignment)
         leaf = resolve_path(group.name, components).leaf
-        if leaf is None or leaf.kind != "intrinsic" or leaf.base != "character":
+        if leaf is None or leaf.kind != "intrinsic":
             continue
-        enum = integer_enum_for_field([component.name for component in components])
-        fixed = _fixed_character_value(assignment, enum)
+        if leaf.base == "character":
+            enum = integer_enum_for_field([component.name for component in components])
+            fixed = _fixed_character_value(assignment, enum)
+        elif leaf.base == "logical" and logicals is not None:
+            fixed = _fixed_logical_value(assignment, logicals)
+        else:
+            continue
         if fixed is not None:
             edits.append((assignment.key, fixed))
     for key, value in edits:
         group.set(key, value)
 
 
-def fix_tao_namelist(namelist: Namelist | NamelistFile) -> None:
+def fix_tao_namelist(
+    namelist: Namelist | NamelistFile,
+    *,
+    logicals: tuple[str, str] | None = ("T", "F"),
+) -> None:
     """
     Normalize namelist assignments in place against the Tao type schema.
 
@@ -584,16 +632,22 @@ def fix_tao_namelist(namelist: Namelist | NamelistFile) -> None:
     ``plot_file = tao.init`` -> ``plot_file = 'tao.init'``), which Tao reads the
     same but which are otherwise a type error, and rewrites integer indices in
     enum-valued character fields to their names (e.g. a color ``prompt_color = 2``
-    -> ``prompt_color = 'red'``). Given a `NamelistFile`, every group in it is
-    fixed; groups (and files) whose namelist name is not in the schema are left
-    untouched.
+    -> ``prompt_color = 'red'``).
+
+    Logical values are canonicalized to ``logicals`` — a ``(true, false)`` token
+    pair, ``("T", "F")`` by default — so ``.true.``/``TRUE``/``t`` become ``T``
+    and ``.false.``/``F``/``f`` become ``F``. Pass ``logicals=None`` to leave
+    logicals untouched.
+
+    Given a `NamelistFile`, every group in it is fixed; groups (and files) whose
+    namelist name is not in the schema are left untouched.
     """
     if isinstance(namelist, NamelistFile):
         for item in namelist.items:
             if isinstance(item, Namelist):
-                _fix_namelist_group(item)
+                _fix_namelist_group(item, logicals)
     else:
-        _fix_namelist_group(namelist)
+        _fix_namelist_group(namelist, logicals)
 
 
 def format_tao_namelist(
@@ -601,14 +655,17 @@ def format_tao_namelist(
     *,
     options: NamelistFormatOptions | None = None,
     fix_types: bool = True,
+    logicals: tuple[str, str] | None = ("T", "F"),
 ) -> str:
     """
     Render a Tao namelist (or file), first fixing argument types when asked.
 
-    With ``fix_types`` (the default), `fix_tao_namelist` runs first, so the
-    rendered text has its character values quoted. This mutates ``namelist`` in
-    place; render the original first if you need the unmodified text.
+    With ``fix_types`` (the default), `fix_tao_namelist` runs first — quoting
+    character values, mapping enum indices to names, and canonicalizing logicals
+    to ``logicals`` (the ``(true, false)`` pair, default ``("T", "F")``; pass
+    ``None`` to leave logicals alone). This mutates ``namelist`` in place; render
+    the original first if you need the unmodified text.
     """
     if fix_types:
-        fix_tao_namelist(namelist)
+        fix_tao_namelist(namelist, logicals=logicals)
     return namelist.render(options)

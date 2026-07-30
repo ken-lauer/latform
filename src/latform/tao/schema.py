@@ -22,6 +22,7 @@ __all__ = [
     "resolve_path",
     "check_value",
     "string_length",
+    "logical_value",
 ]
 
 _MISSING = frozenset(MISSING_STRUCTS)
@@ -200,8 +201,28 @@ def _is_real(text: str) -> bool:
     return True
 
 
+def logical_value(text: str) -> bool | None:
+    """
+    The truth of a Fortran logical literal, or ``None`` if it is not one.
+
+    Follows gfortran's list-directed/namelist rule: optional blanks, an optional
+    single leading ``.``, then ``T``/``t`` (true) or ``F``/``f`` (false); any
+    trailing characters are ignored. So ``.true.``, ``T``, ``.T.``, ``TRUE``,
+    and even ``Fnord`` parse, while ``1``/``0``/``yes`` and empty do not.
+    """
+    body = text.strip()
+    if body.startswith("."):
+        body = body[1:]
+    first = body[:1]
+    if first in ("T", "t"):
+        return True
+    if first in ("F", "f"):
+        return False
+    return None
+
+
 def _is_logical(text: str) -> bool:
-    return text.strip(".").lower() in {"t", "f", "true", "false"}
+    return logical_value(text) is not None
 
 
 def _is_complex(text: str) -> bool:

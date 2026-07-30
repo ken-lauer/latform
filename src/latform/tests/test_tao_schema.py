@@ -120,11 +120,20 @@ def test_is_known_namelist():
         ("real", "1.0d0", True),
         ("real", "0.511e6", True),
         ("real", "pi", False),
+        # Logicals follow gfortran: optional '.' then T/F, trailing chars ignored.
         ("logical", "T", True),
         ("logical", "F", True),
+        ("logical", "f", True),
+        ("logical", ".T", True),
         ("logical", ".true.", True),
         ("logical", ".FALSE.", True),
+        ("logical", "TRUE", True),
+        ("logical", "False", True),
+        ("logical", "Fnord", True),
+        ("logical", "1", False),
+        ("logical", "0", False),
         ("logical", "5", False),
+        ("logical", "x", False),
         ("logical", "yes", False),
         ("complex", "(1.0, 2.0)", True),
         ("complex", "(1.0)", False),
@@ -135,6 +144,26 @@ def test_is_known_namelist():
 )
 def test_check_value(base, literal, valid):
     assert check_value(base, literal) is valid
+
+
+@pytest.mark.parametrize(
+    "literal, expected",
+    [
+        (".true.", True),
+        ("T", True),
+        ("TRUE", True),
+        ("F", False),
+        (".false.", False),
+        ("Fnord", False),
+        ("1", None),
+        ("x", None),
+        ("", None),
+    ],
+)
+def test_logical_value(literal, expected):
+    from ..tao.schema import logical_value
+
+    assert logical_value(literal) is expected
 
 
 # -- schema integrity ----------------------------------------------------------
@@ -392,3 +421,51 @@ def test_fix_color_unknown_index_left_as_number():
 def test_fix_color_in_nested_struct_field():
     src = "&tao_template_graph\n  graph%floor_plan_orbit_color = 8\n/\n"
     assert "graph%floor_plan_orbit_color = 'orange'" in _formatted(src)
+
+
+# -- logical normalization ----------------------------------------------------
+
+
+# bmad_com%radiation_damping_on is a logical field reachable from tao_params.
+def _logical_src(value: str) -> str:
+    return f"&tao_params\n  bmad_com%radiation_damping_on = {value}\n/\n"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [(".true.", "T"), ("TRUE", "T"), ("t", "T"), (".false.", "F"), ("FALSE", "F"), ("f", "F")],
+)
+def test_fix_logical_to_default_pair(value, expected):
+    out = _formatted(_logical_src(value))
+    assert f"bmad_com%radiation_damping_on = {expected}" in out
+
+
+@pytest.mark.parametrize("value", ["T", "F"])
+def test_fix_logical_already_canonical_unchanged(value):
+    assert _formatted(_logical_src(value)) == _logical_src(value)
+
+
+def test_fix_logical_invalid_left_as_is():
+    # 1 is not a valid logical for gfortran; leave it for the validator to flag.
+    assert _formatted(_logical_src("1")) == _logical_src("1")
+
+
+def test_fix_logical_custom_pair():
+    out = _formatted(_logical_src("T"), logicals=(".true.", ".false."))
+    assert "bmad_com%radiation_damping_on = .true." in out
+
+
+def test_fix_logical_none_leaves_untouched():
+    assert _formatted(_logical_src(".true."), logicals=None) == _logical_src(".true.")
+
+
+def test_fix_logical_repeat_preserved():
+    # An n*value repeat keeps its count; only the value is canonicalized.
+    src = "&tao_params\n  bmad_com%radiation_damping_on = 3*.true.\n/\n"
+    assert "bmad_com%radiation_damping_on = 3*T" in _formatted(src)
+
+
+def test_fix_logical_does_not_touch_character_field():
+    # A character field is unaffected by the logicals option.
+    src = "&tao_params\n  global%prompt_color = 'red'\n/\n"
+    assert _formatted(src, logicals=("T", "F")) == src
