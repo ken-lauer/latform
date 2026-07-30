@@ -154,11 +154,11 @@ def add_namelist_format_arguments(parser: argparse.ArgumentParser) -> None:
         help="Case for field names, e.g. global%%plot_on (default: lower)",
     )
     group.add_argument(
-        "--namelist-align-equals",
+        "--no-namelist-align-equals",
         dest="namelist_align_equals",
-        action="store_true",
-        default=False,
-        help="Align '=' into a column within each run of fields (default: off)",
+        action="store_false",
+        default=True,
+        help="Do not re-align '=' (default: column aligned in block)",
     )
     group.add_argument(
         "--no-namelist-align-comments",
