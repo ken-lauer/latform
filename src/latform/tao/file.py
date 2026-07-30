@@ -25,16 +25,15 @@ from nmlform import (
     NamelistArrayEntry,
     NamelistArrayGroup,
     NamelistFile,
+    NamelistFormatOptions,
     quote_value,
     unquote_value,
 )
-from nmlform import (
-    Token as NmlToken,
-)
+from nmlform import Token as NmlToken
+
+from ._schema import STRUCTS
 
 __all__ = [
-    "DATUM_FIELDS",
-    "VAR_FIELDS",
     "TaoDatum",
     "TaoVariable",
     "TaoD1Data",
@@ -43,41 +42,6 @@ __all__ = [
     "is_init_file",
     "looks_like_namelist",
 ]
-
-# `tao_datum_input` fields in declaration order
-DATUM_FIELDS: tuple[str, ...] = (
-    "data_type",
-    "ele_ref_name",
-    "ele_start_name",
-    "ele_name",
-    "merit_type",
-    "meas",
-    "weight",
-    "good_user",
-    "good_opt",
-    "data_source",
-    "eval_point",
-    "s_offset",
-    "ref_s_offset",
-    "ix_bunch",
-)
-
-# `tao_var_input` fields in declaration order
-# (ref $ACC_ROOT_DIR/tao/code/tao_input_struct.f90)
-VAR_FIELDS: tuple[str, ...] = (
-    "ele_name",
-    "attribute",
-    "universe",
-    "weight",
-    "step",
-    "low_lim",
-    "high_lim",
-    "merit_type",
-    "good_user",
-    "key_bound",
-    "key_delta",
-    "meas",
-)
 
 # ``&tao_start`` keys that name an auxiliary file whose namelists we can parse.
 SOURCE_FILE_KEYS: tuple[str, ...] = (
@@ -135,7 +99,7 @@ def _read_if_exists(path: pathlib.Path) -> str | None:
 class TaoDatum(NamelistArrayEntry):
     """A single ``datum(i)`` entry within a ``&tao_d1_data`` group."""
 
-    FIELDS: ClassVar[tuple[str, ...]] = DATUM_FIELDS
+    FIELDS: ClassVar[tuple[str, ...]] = tuple(STRUCTS["tao_datum_input"])
 
     @property
     def data_type(self) -> NmlToken | None:
@@ -170,7 +134,7 @@ class TaoDatum(NamelistArrayEntry):
 class TaoVariable(NamelistArrayEntry):
     """A single ``var(i)`` entry within a ``&tao_var`` group."""
 
-    FIELDS: ClassVar[tuple[str, ...]] = VAR_FIELDS
+    FIELDS: ClassVar[tuple[str, ...]] = tuple(STRUCTS["tao_var_input"])
 
     @property
     def ele_name(self) -> NmlToken | None:
@@ -504,3 +468,16 @@ class TaoInit(NamelistFile):
     def building_wall_sections(self) -> list[Namelist]:
         """The ``&building_wall_section`` groups, from the ``building_wall_file`` source."""
         return self.namelists_for("building_wall_section")
+
+
+def fix_tao_namelist(init: Namelist) -> None:
+    pass
+
+
+def format_tao_namelist(
+    init: Namelist, *, options: NamelistFormatOptions | None = None, fix_types: bool = True
+):
+    if fix_types:
+        fix_tao_namelist(init)
+
+    return init.render(options)
