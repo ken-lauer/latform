@@ -296,3 +296,42 @@ def test_fix_namelist_file_fixes_all_groups():
     out = nf.render()
     assert "plot_file = 'a.init'" in out
     assert "global%track_type = 'single'" in out
+
+
+# -- integer enum (color) fixing ----------------------------------------------
+
+
+def test_integer_enum_for_field():
+    from ..tao.enums import TAO_COLORS, integer_enum_for_field
+
+    assert integer_enum_for_field("prompt_color") is TAO_COLORS
+    assert integer_enum_for_field("floor_plan_orbit_color") is TAO_COLORS
+    assert integer_enum_for_field("COLOR") is TAO_COLORS
+    assert integer_enum_for_field("track_type") is None
+
+
+def test_fix_color_index_to_name():
+    # global%prompt_color is a character color field; 2 is red in TAO_COLORS.
+    src = "&tao_params\n  global%prompt_color = 2\n/\n"
+    assert "global%prompt_color = 'red'" in _formatted(src)
+
+
+def test_fix_color_bareword_name_quoted():
+    src = "&tao_params\n  global%prompt_color = blue\n/\n"
+    assert "global%prompt_color = 'blue'" in _formatted(src)
+
+
+def test_fix_color_already_named_unchanged():
+    src = "&tao_params\n  global%prompt_color = 'red'\n/\n"
+    assert _formatted(src) == src
+
+
+def test_fix_color_unknown_index_left_as_number():
+    # An index outside TAO_COLORS is left numeric (Tao accepts the numeric form).
+    src = "&tao_params\n  global%prompt_color = 999\n/\n"
+    assert _formatted(src) == src
+
+
+def test_fix_color_in_nested_struct_field():
+    src = "&tao_template_graph\n  graph%floor_plan_orbit_color = 8\n/\n"
+    assert "graph%floor_plan_orbit_color = 'orange'" in _formatted(src)

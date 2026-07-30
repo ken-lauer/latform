@@ -32,6 +32,7 @@ from nmlform import (
 from nmlform import Token as NmlToken
 
 from ._schema import STRUCTS
+from .enums import integer_enum_for_field
 from .schema import PathComponent, check_value, is_known_namelist, resolve_path
 
 __all__ = [
@@ -491,50 +492,73 @@ def path_components(assignment: Assignment) -> list[PathComponent]:
     ]
 
 
-def _quote_character_literal(text: str) -> str:
+def _fix_character_value(value: str, enum: dict[int, str] | None) -> str:
     """
-    Quote a single character value literal if it is not already a quoted string.
+    Normalize one character value: map an enum index to its name, else quote.
 
-    A leading Fortran ``n*`` repeat count is preserved and only its value part is
-    quoted. Already-quoted (and empty/repeat-only) literals are returned as is.
+    When ``enum`` governs the field (e.g. `TAO_COLORS`) and ``value`` is an
+    integer index in it, the value becomes the quoted enum name (``2`` ->
+    ``'red'``); an integer not in the map is left as is, since Tao also accepts
+    the numeric form. Otherwise an unquoted value is quoted and an
+    already-quoted value is returned unchanged.
     """
-    if check_value("character", text):
-        return text
+    if enum is not None:
+        try:
+            index = int(value)
+        except ValueError:
+            pass
+        else:
+            name = enum.get(index)
+            return quote_value(name) if name is not None else value
+    if check_value("character", value):
+        return value
+    return quote_value(value)
+
+
+def _fix_character_token(text: str, enum: dict[int, str] | None) -> str:
+    """
+    Normalize a character value literal, preserving any Fortran ``n*`` repeat.
+
+    Only the value part of an ``n*value`` repeat is normalized (via
+    `_fix_character_value`); everything else is left intact.
+    """
     count, star, value = text.partition("*")
     if star and count.strip().lstrip("+-").isdigit():
-        return f"{count}*{quote_value(value)}"
-    return quote_value(text)
+        return f"{count}*{_fix_character_value(value, enum)}"
+    return _fix_character_value(text, enum)
 
 
-def _requoted_value(assignment: Assignment) -> str | None:
+def _fixed_character_value(assignment: Assignment, enum: dict[int, str] | None) -> str | None:
     """
-    The assignment's right-hand side with unquoted character values quoted.
+    The assignment's right-hand side with each character value normalized.
 
-    Returns ``None`` when nothing needed quoting, so the caller can skip the edit.
+    Returns ``None`` when nothing changed, so the caller can skip the edit.
     """
     changed = False
     parts = []
     for token in assignment.field_tokens:
-        fixed = _quote_character_literal(token.text)
+        fixed = _fix_character_token(token.text, enum)
         parts.append(fixed)
         changed = changed or fixed != token.text
     return " ".join(parts) if changed else None
 
 
 def _fix_namelist_group(group: Namelist) -> None:
-    """Quote unquoted character assignments in a single schema-known group."""
+    """Normalize character assignments (quoting, enum index -> name) in a group."""
     if not is_known_namelist(group.name):
         return
     # `Namelist.set` reparses (invalidating `group.assignments`), so collect the
     # edits first, then apply them.
     edits: list[tuple[str, str]] = []
     for assignment in group.assignments:
-        leaf = resolve_path(group.name, path_components(assignment)).leaf
+        components = path_components(assignment)
+        leaf = resolve_path(group.name, components).leaf
         if leaf is None or leaf.kind != "intrinsic" or leaf.base != "character":
             continue
-        requoted = _requoted_value(assignment)
-        if requoted is not None:
-            edits.append((assignment.key, requoted))
+        enum = integer_enum_for_field(components[-1].name) if components else None
+        fixed = _fixed_character_value(assignment, enum)
+        if fixed is not None:
+            edits.append((assignment.key, fixed))
     for key, value in edits:
         group.set(key, value)
 
@@ -543,11 +567,13 @@ def fix_tao_namelist(namelist: Namelist | NamelistFile) -> None:
     """
     Normalize namelist assignments in place against the Tao type schema.
 
-    Currently this quotes character-valued assignments written unquoted (e.g.
+    This quotes character-valued assignments written unquoted (e.g.
     ``plot_file = tao.init`` -> ``plot_file = 'tao.init'``), which Tao reads the
-    same but which are otherwise a type error. Given a `NamelistFile`, every
-    group in it is fixed; groups (and files) whose namelist name is not in the
-    schema are left untouched.
+    same but which are otherwise a type error, and rewrites integer indices in
+    enum-valued character fields to their names (e.g. a color ``prompt_color = 2``
+    -> ``prompt_color = 'red'``). Given a `NamelistFile`, every group in it is
+    fixed; groups (and files) whose namelist name is not in the schema are left
+    untouched.
     """
     if isinstance(namelist, NamelistFile):
         for item in namelist.items:

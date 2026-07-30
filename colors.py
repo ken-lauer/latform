@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 # Copied in manually from:
 # * css4_coor_reference.py
 # * qp_css4_colors_mod.f90 in Bmad
@@ -162,25 +160,3 @@ TAO_COLORS = {
     153: "slategrey",
     154: "springgreen",
 }
-
-
-# Character namelist fields whose value may be written either as a name or as an
-# integer index into a named enum. `integer_enum_for_field` matches a field by
-# substring, so every ``*color*`` field maps its indices through `TAO_COLORS`.
-# Add ``(substring, {index: name})`` entries here to cover new enums.
-INTEGER_ENUM_FIELDS: tuple[tuple[str, dict[int, str]], ...] = (("color", TAO_COLORS),)
-
-
-def integer_enum_for_field(field_name: str) -> dict[int, str] | None:
-    """
-    The integer-index -> name map governing a character field, or ``None``.
-
-    Used by the fixer to rewrite a numeric index (e.g. a color ``2``) to its
-    name (``red``). Matching is by case-insensitive substring against
-    `INTEGER_ENUM_FIELDS`.
-    """
-    lowered = field_name.lower()
-    for key, values in INTEGER_ENUM_FIELDS:
-        if key in lowered:
-            return values
-    return None
