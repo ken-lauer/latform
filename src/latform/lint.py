@@ -722,7 +722,10 @@ def cli_main(args: list[str] | None = None) -> None:
     ignore_codes = cli.resolve_ignore_codes(parsed.ignore_lints)
     config = cli.resolve_config(parsed)
     filenames, from_top_level = cli.require_input_files(parsed.filename, config)
-    recursive = parsed.recursive or from_top_level
+
+    recursive = parsed.recursive
+    if recursive is None:
+        recursive = from_top_level
 
     found = False
     try:

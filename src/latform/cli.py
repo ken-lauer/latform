@@ -30,7 +30,14 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "-r",
         "--recursive",
         action="store_true",
+        default=None,
         help="Recursively parse lattice files, following call statements.",
+    )
+    parser.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Do not recursively parse lattice files.",
     )
     parser.add_argument(
         "--combine",

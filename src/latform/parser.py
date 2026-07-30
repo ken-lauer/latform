@@ -6,6 +6,7 @@ import logging
 import os.path
 import pathlib
 import re
+import sys
 from dataclasses import dataclass, field
 from typing import Generator, Iterable, Sequence
 
@@ -1116,7 +1117,7 @@ STDIN_FAKE_NAME = "stdin.lat"
 
 
 def build_files(
-    filenames: list[str | pathlib.Path],
+    filenames: Sequence[str | pathlib.Path],
     *,
     combine: bool = False,
     root_path: pathlib.Path | None = None,
@@ -1141,7 +1142,6 @@ def build_files(
     list of Files
         One element if ``combine`` is True, otherwise one per input filename.
     """
-    import sys
 
     if not filenames:
         return []

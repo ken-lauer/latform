@@ -89,11 +89,16 @@ def process_files(
     config: LatformProjectConfig | None = None,
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
-    files_obj.parse(
-        recurse=recursive,
-        raise_if_missing=error_if_missing,
-        keep_blocks=verbose > 0,
-    )
+
+    only_tao_init = files_obj.tao_init is not None and not recursive
+
+    if not only_tao_init:
+        files_obj.parse(
+            recurse=recursive,
+            raise_if_missing=error_if_missing,
+            keep_blocks=verbose > 0,
+        )
+
     files_obj.annotate()
 
     if options.renames:
@@ -178,7 +183,7 @@ def main(
     line_length: int = 100,
     max_line_length: int | None = 0,
     compact: bool = False,
-    recursive: bool = False,
+    recursive: bool | None = None,
     in_place: bool = False,
     name_case: NameCase = "upper",
     attribute_case: NameCase = "lower",
@@ -244,7 +249,9 @@ def main(
     )
     if namelist_options is not None:
         options.namelist = namelist_options
-    recursive = recursive or options.flatten_call  # implied
+
+    if recursive is None:
+        recursive = options.flatten_call  # implied
 
     for files_obj in build_files(filenames, combine=combine):
         process_files(
