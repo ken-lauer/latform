@@ -301,19 +301,76 @@ def test_fix_namelist_file_fixes_all_groups():
 # -- integer enum (color) fixing ----------------------------------------------
 
 
-def test_integer_enum_for_field():
-    from ..tao.enums import TAO_COLORS, integer_enum_for_field
+@pytest.mark.parametrize(
+    "path, enum_key",
+    [
+        (["curve", "line", "color"], "color"),
+        (["curve", "line", "pattern"], "line_pattern"),
+        (["curve", "symbol", "type"], "symbol_type"),
+        (["curve", "symbol", "color"], "color"),
+        (["curve", "symbol", "fill_pattern"], "fill_pattern"),
+        # A bare line/symbol field also matches (parent is the last struct).
+        (["line", "pattern"], "line_pattern"),
+        # Standalone *color* fields fall through to the color enum.
+        (["global", "prompt_color"], "color"),
+        (["shape", "color"], "color"),
+    ],
+)
+def test_integer_enum_for_field(path, enum_key):
+    from ..tao.enums import QP_ENUMS, integer_enum_for_field
 
-    assert integer_enum_for_field("prompt_color") is TAO_COLORS
-    assert integer_enum_for_field("floor_plan_orbit_color") is TAO_COLORS
-    assert integer_enum_for_field("COLOR") is TAO_COLORS
-    assert integer_enum_for_field("track_type") is None
+    assert integer_enum_for_field(path) is QP_ENUMS[enum_key]
 
 
-def test_fix_color_index_to_name():
-    # global%prompt_color is a character color field; 2 is red in TAO_COLORS.
-    src = "&tao_params\n  global%prompt_color = 2\n/\n"
+@pytest.mark.parametrize(
+    "path",
+    [
+        ["ele", "type"],  # a generic 'type' under the wrong parent
+        ["group", "pattern"],  # a generic 'pattern' under the wrong parent
+        ["global", "track_type"],
+        [],
+    ],
+)
+def test_integer_enum_for_field_no_match(path):
+    from ..tao.enums import integer_enum_for_field
+
+    assert integer_enum_for_field(path) is None
+
+
+# Tao accepts an enum index bare or quoted; both must map to the name.
+@pytest.mark.parametrize("index", ["2", "'2'", '"2"'])
+def test_fix_color_index_to_name(index):
+    # global%prompt_color is a character color field; 2 is red.
+    src = f"&tao_params\n  global%prompt_color = {index}\n/\n"
     assert "global%prompt_color = 'red'" in _formatted(src)
+
+
+@pytest.mark.parametrize("index", ["2", "'2'"])
+def test_fix_line_pattern_index_to_name(index):
+    # shape_pattern has a line (qp_line_struct); pattern 2 is 'dashed'.
+    src = f"&shape_pattern\n  line%pattern = {index}\n/\n"
+    assert "line%pattern = 'dashed'" in _formatted(src)
+
+
+@pytest.mark.parametrize("index", ["2", "'2'"])
+def test_fix_line_color_index_to_name(index):
+    src = f"&shape_pattern\n  line%color = {index}\n/\n"
+    assert "line%color = 'red'" in _formatted(src)
+
+
+@pytest.mark.parametrize(
+    "key, value, expected",
+    [
+        ("curve(1)%line%pattern", "'2'", "curve(1)%line%pattern = 'dashed'"),
+        ("curve(1)%symbol%type", "'1'", "curve(1)%symbol%type = 'dot'"),
+        ("curve(1)%symbol%fill_pattern", "'2'", "curve(1)%symbol%fill_pattern = 'no_fill'"),
+        ("curve(1)%symbol%color", "'1'", "curve(1)%symbol%color = 'black'"),
+    ],
+)
+def test_fix_curve_enum_fields(key, value, expected):
+    # The real-world path: curve(i)%line|symbol%... in &tao_template_graph.
+    src = f"&tao_template_graph\n  {key} = {value}\n/\n"
+    assert expected in _formatted(src)
 
 
 def test_fix_color_bareword_name_quoted():
@@ -327,7 +384,7 @@ def test_fix_color_already_named_unchanged():
 
 
 def test_fix_color_unknown_index_left_as_number():
-    # An index outside TAO_COLORS is left numeric (Tao accepts the numeric form).
+    # An index outside the color enum is left numeric (Tao accepts that form).
     src = "&tao_params\n  global%prompt_color = 999\n/\n"
     assert _formatted(src) == src
 

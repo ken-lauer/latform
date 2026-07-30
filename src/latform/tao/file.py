@@ -492,22 +492,35 @@ def path_components(assignment: Assignment) -> list[PathComponent]:
     ]
 
 
+def _enum_index(value: str) -> int | None:
+    """
+    The integer an index literal denotes, whether bare (``2``) or quoted (``'2'``).
+
+    Tao accepts an enum index in either form, so a quoted index is unwrapped
+    before parsing. Returns ``None`` when the literal is not an integer.
+    """
+    text = value.strip()
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def _fix_character_value(value: str, enum: dict[int, str] | None) -> str:
     """
     Normalize one character value: map an enum index to its name, else quote.
 
-    When ``enum`` governs the field (e.g. `TAO_COLORS`) and ``value`` is an
-    integer index in it, the value becomes the quoted enum name (``2`` ->
-    ``'red'``); an integer not in the map is left as is, since Tao also accepts
-    the numeric form. Otherwise an unquoted value is quoted and an
-    already-quoted value is returned unchanged.
+    When ``enum`` governs the field (e.g. the color map) and ``value`` is an
+    integer index in it — bare (``2``) or quoted (``'2'``) — the value becomes
+    the quoted enum name (``'red'``); an integer not in the map is left as
+    written, since Tao also accepts the numeric form. Otherwise an unquoted
+    value is quoted and an already-quoted value is returned unchanged.
     """
     if enum is not None:
-        try:
-            index = int(value)
-        except ValueError:
-            pass
-        else:
+        index = _enum_index(value)
+        if index is not None:
             name = enum.get(index)
             return quote_value(name) if name is not None else value
     if check_value("character", value):
@@ -555,7 +568,7 @@ def _fix_namelist_group(group: Namelist) -> None:
         leaf = resolve_path(group.name, components).leaf
         if leaf is None or leaf.kind != "intrinsic" or leaf.base != "character":
             continue
-        enum = integer_enum_for_field(components[-1].name) if components else None
+        enum = integer_enum_for_field([component.name for component in components])
         fixed = _fixed_character_value(assignment, enum)
         if fixed is not None:
             edits.append((assignment.key, fixed))
