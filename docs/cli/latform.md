@@ -16,7 +16,7 @@ latform [-h] [-i] [-o] [-r] [-R old,new] [--diff] [--compact]
         [--lint] [--strict-references] [--ignore CODE]
         [--no-format-namelist] [--namelist-indent N]
         [--namelist-field-case {upper,lower,same}]
-        [--namelist-align-equals] [--no-namelist-align-comments]
+        [--no-namelist-align-equals] [--no-namelist-align-comments]
         [-v] [-V] [-L {DEBUG,INFO,WARNING,CRITICAL}]
         filename [filename ...]
 ```
@@ -168,7 +168,10 @@ default such references are assumed to be defined elsewhere. Suppress individual
 lints by code with `--ignore`, e.g. `--ignore LF004` (repeatable, or
 comma-separated: `--ignore LF004,LF006`).
 
-See [Lint Codes](lint.md#lint-codes) for the full list.
+When the input is a `tao.init`, `--lint` also validates its namelist assignments
+against the bundled Tao schema — unknown fields, type mismatches, out-of-bounds
+indices, and over-length strings (`LF011`–`LF014`). See
+[Lint Codes](lint.md#lint-codes) for the full list.
 
 ## Tao init files
 
@@ -182,14 +185,18 @@ latform -i tao.init         # rewrite the lattices and the tao.init in place
 latform --diff tao.init     # preview the changes to all of them
 ```
 
-Reformatting of the namelist is controlled by the shared
+Reformatting the namelist also **normalizes its values** against the bundled Tao
+schema — quoting bare strings, mapping enum indices to names, and canonicalizing
+logicals to `T`/`F` (see
+[Value normalization](index.md#value-normalization-tao-schema)). Layout and
+alignment are controlled by the shared
 [namelist formatting flags](index.md#namelist-taoinit-formatting); pass
-`--no-format-namelist` to leave the `tao.init` layout untouched (the referenced
-Bmad lattices are still formatted):
+`--no-format-namelist` to leave the `tao.init` untouched, values and all (the
+referenced Bmad lattices are still formatted):
 
 ```bash
-latform -i tao.init --namelist-align-equals   # also align '=' in the tao.init
-latform -i tao.init --no-format-namelist       # lattices only; init left verbatim
+latform -i tao.init --no-namelist-align-equals  # don't align '=' in the tao.init
+latform -i tao.init --no-format-namelist        # lattices only; init left verbatim
 ```
 
 Because a `tao.init` expands to several top-level files, writing them all to a

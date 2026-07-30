@@ -20,7 +20,7 @@ latform-apply TEMPLATE [--format {bmad,namelist}] [--values VALUES.yaml]
               [--parts DELIMS FROM TO] [--delimiters CHARS]
               [--no-format-namelist] [--namelist-indent N]
               [--namelist-field-case {upper,lower,same}]
-              [--namelist-align-equals] [--no-namelist-align-comments]
+              [--no-namelist-align-equals] [--no-namelist-align-comments]
               [-o OUT | -i]
 ```
 
@@ -98,13 +98,15 @@ latform-apply tao.init --set tao_params global%n_opti_cycles 50 -i
 ```
 
 The output namelist is **reformatted by default** (field indentation, lowercase
-field names, aligned comments, and a blank line after each group). Pass
-`--no-format-namelist` to preserve the source layout, or tune the result with the
+field names, aligned `=` and comments, and a blank line after each group).
+`latform-apply` changes layout only — unlike `latform`/`latform-template` it does
+not normalize values. Pass `--no-format-namelist` to preserve the source layout,
+or tune the result with the
 [namelist formatting flags](index.md#namelist-taoinit-formatting):
 
 ```bash
-latform-apply tao.init --no-format-namelist -i         # edit values, keep layout
-latform-apply tao.init --namelist-align-equals -i      # also align '='
+latform-apply tao.init --no-format-namelist -i          # edit values, keep layout
+latform-apply tao.init --no-namelist-align-equals -i    # reformat but don't align '='
 ```
 
 ## latform-template
@@ -118,7 +120,7 @@ template files and per-instance values, renames, and output paths. Use
 latform-template INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
                  [--no-format-namelist] [--namelist-indent N]
                  [--namelist-field-case {upper,lower,same}]
-                 [--namelist-align-equals] [--no-namelist-align-comments]
+                 [--no-namelist-align-equals] [--no-namelist-align-comments]
 ```
 
 `instances.yaml` (paths are relative to the file's own directory):
@@ -246,7 +248,11 @@ A per-instance `tao_init.namelists` block adds or updates namelist sections:
 each entry is a `{key: value}` map, values interpolate `{instance}`, and a
 `name#N` suffix (1-based) targets the N-th of a repeated group.
 
-The emitted `tao.init` is **reformatted by default**, controlled by the shared
+The emitted `tao.init` is **reformatted by default**, and its values are
+normalized against the bundled Tao schema — strings quoted, enum indices mapped
+to names, and logicals canonicalized to `T`/`F` (see
+[Value normalization](index.md#value-normalization-tao-schema)). This is
+controlled by the shared
 [namelist formatting flags](index.md#namelist-taoinit-formatting) (e.g.
-`--no-format-namelist` to keep the template's layout). The generated Bmad
-lattices are always reformatted regardless.
+`--no-format-namelist` to keep the template's layout and values). The generated
+Bmad lattices are always reformatted regardless.

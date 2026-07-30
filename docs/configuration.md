@@ -85,9 +85,27 @@ ignore = ["LF007"]                 # unused_constant: allowed project-wide
 
 ## Namelist formatting settings
 
-The `tao.init` / namelist formatting behavior is currently controlled by
-**command-line flags only** (see
-[Namelist (tao.init) formatting](cli/index.md#namelist-taoinit-formatting)).
-The `[format]` table understands the Bmad formatting keys listed above; namelist
-keys such as `namelist-field-case` are not recognized there yet and are ignored
-with a warning.
+The `tao.init` / namelist behavior (see
+[Namelist (tao.init) formatting](cli/index.md#namelist-taoinit-formatting)) can
+be set in the `[format]` table too, using the same names as the CLI flags:
+
+```toml
+[format]
+format-namelist = true            # reformat namelists at all (--no-format-namelist)
+namelist-indent = 2               # field indent width
+namelist-field-case = "lower"     # upper | lower | same
+namelist-align-equals = true      # line up "=" within a run (default on)
+namelist-align-comments = true    # line up trailing "!" comments (default on)
+namelist-logicals = ["T", "F"]    # (true, false) tokens; false disables the rewrite
+```
+
+`namelist-logicals` sets the canonical logical tokens the formatter rewrites to
+(`[true_token, false_token]`); set it to `false` to leave logical values
+untouched. See [Value normalization](cli/index.md#value-normalization-tao-schema).
+
+!!! note
+
+    These `[format]` keys are read by `latform` (the same command that applies
+    the rest of `[format]`). `latform-apply` and `latform-template` do not read
+    `latform.toml`; pass their namelist options as flags instead. As with every
+    `[format]` key, an explicit CLI flag overrides the config value.

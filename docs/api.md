@@ -118,8 +118,10 @@ options = FormatOptions(
 
 Formatting of Fortran-namelist files (`*.init` / `*.nml`, e.g. a Tao `tao.init`)
 is controlled by the nested `FormatOptions.namelist` dataclass. It applies only
-to the field section between a `&name` opener and its `/` terminator; values are
-never modified.
+to the field section between a `&name` opener and its `/` terminator and changes
+only layout and field-name case — a bare `render()` never modifies values.
+(Value normalization is a separate layer; see
+[Namelist value normalization](#namelist-value-normalization) below.)
 
 ```python
 from latform.types import NamelistFormatOptions
@@ -129,7 +131,7 @@ namelist = NamelistFormatOptions(
     indent_char=" ",             # indentation character
     blank_line_after_group=True, # one blank line after each group's "/"
     field_case="lower",          # field names: "upper", "lower", "same"
-    align_equals=False,          # line up "=" within a run of fields
+    align_equals=True,           # line up "=" within a run of fields
     align_comments=True,         # line up trailing "!" comments
 )
 ```
@@ -138,6 +140,49 @@ Alignment is scoped to contiguous runs of fields (it resets at blank lines).
 Rendering with these options is opt-in: `Namelist.render()` /
 `NamelistFile.render()` reproduce the source verbatim when passed `None`, and
 apply this formatting when given a `NamelistFormatOptions`.
+
+!!! note
+
+    `align_equals` and `align_comments` both default to `True`. On the CLI these
+    map to `--no-namelist-align-equals` / `--no-namelist-align-comments`, and in
+    a `latform.toml` `[format]` table to `namelist-align-equals` /
+    `namelist-align-comments` (see [Configuration](configuration.md#namelist-formatting-settings)).
+
+### Namelist value normalization
+
+`latform.tao.format_tao_namelist` renders a Tao namelist (a `Namelist` or a
+whole `NamelistFile`) and, unlike a bare `render()`, first **normalizes its
+values** against a schema of the standard Tao namelist groups bundled with
+latform: unquoted character values are quoted, enum integer indices become names
+(colors, line patterns, symbol types, fill patterns), and logicals are
+canonicalized to a configurable `(true, false)` pair (default `("T", "F")`).
+`fix_tao_namelist` applies the same edits in place, without rendering.
+
+```python
+from nmlform import NamelistFile
+from latform.tao import format_tao_namelist, fix_tao_namelist
+
+nf = NamelistFile.parse(
+    "&tao_params\n"
+    "  global%prompt_color = 2\n"
+    "  bmad_com%radiation_damping_on = .true.\n"
+    "/\n"
+)
+print(format_tao_namelist(nf))
+# &tao_params
+#   global%prompt_color = 'red'
+#   bmad_com%radiation_damping_on = T
+# /
+
+fix_tao_namelist(nf, logicals=None)   # normalize in place, but leave logicals alone
+```
+
+Only groups and fields present in the schema are touched; values in the
+positional/anonymous field form (`datum(4) = 'a' '' ...`) are not normalized
+yet. Pass `fix_types=False` to `format_tao_namelist` to render without any
+normalization, or `logicals=None` to keep logical values as written. The
+underlying validators are available too — `latform.tao.schema.check_value` and
+`latform.tao.schema.logical_value`.
 
 ## Statement Types
 
