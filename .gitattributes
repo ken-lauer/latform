@@ -1,1 +1,3 @@
 .git_archival.txt  export-subst
+# attrs.py comes from ./gen/build.sh
+src/latform/_attrs.py linguist-generated

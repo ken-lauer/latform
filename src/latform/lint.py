@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Collection, Generator, Iterable, Sequence
 
-from ._namelist import Namelist
+from nmlform import Namelist
+
 from .attrs import element_key_to_attrs
 from .const import named_physical_constants
 from .statements import (
@@ -101,7 +102,7 @@ def lint_statement(st: Statement) -> list[Lint]:
                 Lint(
                     code=LintCode.unknown_statement,
                     context=st,
-                    message=f"Statement type is unknown; this may indicate an error in parsing: {st.statement}",
+                    message=f"Statement type unknown or parsing issue: {st.statement}",
                     relevant_tokens=[st.statement],
                 )
             ]
@@ -305,7 +306,7 @@ def _iter_usage_tokens(statements: Sequence[Statement]) -> Generator[Token, None
 
 def get_used_names(statements: Sequence[Statement]) -> frozenset[str]:
     """Uppercase names referenced anywhere in value/expression positions."""
-    return frozenset(str(tok.upper()) for tok in _iter_usage_tokens(statements))
+    return frozenset(str(tok).upper() for tok in _iter_usage_tokens(statements))
 
 
 def lint_unused_constants(

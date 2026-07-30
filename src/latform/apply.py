@@ -15,7 +15,8 @@ import re
 import sys
 from typing import Literal
 
-from ._namelist import NamelistFile, is_namelist_file
+from nmlform import NamelistFile, is_namelist_file
+
 from .comments import Comments
 from .parser import MemoryFiles, parse
 from .statements import Constant, Element

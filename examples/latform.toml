@@ -1,0 +1,16 @@
+top-level = ["erl/tao.init", "cbeta_cell/tao.init"]
+
+[format]
+line-length = 100
+name-case = "upper"
+kind-case = "lower"
+
+[lint]
+ignore = ["LF002"]  # codes to suppress everywhere
+min-name-length = 1 # LF009: minimum constant/element name length;
+# at the default of 1, only i/l/o are flagged
+builtin-constant-rtol = 1e-4 # LF010: relative tolerance when matching constant
+# values against built-in physical constants
+
+[lint.per-file-ignores]
+# "legacy/*.bmad" = ["LF004", "LF006"]

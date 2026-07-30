@@ -34,9 +34,11 @@ class Token(str):
     Comparisons are case-insensitive.
     """
 
+    __slots__ = ("loc", "role", "_comments", "_upper", "_hash")
+
     loc: Location
-    comments: Comments
-    role: Role | None = None
+    role: Role | None
+    _comments: Comments | None
     _upper: str
     _hash: int
 
@@ -58,20 +60,24 @@ class Token(str):
         comments: Comments | None = None,
         role: Role | None = None,
     ):
-        self.loc = loc or Location(end_column=len(content))
-        self.comments = comments or Comments()
+        self.loc = loc if loc is not None else Location(end_column=len(content))
+        self._comments = comments
         self.role = role
         self._upper = str.upper(self)
         # self._hash = hash(self._upper)
         self._hash = super().__hash__()
 
-        # internal error
-        if not isinstance(self.loc, Location):
-            raise ValueError(type(self.loc))
-        if not isinstance(self.comments, Comments):
-            raise ValueError(type(self.comments))
-        if role and not isinstance(self.role, Role):
-            raise ValueError(type(self.role))
+    @property
+    def comments(self) -> Comments:
+        # Created lazily; most tokens never have comments attached.
+        comments = self._comments
+        if comments is None:
+            comments = self._comments = Comments()
+        return comments
+
+    @comments.setter
+    def comments(self, comments: Comments) -> None:
+        self._comments = comments
 
     def __hash__(self):
         # pydantic complains about mutable default otherwise
@@ -79,15 +85,23 @@ class Token(str):
 
     def __eq__(self, other) -> bool:
         if isinstance(other, Token):
-            return self._upper == other._upper and self.comments == other.comments
-        if self._upper == other:
-            return True
+            if self._upper != other._upper:
+                return False
+            ours, theirs = self._comments, other._comments
+            if not ours:
+                return not theirs
+            if not theirs:
+                return False
+            return ours == theirs
         if isinstance(other, str):
-            return self._upper == other.upper()
-        return self._upper == str(other).upper()
+            return self._upper == other or self._upper == other.upper()
+        return NotImplemented
 
     def __ne__(self, other) -> bool:
-        return not (self == other)
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
 
     @property
     def is_quoted_string(self) -> bool:
@@ -98,7 +112,7 @@ class Token(str):
     def remove_quotes(self) -> Token:
         if self.is_quoted_string:
             # TODO fix location
-            return Token(self[1:-1], loc=self.loc, comments=self.comments)
+            return Token(self[1:-1], loc=self.loc, comments=self._comments)
         return self
 
     def __repr__(self) -> str:
@@ -106,13 +120,13 @@ class Token(str):
             parts = [super().__repr__(), self.role, self.loc]
         else:
             parts = [super().__repr__()]
-        if bool(self.comments):
-            parts.append(self.comments)
+        if self._comments:
+            parts.append(self._comments)
         desc = ", ".join(str(part) for part in parts if part)
         return f"{type(self).__name__}({desc})"
 
     def annotate(self, named: dict[Token, Any]):
-        if self.upper() in named and self.role not in {
+        if self._upper in named and self.role not in {
             Role.attribute_name,
             Role.env_var,
             Role.filename,
@@ -174,7 +188,7 @@ class Token(str):
         return cls(
             "".join(result_parts),
             loc=Location.from_items(strs),
-            comments=str0.comments,
+            comments=str0._comments,
             role=role,
         )
 
@@ -195,7 +209,7 @@ class Token(str):
         return type(self)(
             f"{quote_char}{value}{quote_char}",
             loc=self.loc,
-            comments=self.comments,
+            comments=self._comments,
             role=self.role,
         )
 
@@ -203,7 +217,7 @@ class Token(str):
         return type(self)(
             str(self).lstrip(chars),
             loc=self.loc,
-            comments=self.comments,
+            comments=self._comments,
             role=self.role,
         )
 
@@ -211,7 +225,7 @@ class Token(str):
         return type(self)(
             str(self).strip(chars),
             loc=self.loc,
-            comments=self.comments,
+            comments=self._comments,
             role=self.role,
         )
 
@@ -219,7 +233,7 @@ class Token(str):
         return type(self)(
             str(self).replace(old, new, count),
             loc=self.loc,
-            comments=self.comments,
+            comments=self._comments,
             role=self.role,
         )
 
@@ -233,7 +247,7 @@ class Token(str):
         return type(self)(
             str(self),
             loc=loc or self.loc,
-            comments=comments or self.comments,
+            comments=comments or self._comments,
             role=role or self.role,
         )
 
@@ -241,7 +255,7 @@ class Token(str):
         return type(self)(
             self._upper,
             loc=self.loc,
-            comments=self.comments,
+            comments=self._comments,
             role=self.role,
         )
 
@@ -249,13 +263,13 @@ class Token(str):
         return type(self)(
             super().lower(),
             loc=self.loc,
-            comments=self.comments,
+            comments=self._comments,
             role=self.role,
         )
 
 
 class Delimiter(Token):
-    pass
+    __slots__ = ()
 
 
 _DQUOTE = Delimiter('"')

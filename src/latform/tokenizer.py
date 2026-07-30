@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import pathlib
 from dataclasses import dataclass, field
 
@@ -57,6 +58,13 @@ def split_comment(
     """
     Split code and comment at first '!' that is not inside quotes.
     """
+    if "!" not in line:
+        return line.rstrip(), None
+
+    if "'" not in line and '"' not in line:
+        idx = line.index("!")
+        return line[:idx].rstrip(), _comment_token(line, idx, filename, lineno)
+
     in_single = False
     in_double = False
     for idx, ch in enumerate(line):
@@ -65,16 +73,20 @@ def split_comment(
         elif ch == '"' and not in_single:
             in_double = not in_double
         elif ch == "!" and not in_single and not in_double:
-            comment = line[idx + 1 :].rstrip()
-            loc = Location(
-                filename=pathlib.Path(filename),
-                line=lineno,
-                column=idx,
-                end_line=lineno,
-                end_column=idx + 1 + len(comment),
-            )
-            return line[:idx].rstrip(), Token(comment, loc=loc)
+            return line[:idx].rstrip(), _comment_token(line, idx, filename, lineno)
     return line.rstrip(), None
+
+
+def _comment_token(line: str, idx: int, filename: pathlib.Path | str, lineno: int) -> Token:
+    comment = line[idx + 1 :].rstrip()
+    loc = Location(
+        filename=pathlib.Path(filename),
+        line=lineno,
+        column=idx,
+        end_line=lineno,
+        end_column=idx + 1 + len(comment),
+    )
+    return Token(comment, loc=loc)
 
 
 def _attach_inline_comment(
@@ -89,8 +101,9 @@ def _attach_inline_comment(
             pending.append(inline)
         return
 
-    first.comments.pre.extend(pending)
-    pending.clear()
+    if pending:
+        first.comments.pre.extend(pending)
+        pending.clear()
     if inline is None:
         return
     if last is None:
@@ -113,6 +126,18 @@ def _get_first_token_or_block(items) -> Token | Block | None:
 
 
 _numeric_chars = frozenset({0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "."})
+
+_CONTINUE_DELIMS = frozenset("{[(,=")
+_SIGN_DELIMS = frozenset({"+", "-"})
+_NUMBER_JOIN_PREV = frozenset({"+", "-", "*", "/", "=", ",", LBRACE, LBRACK, LPAREN})
+
+_WHITESPACE = " \t\r\n"
+
+
+@functools.lru_cache
+def _word_stop_chars(delimiters: frozenset[str]) -> frozenset[str]:
+    """Characters that end a word: any delimiter or whitespace."""
+    return delimiters | frozenset(_WHITESPACE)
 
 
 def _is_scientific_notation_start(tok: str | None) -> bool:
@@ -163,7 +188,7 @@ class Tokenizer:
                 block = blocks[-1]
                 assert block.items[-1] == "&"
                 block.items.pop(-1)
-            elif last_delim in set("{[(,=") or delim_state.current_delimiters:
+            elif last_delim in _CONTINUE_DELIMS or delim_state.depth:
                 block = blocks[-1]
             elif (
                 # Dumb special case for multiline 'title' (see manual)
@@ -171,7 +196,7 @@ class Tokenizer:
                 and blocks[-1].items
                 and len(blocks[-1].items) == 1
                 and isinstance(blocks[-1].items[0], Token)
-                and blocks[-1].items[0].lower() == "title"
+                and blocks[-1].items[0]._upper == "TITLE"
             ):
                 block = blocks[-1]
             else:
@@ -194,13 +219,10 @@ class Tokenizer:
                     blocks.append(block)
                     continue
 
-                elif last_delim in frozenset({"+", "-"}) and token and token[0].isnumeric():
+                elif last_delim in _SIGN_DELIMS and token and token[0].isnumeric():
                     # TODO : do these in a second pass
                     prev_item = block.items[-2] if len(block.items) > 1 else None
-                    if (
-                        prev_item in {"+", "-", "*", "/", "=", ",", LBRACE, LBRACK, LPAREN}
-                        or prev_item is None
-                    ):
+                    if prev_item in _NUMBER_JOIN_PREV or prev_item is None:
                         token = Token.join([block.items.pop(), token])
                         last_delim = prev_item
                     block.items.append(token)
@@ -229,12 +251,12 @@ class Tokenizer:
                 first_item, last_item, inline_comment, pending_comments, is_multiline
             )
 
-            if block.items[0].lower() in ("return", "end_file"):
+            if block.items[0]._upper in ("RETURN", "END_FILE"):
                 # TODO: need to include whatever comes after these lines verbatim
                 break
 
             if (
-                block.items[0].lower() in ("print",)
+                block.items[0]._upper == "PRINT"
                 and len(block.items) > 1
                 and not block.items[1].is_quoted_string
             ):
@@ -264,32 +286,29 @@ class Tokenizer:
         return [block for block in blocks if block.items]
 
     def _scan_word(self, delimiters: frozenset[str]) -> tuple[str, int]:
-        start = self.pos
-        quote_pos = None
-        quote_char = None
-        while self.pos < len(self.line):
-            ch = self.line[self.pos]
-            if ch in ("'", '"'):
-                if quote_pos is None:
-                    quote_pos = self.pos
-                    quote_char = ch
-                elif ch == quote_char:
-                    quote_pos = None
-                    quote_char = None
-                self.pos += 1
+        line = self.line
+        length = len(line)
+        stop_chars = _word_stop_chars(delimiters)
+        pos = start = self.pos
+        while pos < length:
+            ch = line[pos]
+            if ch == "'" or ch == '"':
+                # Quoted section within (or of) the word: skip to the closing quote
+                closing = line.find(ch, pos + 1)
+                if closing == -1:
+                    loc = Location(self.filename, self.lineno, pos, self.lineno, pos)
+                    raise UnterminatedString(
+                        f"Unterminated quote character: {ch!r}",
+                        delim=Delimiter(ch, loc=loc),
+                    )
+                pos = closing + 1
                 continue
-            if quote_pos is None and (ch in delimiters or ch.isspace()):
+            if ch in stop_chars:
                 break
-            self.pos += 1
+            pos += 1
 
-        if quote_pos is not None:
-            loc = Location(self.filename, self.lineno, quote_pos, self.lineno, quote_pos)
-            raise UnterminatedString(
-                f"Unterminated quote character: {quote_char!r}",
-                delim=Delimiter(quote_char, loc=loc),
-            )
-
-        word = self.line[start : self.pos]
+        self.pos = pos
+        word = line[start:pos]
         if (
             _is_scientific_notation_start(word)
             and self.pos < len(self.line)
@@ -304,13 +323,17 @@ class Tokenizer:
         return word, self.pos
 
     def _scan_delimiter(self, delimiters: frozenset[str]) -> Delimiter | None:
-        while self.pos < len(self.line) and self.line[self.pos].isspace():
-            self.pos += 1
-        if self.pos >= len(self.line) or self.line[self.pos] not in delimiters:
+        line = self.line
+        length = len(line)
+        pos = self.pos
+        while pos < length and line[pos] in _WHITESPACE:
+            pos += 1
+        self.pos = pos
+        if pos >= length or line[pos] not in delimiters:
             return None
 
-        start = self.pos
-        ch = self.line[self.pos]
+        start = pos
+        ch = line[pos]
         self.pos += 1
 
         # Handle compound delimiters and fake delimiters
@@ -351,13 +374,17 @@ class Tokenizer:
             The delimiter following the word
         """
 
-        while self.pos < len(self.line) and self.line[self.pos].isspace():
-            self.pos += 1
+        line = self.line
+        length = len(line)
+        pos = self.pos
+        while pos < length and line[pos] in _WHITESPACE:
+            pos += 1
+        self.pos = pos
 
-        if self.pos >= len(self.line):
+        if pos >= length:
             raise EndOfLine()
         # leading delimiter
-        if self.line[self.pos] in delimiters:
+        if line[pos] in delimiters:
             delim = self._scan_delimiter(delimiters)
             return None, delim
 

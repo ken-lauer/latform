@@ -102,9 +102,6 @@ def process_files(
     if verbose > 0:
         print_blocks(files_obj, verbose=verbose)
 
-    for fn in files_obj.by_filename:
-        logger.info("Processing %s", fn)
-
     if lint:
         for fn, lint_item in lint_files(
             files_obj, assume_defined=assume_defined, ignore=ignore_lints, config=config
@@ -119,6 +116,13 @@ def process_files(
     top_set = set(files_obj.top_files)
     results: dict[pathlib.Path, tuple[str, str]] = {}
 
+    if files_obj.tao_init is not None and files_obj.tao_init.filename is not None:
+        init_path = files_obj.tao_init.filename
+        init_original = files_obj.tao_init.render()
+        init_formatted = files_obj.tao_init.render(options.namelist if format_namelist else None)
+        results[init_path] = (init_original, init_formatted)
+        top_set.add(init_path)
+
     if options.flatten_call:
         for top, statements in files_obj.flatten_all(
             call=options.flatten_call, inline=options.flatten_inline
@@ -131,19 +135,13 @@ def process_files(
             original_text = files_obj._get_file_contents(fn)
             results[fn] = (original_text, formatted_text)
 
-    if files_obj.tao_init is not None and files_obj.tao_init.filename is not None:
-        init_path = files_obj.tao_init.filename
-        init_original = files_obj.tao_init.render()
-        init_formatted = files_obj.tao_init.render(options.namelist if format_namelist else None)
-        results[init_path] = (init_original, init_formatted)
-        top_set.add(init_path)
-
     if output and not in_place and len(top_set & set(results)) > 1:
         raise ValueError(
             "--output with multiple top-level files is ambiguous; use --in-place instead."
         )
 
     for fn, (original, formatted) in results.items():
+        logger.info("Processing %s", fn)
         is_top_entry = fn in top_set
         is_stdin_entry = files_obj.local_file_to_source_filename.get(fn) == "<stdin>"
         display_name = files_obj.local_file_to_source_filename.get(fn, str(fn))

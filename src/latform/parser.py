@@ -14,7 +14,7 @@ from .const import EQUALS
 from .exceptions import UnexpectedAssignment
 from .location import Location
 from .statements import (
-    BUILTIN_TARGETS,
+    BUILTIN_TARGETS_UPPER,
     Assignment,
     Constant,
     Element,
@@ -28,7 +28,7 @@ from .statements import (
     annotate_controller_variables,
     get_call_filename,
 )
-from .tao import TaoInit, is_init_file
+from .tao import TaoInit, is_init_file, looks_like_namelist
 from .token import Comments, Role, Token
 from .tokenizer import tokenize
 from .types import (
@@ -248,7 +248,7 @@ def fix_parameter_value(
     return value
 
 
-def parse_items(items: list[TokenizerItem]):
+def parse_items(items: list[TokenizerItem], *, match_unhandled: bool = True):
     if not items:
         raise ValueError("No items provided")
 
@@ -365,7 +365,7 @@ def parse_items(items: list[TokenizerItem]):
             return Simple(comments=comments, statement=stmt, arguments=[])
 
     if isinstance(first, Token):
-        if first.lower() in {"print", "parser_debug"}:
+        if first._upper in {"PRINT", "PARSER_DEBUG"}:
             args = items[1:]
             if args[0] == COMMA:
                 args = args[1:]
@@ -443,7 +443,24 @@ def parse_items(items: list[TokenizerItem]):
                     comments=comments,
                 )
 
-    raise ValueError("Unhandled - unknown")
+    if match_unhandled:
+        args = items[1:]
+
+        if args[0] == COMMA:
+            args = args[1:]
+
+        attrs = _make_attribute_list(args)
+        assert isinstance(first, Token)
+
+        return Simple(
+            comments=comments,
+            statement=first,
+            arguments=attrs,
+        )
+
+    # unknown = " ".join(str(item) for item in items)
+    # raise ValueError(f"Unhandled - unknown: {unknown[:100]}")
+    return Simple(statement=[items[0]], arguments=items[1:])
 
 
 def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
@@ -580,7 +597,7 @@ def _resolve_element_types(
 def _resolve_references(statements: Sequence[Statement]) -> None:
     """Annotate ``NAME[attr]`` references as names (or builtins)."""
     for _statement, name in _iter_element_references(statements):
-        name.role = Role.builtin if name.lower() in BUILTIN_TARGETS else Role.name_
+        name.role = Role.builtin if name._upper in BUILTIN_TARGETS_UPPER else Role.name_
 
     for statement in statements:
         if isinstance(statement, Element) and statement.is_controller:
@@ -709,6 +726,12 @@ class Files:
         """Hook to read file contents. default: read from disk."""
         return filepath.read_text()
 
+    def _parse_file(self, contents: str, filename: pathlib.Path) -> list[Statement]:
+        """
+        Parse a single file's contents (without annotation).
+        """
+        return list(parse(contents=contents, filename=filename, annotate=False))
+
     def parse(
         self,
         recurse: bool = True,
@@ -760,7 +783,7 @@ class Files:
             if full_path in processed:
                 continue
 
-            logger.debug("Processing %s", full_path)
+            logger.debug("Parsing %s", full_path)
             processed.add(full_path)
 
             try:
@@ -777,6 +800,11 @@ class Files:
                     ) from None
                 continue
 
+            if is_init_file(full_path) or looks_like_namelist(contents):
+                logger.debug("Skipping non-lattice (namelist) file: %s", full_path)
+                self.by_filename[full_path] = []
+                continue
+
             try:
                 if keep_blocks:
                     blocks = tokenize(contents=contents, filename=full_path)
@@ -784,7 +812,7 @@ class Files:
                     statements: list[Statement] = [b.parse() for b in blocks]
                 else:
                     # We don't annotate individually here, we do it in bulk later
-                    statements = list(parse(contents=contents, filename=full_path, annotate=False))
+                    statements = self._parse_file(contents, full_path)
             except Exception as ex:
                 if hasattr(ex, "add_note"):  # py 3.11+
                     ex.add_note(f"Exception ocurred while parsing {full_path}")
@@ -808,17 +836,26 @@ class Files:
 
         return self.by_filename
 
+    def _annotate_file(
+        self,
+        filename: pathlib.Path,
+        named: dict[Token, Statement],
+        defined: dict[str, Element],
+    ):
+        statements = self.by_filename[filename]
+        for st in statements:
+            st.annotate(named=named)
+        _resolve_element_types(statements, defined)
+        _resolve_references(statements)
+
     def annotate(self):
         """
         Resolve named items across all parsed files.
         """
         named = self.get_named_items()
         defined: dict[str, Element] = {}
-        for statements in self.by_filename.values():
-            for st in statements:
-                st.annotate(named=named)
-            _resolve_element_types(statements, defined)
-            _resolve_references(statements)
+        for fn in self.by_filename:
+            self._annotate_file(fn, named, defined)
 
     def match_elements(self, pattern: str) -> list[Element] | None:
         """

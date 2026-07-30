@@ -1,4 +1,8 @@
-program generate_python_attributes
+program dump_bmad_attributes
+    ! Dump every element attribute known to Bmad as a pipe-delimited table:
+    !   ELEMENT|ATTR|STATE|KIND|UNITS
+    ! Names are upper-cased. Descriptions are not available here (they live in
+    ! the reference manual); gen_attrs.py merges them in from elements.tex.
     use bmad
     implicit none
 
@@ -7,43 +11,6 @@ program generate_python_attributes
     type (ele_attribute_struct) :: info
 
     character(60) :: key_str
-    character(60) :: state_str
-    character(60) :: kind_str
-    character(200) :: unit_str
-    logical :: first_attrib, element_has_content
-
-    write(*, "(A)") 'from dataclasses import dataclass'
-    write(*, "(A)") "from enum import Enum"
-    write(*, "(A)") ""
-    write(*, "(A)") "class State(str, Enum):"
-    write(*, "(A)") "    Does_Not_Exist = ""Does_Not_Exist"""
-    write(*, "(A)") "    Free = ""Free"""
-    write(*, "(A)") "    Quasi_Free = ""Quasi_Free"""
-    write(*, "(A)") "    Dependent = ""Dependent"""
-    write(*, "(A)") "    Private = ""Private"""
-    write(*, "(A)") "    Overlay_Slave = ""Overlay_Slave"""
-    write(*, "(A)") "    Field_Master_Dependent = ""Field_Master_Dependent"""
-    write(*, "(A)") "    Super_Lord_Align = ""Super_Lord_Align"""
-    write(*, "(A)") "    Unknown = ""Unknown"""
-    write(*, "(A)") ""
-    write(*, "(A)") "class Kind(Enum):"
-    write(*, "(A)") "    Real = ""Real"""
-    write(*, "(A)") "    Integer = ""Integer"""
-    write(*, "(A)") "    Logical = ""Logical"""
-    write(*, "(A)") "    Switch = ""Switch"""
-    write(*, "(A)") "    String = ""String"""
-    write(*, "(A)") "    Struct = ""Struct"""
-    write(*, "(A)") "    Unknown = ""Unknown"""
-    write(*, "(A)") ""
-    write(*, "(A)") "@dataclass"
-    write(*, "(A)") "class Attr:"
-    write(*, "(A)") "    name: str"
-    write(*, "(A)") "    state: State"
-    write(*, "(A)") "    kind: Kind"
-    write(*, "(A)") "    units: str"
-    write(*, "(A)") ""
-    write(*, "(A)") "by_element: dict[str, dict[str, Attr]] = {}"
-    write(*, "(A)") ""
 
     do i_key = 1, n_key$
         ele%key = i_key
@@ -52,101 +19,67 @@ program generate_python_attributes
         ! Skip invalid keys
         if (trim(key_str) == "" .or. trim(key_str) == "!!!") cycle
 
-        element_has_content = .false.
         do i_attrib = 1, num_ele_attrib_extended$
-            info = attribute_info(ele, i_attrib)
-            if (info%name(1:1) == '!') cycle
-            if (info%state == does_not_exist$) cycle
-            element_has_content = .true.
-            exit
-        end do
-
-        if (.not. element_has_content) cycle
-
-        write(*, '(A, A, A)') 'by_element["', upcase(trim(key_str)), '"] = {'
-
-        first_attrib = .true.
-
-        do i_attrib = 1, num_ele_attrib_extended$
-
             info = attribute_info(ele, i_attrib)
 
             if (info%name(1:1) == '!') cycle
             if (info%state == does_not_exist$) cycle
 
-            state_str = get_state_enum(info%state)
-            kind_str  = get_kind_enum(info%kind)
-
-            unit_str = trim(info%units)
-            if (trim(unit_str) == "") unit_str = ""
-
-            if (.not. first_attrib) then
-                 write(*, '(A)') ","
-            endif
-            first_attrib = .false.
-
-            ! "L": Attr("L", State.Free, Kind.Real, units="m")
-            write(*, '(20A)', advance='no') &
-                '    "', upcase(trim(info%name)), '": Attr(', &
-                '"', upcase(trim(info%name)), '", ', &
-                trim(state_str), ', ', &
-                trim(kind_str), ', ', &
-                'units="', trim(unit_str), '")'
-
+            write(*, '(9A)') &
+                trim(upcase(trim(key_str))), '|', &
+                trim(upcase(trim(info%name))), '|', &
+                trim(get_state_enum(info%state)), '|', &
+                trim(get_kind_enum(info%kind)), '|', &
+                trim(info%units)
         end do
-
-        write(*, '(A)') ""    ! Finish last line
-        write(*, '(A)') "}"   ! Close brace
-        write(*, '(A)') ""    ! Empty line between blocks
-
     end do
 
 contains
 
     function get_state_enum(state_int) result(s_str)
         integer, intent(in) :: state_int
-        character(60) :: s_str
+        character(30) :: s_str
 
         select case (state_int)
         case (is_free$)
-            s_str = "State.Free"
+            s_str = "Free"
         case (quasi_free$)
-            s_str = "State.Quasi_Free"
+            s_str = "Quasi_Free"
         case (dependent$)
-            s_str = "State.Dependent"
+            s_str = "Dependent"
         case (private$)
-            s_str = "State.Private"
+            s_str = "Private"
         case (overlay_slave$)
-            s_str = "State.Overlay_Slave"
+            s_str = "Overlay_Slave"
         case (field_master_dependent$)
-            s_str = "State.Field_Master_Dependent"
+            s_str = "Field_Master_Dependent"
         case (super_lord_align$)
-            s_str = "State.Super_Lord_Align"
+            s_str = "Super_Lord_Align"
         case default
-            s_str = "State.Unknown"
+            s_str = "Unknown"
         end select
     end function get_state_enum
 
     function get_kind_enum(kind_int) result(k_str)
         integer, intent(in) :: kind_int
-        character(60) :: k_str
+        character(30) :: k_str
 
         select case (kind_int)
         case (is_real$)
-            k_str = "Kind.Real"
+            k_str = "Real"
         case (is_integer$)
-            k_str = "Kind.Integer"
+            k_str = "Integer"
         case (is_logical$)
-            k_str = "Kind.Logical"
+            k_str = "Logical"
         case (is_switch$)
-            k_str = "Kind.Switch"
+            k_str = "Switch"
         case (is_string$)
-            k_str = "Kind.String"
+            k_str = "String"
         case (is_struct$)
-            k_str = "Kind.Struct"
+            k_str = "Struct"
         case default
-            k_str = "Kind.Unknown"
+            k_str = "Unknown"
         end select
     end function get_kind_enum
 
-end program generate_python_attributes
+end program dump_bmad_attributes

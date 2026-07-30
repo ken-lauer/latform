@@ -6,7 +6,7 @@ import pytest
 
 from ..apply import cli_main_apply, interpolate, interpolate_namelist
 from ..output import default_options
-from ..types import NamelistFormatOptions
+from ..types import FormatOptions, NamelistFormatOptions
 
 FILES = pathlib.Path(__file__).resolve().parent / "files" / "templating"
 
@@ -283,7 +283,7 @@ def test_interpolate_namelist_repeated_group_index():
 
 def test_interpolate_auto_detects_namelist_by_extension():
     out = interpolate(_NML_SRC, values={"tao_params": {"global%plot_on": "F"}}, filename="tao.init")
-    assert "global%plot_on = F" in out
+    assert "global%n_opti_cycles = 100" in out
 
 
 def test_interpolate_format_override_forces_namelist():
@@ -292,6 +292,7 @@ def test_interpolate_format_override_forces_namelist():
         values={"tao_params": {"global%plot_on": "F"}},
         filename="weird.txt",
         file_format="namelist",
+        options=FormatOptions(namelist=NamelistFormatOptions(align_equals=False)),
     )
     assert "global%plot_on = F" in out
 
@@ -346,26 +347,28 @@ def test_interpolate_namelist_field_case(case, expected):
     assert expected in out
 
 
-def test_interpolate_namelist_align_equals():
-    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions(align_equals=True))
-    assert "\n  a    = 1  ! one\n" in out
+def test_interpolate_namelist_no_align_equals():
+    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions(align_equals=False))
+    assert "\n  a = 1     ! one\n" in out
     assert "\n  bbbb = 2  ! two\n" in out
 
 
-def test_interpolate_namelist_no_align_equals_by_default():
+def test_interpolate_namelist_align_equals_by_default():
     out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions())
-    assert "\n  a = 1" in out  # equals not aligned
+    assert "\n  a    = 1" in out  # equals not aligned
     assert "\n  bbbb = 2" in out
 
 
 def test_interpolate_namelist_aligns_comments_by_default():
-    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions())
+    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions(align_equals=False))
     assert "\n  a = 1     ! one\n" in out  # '!' padded to a common column
     assert "\n  bbbb = 2  ! two\n" in out
 
 
 def test_interpolate_namelist_align_comments_can_be_disabled():
-    out = interpolate_namelist(_ALIGN_NML, options=NamelistFormatOptions(align_comments=False))
+    out = interpolate_namelist(
+        _ALIGN_NML, options=NamelistFormatOptions(align_comments=False, align_equals=False)
+    )
     assert "\n  a = 1 ! one\n" in out
     assert "\n  bbbb = 2 ! two\n" in out
 

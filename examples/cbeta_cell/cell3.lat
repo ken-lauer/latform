@@ -1,0 +1,5 @@
+no_digested
+
+call, file = cell.lat.bmad
+
+call, file = energy3.bmad
