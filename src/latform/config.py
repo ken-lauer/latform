@@ -118,6 +118,11 @@ def _normalize_key(key: str) -> str:
     return key.replace("-", "_")
 
 
+def _get_option(section: dict[str, Any], key: str, default: Any):
+    fallback = key.replace("-", "_")
+    return section.get(key, section.get(fallback, default))
+
+
 @dataclass
 class LatformProjectConfig:
     """Resolved latform configuration."""
@@ -150,12 +155,12 @@ class LatformProjectConfig:
         section = _extract_section(path, data)
         config = cls(root=path.parent, source=path)
 
-        top_level = section.get("top-level", section.get("top_level", []))
+        top_level = _get_option(section, "top-level", [])
         if top_level and not isinstance(top_level, list):
             raise ConfigError(f"{path}: top-level must be a list of paths")
         config.top_level = [str(entry) for entry in top_level]
 
-        tao_init = section.get("tao-init", section.get("tao_init", []))
+        tao_init = _get_option(section, "tao-init", [])
         if isinstance(tao_init, (str, pathlib.Path)):
             tao_init = [tao_init]
         if not isinstance(tao_init, list):
@@ -189,7 +194,7 @@ class LatformProjectConfig:
             raise ConfigError(f"{path}: lint.ignore must be a list of codes")
         config.lint_ignore = [str(code).upper() for code in ignore]
 
-        per_file = lint.get("per-file-ignores", lint.get("per_file_ignores", {}))
+        per_file = _get_option(lint, "per-file-ignores", {})
         if not isinstance(per_file, dict):
             raise ConfigError(f"{path}: lint.per-file-ignores must be a table")
         config.per_file_ignores = {
@@ -197,7 +202,7 @@ class LatformProjectConfig:
             for pattern, codes in per_file.items()
         }
 
-        min_name_length = lint.get("min-name-length", lint.get("min_name_length", 1))
+        min_name_length = _get_option(lint, "min-name-length", 1)
         if (
             isinstance(min_name_length, bool)
             or not isinstance(min_name_length, int)
@@ -208,7 +213,7 @@ class LatformProjectConfig:
             )
         config.min_name_length = min_name_length
 
-        rtol = lint.get("builtin-constant-rtol", lint.get("builtin_constant_rtol", 1e-4))
+        rtol = _get_option(lint, "builtin-constant-rtol", 1e-4)
         if (
             isinstance(rtol, bool)
             or not isinstance(rtol, (int, float))
