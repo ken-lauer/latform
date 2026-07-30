@@ -23,7 +23,7 @@ from .apply import (
     split_namelist_key,
 )
 from .parser import MemoryFiles, parse
-from .tao import TaoInit
+from .tao import TaoInit, format_tao_namelist
 from .token import Role, Token
 from .types import FormatOptions, NamelistFormatOptions
 from .util import load_json_or_similar
@@ -170,7 +170,7 @@ def _instantiate_tao_init(
         interpolated = {k: _interpolate(str(v), instance) for k, v in assignments.items()}
         tao_init.update_namelist(name, interpolated, index=index)
 
-    return {output_rel: tao_init.render(options)}
+    return {output_rel: format_tao_namelist(tao_init, options=options)}
 
 
 def load_instances(path: pathlib.Path | str) -> dict:

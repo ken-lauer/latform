@@ -11,7 +11,6 @@ from ..lint import (
     lint_ambiguous_names,
     lint_attribute_overrides,
     lint_builtin_constants,
-    lint_datums,
     lint_duplicate_attributes,
     lint_element_attributes,
     lint_files,
@@ -19,9 +18,9 @@ from ..lint import (
     lint_undefined_references,
     lint_unknown_element_types,
     lint_unused_constants,
-    lint_variables,
 )
 from ..parser import MemoryFiles
+from ..tao.lint import lint_datums, lint_variables
 
 
 def _files(src: str) -> MemoryFiles:
@@ -643,20 +642,20 @@ def _datum_init(ele_name: str) -> str:
 
 def test_datum_undefined_element_reported():
     files = _tao_files(_datum_init("MISSING"))
-    lints = lint_datums(files, files.get_named_items())
+    lints = lint_datums(files.tao_init, files.get_named_items())
     assert [lint.code for lint in lints] == [LintCode.undefined_reference]
     assert "MISSING" in lints[0].message
 
 
 def test_datum_defined_element_not_reported():
     files = _tao_files(_datum_init("R0_MAR_END"))
-    assert lint_datums(files, files.get_named_items()) == []
+    assert lint_datums(files.tao_init, files.get_named_items()) == []
 
 
 def test_datum_element_index_suffix_stripped():
     """The ``\\N`` slice suffix is not itself treated as an element reference."""
     files = _tao_files(_datum_init("R0_MAR_END\\2"))
-    assert lint_datums(files, files.get_named_items()) == []
+    assert lint_datums(files.tao_init, files.get_named_items()) == []
 
 
 def test_datum_component_form_undefined_reported():
@@ -671,7 +670,7 @@ def test_datum_component_form_undefined_reported():
         "/\n"
     )
     files = _tao_files(tao_init)
-    lints = lint_datums(files, files.get_named_items())
+    lints = lint_datums(files.tao_init, files.get_named_items())
     assert [lint.code for lint in lints] == [LintCode.undefined_reference]
 
 
@@ -689,7 +688,7 @@ def test_no_datum_lints_without_tao_init():
     files = MemoryFiles.from_contents(TAO_DEFAULT_LATTICE, "test.bmad")
     files.parse()
     files.annotate()
-    assert lint_datums(files, files.get_named_items()) == []
+    assert lint_datums(files.tao_init, files.get_named_items()) == []
 
 
 def _var_init(ele_name: str) -> str:
@@ -706,14 +705,14 @@ def _var_init(ele_name: str) -> str:
 
 def test_variable_undefined_element_reported():
     files = _tao_files(_var_init("MISSING"))
-    lints = lint_variables(files, files.get_named_items())
+    lints = lint_variables(files.tao_init, files.get_named_items())
     assert [lint.code for lint in lints] == [LintCode.undefined_reference]
     assert "MISSING" in lints[0].message
 
 
 def test_variable_defined_element_not_reported():
     files = _tao_files(_var_init("R0_MAR_END"))
-    assert lint_variables(files, files.get_named_items()) == []
+    assert lint_variables(files.tao_init, files.get_named_items()) == []
 
 
 def test_variable_component_form_undefined_reported():
@@ -728,7 +727,7 @@ def test_variable_component_form_undefined_reported():
         "/\n"
     )
     files = _tao_files(tao_init)
-    lints = lint_variables(files, files.get_named_items())
+    lints = lint_variables(files.tao_init, files.get_named_items())
     assert [lint.code for lint in lints] == [LintCode.undefined_reference]
 
 

@@ -32,6 +32,7 @@ from nmlform import (
 from nmlform import Token as NmlToken
 
 from ._schema import STRUCTS
+from .schema import PathComponent, check_value, is_known_namelist, resolve_path
 
 __all__ = [
     "TaoDatum",
@@ -41,6 +42,8 @@ __all__ = [
     "TaoInit",
     "is_init_file",
     "looks_like_namelist",
+    "fix_tao_namelist",
+    "format_tao_namelist",
 ]
 
 # ``&tao_start`` keys that name an auxiliary file whose namelists we can parse.
@@ -470,14 +473,103 @@ class TaoInit(NamelistFile):
         return self.namelists_for("building_wall_section")
 
 
-def fix_tao_namelist(init: Namelist) -> None:
-    pass
+def _parse_index(index_text: str | None) -> int | None:
+    """A component subscript as an int, or ``None`` if absent/non-integer/multi-dim."""
+    if not index_text:
+        return None
+    try:
+        return int(index_text)
+    except ValueError:
+        return None
+
+
+def path_components(assignment: Assignment) -> list[PathComponent]:
+    """The schema `PathComponent` sequence for a namelist assignment's key."""
+    return [
+        PathComponent(component.name, _parse_index(component.index_text))
+        for component in assignment.path.components
+    ]
+
+
+def _quote_character_literal(text: str) -> str:
+    """
+    Quote a single character value literal if it is not already a quoted string.
+
+    A leading Fortran ``n*`` repeat count is preserved and only its value part is
+    quoted. Already-quoted (and empty/repeat-only) literals are returned as is.
+    """
+    if check_value("character", text):
+        return text
+    count, star, value = text.partition("*")
+    if star and count.strip().lstrip("+-").isdigit():
+        return f"{count}*{quote_value(value)}"
+    return quote_value(text)
+
+
+def _requoted_value(assignment: Assignment) -> str | None:
+    """
+    The assignment's right-hand side with unquoted character values quoted.
+
+    Returns ``None`` when nothing needed quoting, so the caller can skip the edit.
+    """
+    changed = False
+    parts = []
+    for token in assignment.field_tokens:
+        fixed = _quote_character_literal(token.text)
+        parts.append(fixed)
+        changed = changed or fixed != token.text
+    return " ".join(parts) if changed else None
+
+
+def _fix_namelist_group(group: Namelist) -> None:
+    """Quote unquoted character assignments in a single schema-known group."""
+    if not is_known_namelist(group.name):
+        return
+    # `Namelist.set` reparses (invalidating `group.assignments`), so collect the
+    # edits first, then apply them.
+    edits: list[tuple[str, str]] = []
+    for assignment in group.assignments:
+        leaf = resolve_path(group.name, path_components(assignment)).leaf
+        if leaf is None or leaf.kind != "intrinsic" or leaf.base != "character":
+            continue
+        requoted = _requoted_value(assignment)
+        if requoted is not None:
+            edits.append((assignment.key, requoted))
+    for key, value in edits:
+        group.set(key, value)
+
+
+def fix_tao_namelist(namelist: Namelist | NamelistFile) -> None:
+    """
+    Normalize namelist assignments in place against the Tao type schema.
+
+    Currently this quotes character-valued assignments written unquoted (e.g.
+    ``plot_file = tao.init`` -> ``plot_file = 'tao.init'``), which Tao reads the
+    same but which are otherwise a type error. Given a `NamelistFile`, every
+    group in it is fixed; groups (and files) whose namelist name is not in the
+    schema are left untouched.
+    """
+    if isinstance(namelist, NamelistFile):
+        for item in namelist.items:
+            if isinstance(item, Namelist):
+                _fix_namelist_group(item)
+    else:
+        _fix_namelist_group(namelist)
 
 
 def format_tao_namelist(
-    init: Namelist, *, options: NamelistFormatOptions | None = None, fix_types: bool = True
-):
-    if fix_types:
-        fix_tao_namelist(init)
+    namelist: Namelist | NamelistFile,
+    *,
+    options: NamelistFormatOptions | None = None,
+    fix_types: bool = True,
+) -> str:
+    """
+    Render a Tao namelist (or file), first fixing argument types when asked.
 
-    return init.render(options)
+    With ``fix_types`` (the default), `fix_tao_namelist` runs first, so the
+    rendered text has its character values quoted. This mutates ``namelist`` in
+    place; render the original first if you need the unmodified text.
+    """
+    if fix_types:
+        fix_tao_namelist(namelist)
+    return namelist.render(options)

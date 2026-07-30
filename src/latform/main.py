@@ -16,6 +16,7 @@ from .debug import print_blocks
 from .lint import lint_files
 from .output import format_statements
 from .parser import Files, build_files
+from .tao import format_tao_namelist
 from .types import FormatOptions, NameCase, NamelistFormatOptions
 
 DESCRIPTION = __doc__
@@ -124,7 +125,11 @@ def process_files(
     if files_obj.tao_init is not None and files_obj.tao_init.filename is not None:
         init_path = files_obj.tao_init.filename
         init_original = files_obj.tao_init.render()
-        init_formatted = files_obj.tao_init.render(options.namelist if format_namelist else None)
+        init_formatted = format_tao_namelist(
+            files_obj.tao_init,
+            options=options.namelist if format_namelist else None,
+            fix_types=format_namelist,
+        )
         results[init_path] = (init_original, init_formatted)
         top_set.add(init_path)
 
@@ -458,6 +463,7 @@ def cli_main(args: list[str] | None = None) -> None:
             kwargs.pop(dest, None)
 
     filenames, from_top_level = cli.require_input_files(filenames, config)
+
     if from_top_level:
         kwargs["recursive"] = True
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from ..lint import LintCode, lint_tao_schema
+from ..lint import LintCode
 from ..parser import MemoryFiles
+from ..tao.lint import lint_tao_schema
 from ..tao.schema import (
     NAMELISTS,
     STRUCTS,
@@ -154,7 +155,7 @@ def test_every_derived_reference_resolves_or_is_missing():
 
 def _tao_lints(contents: str, sources: dict[str, str] | None = None):
     files = MemoryFiles.from_tao_init_contents(contents, "/proj/tao.init", lattice_contents=sources)
-    return lint_tao_schema(files)
+    return lint_tao_schema(files.tao_init)
 
 
 def _codes(contents: str, sources: dict[str, str] | None = None) -> set[LintCode]:
@@ -242,3 +243,56 @@ def test_split_out_source_file_is_validated():
     contents = "&tao_start\n  var_file = 'vars.init'\n/\n"
     vars_init = "&tao_var\n  ix_min_var = 1.5\n/\n"
     assert _codes(contents, {"vars.init": vars_init}) == {LintCode.tao_type_mismatch}
+
+
+# -- fix / format --------------------------------------------------------------
+
+
+def _formatted(src: str, **kwargs) -> str:
+    from nmlform import NamelistFile
+
+    from ..tao.file import format_tao_namelist
+
+    return format_tao_namelist(NamelistFile.parse(src), **kwargs)
+
+
+def test_fix_quotes_unquoted_character_values():
+    src = "&tao_start\n  plot_file = tao_plot.init\n  n_universes = 2\n/\n"
+    out = _formatted(src)
+    assert "plot_file = 'tao_plot.init'" in out
+    assert "n_universes = 2" in out  # numeric untouched
+
+
+def test_fix_leaves_quoted_and_typed_values_alone():
+    src = "&tao_params\n  global%track_type = 'single'\n  bmad_com%radiation_damping_on = F\n/\n"
+    assert _formatted(src) == src
+
+
+def test_fix_types_false_renders_verbatim():
+    src = "&tao_start\n  plot_file = tao_plot.init\n/\n"
+    assert _formatted(src, fix_types=False) == src
+
+
+def test_fix_skips_unknown_namelist():
+    src = "&tao_template_curve\n  data_type = orbit.x\n/\n"
+    assert _formatted(src) == src
+
+
+def test_fix_quotes_character_array_values():
+    # design_lattice(i)%file entries are character; each unquoted value is quoted.
+    src = "&tao_design_lattice\n  design_lattice(1)%file = ring.bmad\n/\n"
+    assert "design_lattice(1)%file = 'ring.bmad'" in _formatted(src)
+
+
+def test_fix_namelist_file_fixes_all_groups():
+    from nmlform import NamelistFile
+
+    from ..tao.file import fix_tao_namelist
+
+    nf = NamelistFile.parse(
+        "&tao_start\n  plot_file = a.init\n/\n\n&tao_params\n  global%track_type = single\n/\n"
+    )
+    fix_tao_namelist(nf)
+    out = nf.render()
+    assert "plot_file = 'a.init'" in out
+    assert "global%track_type = 'single'" in out

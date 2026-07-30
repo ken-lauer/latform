@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import enum
 import logging
 import math
 import typing
-from dataclasses import dataclass
 from functools import lru_cache
 from typing import Collection, Generator, Iterable, Sequence
-
-from nmlform import Namelist
 
 from .attrs import element_key_to_attrs
 from .const import named_physical_constants
@@ -23,17 +19,8 @@ from .statements import (
     Statement,
     get_controller_variables,
 )
-from .tao.schema import (
-    PathComponent,
-    PathProblem,
-    ProblemKind,
-    check_value,
-    is_known_namelist,
-    resolve_path,
-    string_length,
-)
 from .token import Token
-from .types import Attribute, CallName, Seq
+from .types import Attribute, CallName, Lint, LintCode, Seq
 from .walk import iter_tokens
 
 if typing.TYPE_CHECKING:
@@ -43,47 +30,6 @@ if typing.TYPE_CHECKING:
     from .parser import Files
 
 logger = logging.getLogger(__name__)
-
-
-class LintCode(str, enum.Enum):
-    """Stable identifiers for each lint, usable to opt out via the CLI."""
-
-    unknown_statement = "LF001"
-    undefined_reference = "LF002"
-    unknown_element_type = "LF003"
-    unknown_attribute = "LF004"
-    controller_all_zero_defaults = "LF005"
-    duplicate_attribute = "LF006"
-    unused_constant = "LF007"
-    attribute_override = "LF008"
-    ambiguous_name = "LF009"
-    use_builtin_constant = "LF010"
-    tao_unknown_field = "LF011"
-    tao_type_mismatch = "LF012"
-    tao_index_out_of_bounds = "LF013"
-    tao_string_too_long = "LF014"
-
-
-@dataclass()
-class Lint:
-    code: LintCode
-    context: Statement | Namelist
-    message: str
-    relevant_tokens: list[Token] | None
-
-    def to_user_message(self):
-        clsname = type(self.context).__name__
-        obj_name = str(getattr(self.context, "name", "unnamed"))
-        parts = [f"[{self.code.value}] {obj_name!r} Statement of type {clsname!r}: {self.message}"]
-
-        if self.relevant_tokens:
-            parts.append("\n    Found near:")
-            for tok in self.relevant_tokens:
-                if tok.loc:
-                    parts.append(f"{tok.quoted()} at {tok.loc}")
-                else:
-                    parts.append(f"{tok.quoted()}")
-        return " ".join(parts)
 
 
 def lint_statements(
@@ -576,203 +522,6 @@ def lint_unknown_element_types(statements: Sequence[Statement]) -> list[Lint]:
     return lints
 
 
-def _split_element_name(name):
-    if not name:
-        return
-
-    name = name.split("##", 1)[0]
-
-    for part in name.split("\\"):
-        try:
-            int(part)
-        except ValueError:
-            pass
-        else:
-            continue
-        yield part
-
-
-def lint_datums(
-    files_obj: Files,
-    named: dict[Token, Statement],
-) -> list[Lint]:
-    """
-    Lint tao_init datums (&tao_d1_data) for undefined element references.
-    """
-    if not files_obj.tao_init:
-        return []
-
-    lints = []
-    for d1_data in files_obj.tao_init.d1_data:
-        for datum in d1_data.datums:
-            ele_names = {datum.ele_name, datum.ele_ref_name, datum.ele_start_name}
-            for name in ele_names:
-                if not name:
-                    continue
-                for ele_name in _split_element_name(name):
-                    if ele_name.upper() not in named:
-                        lints.append(
-                            Lint(
-                                code=LintCode.undefined_reference,
-                                context=d1_data.namelist,
-                                message=f"Reference to undefined element in tao_init d1_data: {name}",
-                                relevant_tokens=[],
-                            )
-                        )
-    return lints
-
-
-def lint_variables(
-    files_obj: Files,
-    named: dict[Token, Statement],
-) -> list[Lint]:
-    """
-    Lint tao_init variables (&tao_var) for undefined element references.
-    """
-    if not files_obj.tao_init:
-        return []
-
-    lints = []
-    for v1_var in files_obj.tao_init.variables:
-        for var in v1_var.variables:
-            name = var.ele_name
-            if not name:
-                continue
-            for ele_name in _split_element_name(name):
-                if ele_name.upper() not in named:
-                    lints.append(
-                        Lint(
-                            code=LintCode.undefined_reference,
-                            context=v1_var.namelist,
-                            message=f"Reference to undefined element in tao_init var: {name}",
-                            relevant_tokens=[],
-                        )
-                    )
-    return lints
-
-
-# Path problems that are all reported as "unknown/invalid field" lints.
-_PROBLEM_CODES = {
-    ProblemKind.unknown_field: LintCode.tao_unknown_field,
-    ProblemKind.not_a_struct: LintCode.tao_unknown_field,
-    ProblemKind.not_indexable: LintCode.tao_unknown_field,
-    ProblemKind.index_out_of_bounds: LintCode.tao_index_out_of_bounds,
-}
-
-
-def _parse_index(index_text: str | None) -> int | None:
-    """A component subscript as an int, or ``None`` if absent/non-integer/multi-dim."""
-    if not index_text:
-        return None
-    try:
-        return int(index_text)
-    except ValueError:
-        return None
-
-
-def _path_components(assignment) -> list[PathComponent]:
-    return [
-        PathComponent(component.name, _parse_index(component.index_text))
-        for component in assignment.path.components
-    ]
-
-
-def _problem_message(problem: PathProblem, key: str) -> str:
-    match problem.kind:
-        case ProblemKind.unknown_field:
-            detail = f"Unknown field '{problem.component}' in '{problem.container}'"
-        case ProblemKind.not_a_struct:
-            detail = (
-                f"Field '{problem.component}' in '{problem.container}' is not a "
-                "structure but is used with '%'"
-            )
-        case ProblemKind.not_indexable:
-            detail = (
-                f"Field '{problem.component}' in '{problem.container}' is not an "
-                "array but is indexed"
-            )
-        case ProblemKind.index_out_of_bounds:
-            lo, hi = problem.bounds
-            lo_text = "*" if lo is None else lo
-            hi_text = "*" if hi is None else hi
-            detail = (
-                f"Index {problem.index} of '{problem.component}' is outside declared "
-                f"bounds [{lo_text}, {hi_text}]"
-            )
-        case _:  # pragma: no cover - all kinds handled above
-            detail = "Invalid field path"
-    return f"{detail} (from '{key}')"
-
-
-def _invalid_values(base: str, assignment) -> Generator[str, None, None]:
-    """Yield the text of each value literal that is invalid for ``base``."""
-    for token in assignment.field_tokens:
-        if not check_value(base, token.text):
-            yield token.text
-
-
-def _lint_tao_assignment(namelist: Namelist, assignment) -> list[Lint]:
-    key = assignment.key
-    result = resolve_path(namelist.name, _path_components(assignment))
-    lints = [
-        Lint(
-            code=_PROBLEM_CODES[problem.kind],
-            context=namelist,
-            message=_problem_message(problem, key),
-            relevant_tokens=[],
-        )
-        for problem in result.problems
-    ]
-    leaf = result.leaf
-    if leaf is not None and leaf.kind == "intrinsic":
-        base = leaf.base
-        for text in _invalid_values(base, assignment):
-            lints.append(
-                Lint(
-                    code=LintCode.tao_type_mismatch,
-                    context=namelist,
-                    message=f"Value '{text}' for '{key}' is not valid for type {base}",
-                    relevant_tokens=[],
-                )
-            )
-        if base == "character" and leaf.length is not None:
-            for token in assignment.field_tokens:
-                length = string_length(token.text)
-                if length is not None and length > leaf.length:
-                    lints.append(
-                        Lint(
-                            code=LintCode.tao_string_too_long,
-                            context=namelist,
-                            message=(
-                                f"Value {token.text} for '{key}' is {length} characters, "
-                                f"exceeding the declared length {leaf.length} "
-                                "(Fortran will truncate it)"
-                            ),
-                            relevant_tokens=[],
-                        )
-                    )
-    return lints
-
-
-def lint_tao_schema(files_obj: Files) -> list[Lint]:
-    """
-    Lint Tao ``*.init`` namelist assignments against the type schema.
-    """
-    tao_init = files_obj.tao_init
-    if not tao_init:
-        return []
-
-    lints: list[Lint] = []
-    for source in (tao_init, *tao_init.sources.values()):
-        for name, group in source.namelists_by_name.items():
-            if not is_known_namelist(name):
-                continue
-            for namelist in group:
-                for assignment in namelist.assignments:
-                    lints.extend(_lint_tao_assignment(namelist, assignment))
-    return lints
-
-
 def lint_files(
     files_obj: Files,
     *,
@@ -817,20 +566,9 @@ def lint_files(
         ):
             yield fn, lint
 
-    if files_obj.tao_init:
-        init_path = files_obj.tao_init.filename or pathlib.Path("<tao.init>")
-        ignored = {code.upper() for code in ignore}
-        tao_lints = (
-            *lint_datums(files_obj, named),
-            *lint_variables(files_obj, named),
-            *lint_tao_schema(files_obj),
-        )
-        for lint in tao_lints:
-            if lint.code.value in ignored:
-                continue
-            # Attribute to the namelist's own source (e.g. a split-out
-            # data_file/var_file), falling back to the tao.init path.
-            yield (getattr(lint.context, "filename", None) or init_path, lint)
+    from .tao.lint import lint_tao_init_files
+
+    yield from lint_tao_init_files(files_obj, named, ignore=ignore)
 
 
 def _build_argparser():
