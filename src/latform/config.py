@@ -37,7 +37,8 @@ import logging
 import math
 import pathlib
 from dataclasses import dataclass, field
-from typing import Any
+from functools import partial
+from typing import Any, Callable
 
 from .util import load_json_or_similar
 
@@ -46,68 +47,6 @@ logger = logging.getLogger(__name__)
 CONFIG_FILENAMES = ("latform.toml", "pyproject.toml")
 
 _CASE_VALUES = frozenset({"upper", "lower", "same"})
-
-# Config ``[format]`` keys (normalized to snake_case) → the argparse dest / main()
-# keyword they map to. Values become argparse defaults so that explicit CLI flags
-# still override the config.
-_FORMAT_KEYS = frozenset(
-    {
-        "line_length",
-        "max_line_length",
-        "compact",
-        "name_case",
-        "attribute_case",
-        "kind_case",
-        "builtin_case",
-        "controller_variable_case",
-        "section_break_character",
-        "section_break_width",
-        "strip_comments",
-        "flatten",
-        "flatten_call",
-        "flatten_inline",
-        # Namelist (*.init/*.nml) formatting; map to the same argparse dests as
-        # the shared --namelist-* / --no-format-namelist CLI flags.
-        "format_namelist",
-        "namelist_indent",
-        "namelist_field_case",
-        "namelist_align_equals",
-        "namelist_align_comments",
-    }
-)
-
-_CASE_KEYS = frozenset(
-    {
-        "name_case",
-        "attribute_case",
-        "kind_case",
-        "builtin_case",
-        "controller_variable_case",
-        "namelist_field_case",
-    }
-)
-
-_FORMAT_BOOL_KEYS = frozenset(
-    {
-        "compact",
-        "strip_comments",
-        "flatten",
-        "flatten_call",
-        "flatten_inline",
-        "format_namelist",
-        "namelist_align_equals",
-        "namelist_align_comments",
-    }
-)
-
-_FORMAT_INT_KEYS = frozenset(
-    {
-        "line_length",
-        "max_line_length",
-        "section_break_width",
-        "namelist_indent",
-    }
-)
 
 
 class ConfigError(Exception):
@@ -121,6 +60,91 @@ def _normalize_key(key: str) -> str:
 def _get_option(section: dict[str, Any], key: str, default: Any):
     fallback = key.replace("-", "_")
     return section.get(key, section.get(fallback, default))
+
+
+# --- setting validators ------------------------------------------------------
+# Each takes ``(source, label, value)`` and returns the validated value (or
+# raises ConfigError). ``label`` is the dotted setting name for the message.
+
+
+def _check_bool(source: pathlib.Path, label: str, value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{source}: {label} must be a boolean, got {value!r}")
+    return value
+
+
+def _check_int(source: pathlib.Path, label: str, value: Any, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{source}: {label} must be an integer, got {value!r}")
+    if minimum is not None and value < minimum:
+        raise ConfigError(f"{source}: {label} must be >= {minimum}, got {value!r}")
+    return value
+
+
+def _check_case(source: pathlib.Path, label: str, value: Any) -> str:
+    if value not in _CASE_VALUES:
+        raise ConfigError(f"{source}: {label} must be one of {sorted(_CASE_VALUES)}, got {value!r}")
+    return value
+
+
+def _check_str(source: pathlib.Path, label: str, value: Any) -> str:
+    if not isinstance(value, str):
+        raise ConfigError(f"{source}: {label} must be a string, got {value!r}")
+    return value
+
+
+def _check_positive_float(source: pathlib.Path, label: str, value: Any) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ConfigError(f"{source}: {label} must be a positive number, got {value!r}")
+    return float(value)
+
+
+def _check_logicals(source: pathlib.Path, label: str, value: Any) -> tuple[str, str] | None:
+    """Validate ``namelist-logicals``: a ``[true, false]`` string pair, or ``false``."""
+    if value is False:
+        return None
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) == 2
+        and all(isinstance(item, str) for item in value)
+    ):
+        return (value[0], value[1])
+    raise ConfigError(
+        f"{source}: {label} must be a [true, false] pair of strings or false to disable, "
+        f"got {value!r}"
+    )
+
+
+# ``[format]`` key (snake_case argparse dest) -> validator. Membership here is
+# what makes a key recognized; unknown keys warn and are ignored. The values
+# become argparse defaults, so an explicit CLI flag still overrides the config.
+# ``namelist_logicals`` is handled separately — it is not an argparse dest.
+_FORMAT_SETTINGS: dict[str, Callable[[pathlib.Path, str, Any], Any]] = {
+    "line_length": _check_int,
+    "max_line_length": _check_int,
+    "compact": _check_bool,
+    "name_case": _check_case,
+    "attribute_case": _check_case,
+    "kind_case": _check_case,
+    "builtin_case": _check_case,
+    "controller_variable_case": _check_case,
+    "section_break_character": _check_str,
+    "section_break_width": _check_int,
+    "strip_comments": _check_bool,
+    "flatten": _check_bool,
+    "flatten_call": _check_bool,
+    "flatten_inline": _check_bool,
+    "format_namelist": _check_bool,
+    "namelist_indent": partial(_check_int, minimum=0),
+    "namelist_field_case": _check_case,
+    "namelist_align_equals": _check_bool,
+    "namelist_align_comments": _check_bool,
+}
 
 
 @dataclass
@@ -176,14 +200,13 @@ class LatformProjectConfig:
             # ``namelist-logicals`` is not an argparse dest, so it is stored on
             # the config rather than folded into ``format``.
             if norm == "namelist_logicals":
-                config.namelist_logicals = _parse_logicals(path, value)
+                config.namelist_logicals = _check_logicals(path, f"format.{key}", value)
                 continue
-            if norm not in _FORMAT_KEYS:
+            validator = _FORMAT_SETTINGS.get(norm)
+            if validator is None:
                 logger.warning("%s: unknown format setting %r (ignored)", path, key)
                 continue
-            fmt[norm] = value
-        _validate_format_types(path, fmt)
-        _parse_case_fields(path, fmt)
+            fmt[norm] = validator(path, f"format.{key}", value)
         config.format = fmt
 
         lint = section.get("lint", {})
@@ -202,28 +225,12 @@ class LatformProjectConfig:
             for pattern, codes in per_file.items()
         }
 
-        min_name_length = _get_option(lint, "min-name-length", 1)
-        if (
-            isinstance(min_name_length, bool)
-            or not isinstance(min_name_length, int)
-            or min_name_length < 1
-        ):
-            raise ConfigError(
-                f"{path}: lint.min-name-length must be an integer >= 1, got {min_name_length!r}"
-            )
-        config.min_name_length = min_name_length
-
-        rtol = _get_option(lint, "builtin-constant-rtol", 1e-4)
-        if (
-            isinstance(rtol, bool)
-            or not isinstance(rtol, (int, float))
-            or not math.isfinite(rtol)
-            or rtol <= 0
-        ):
-            raise ConfigError(
-                f"{path}: lint.builtin-constant-rtol must be a positive number, got {rtol!r}"
-            )
-        config.builtin_constant_rtol = float(rtol)
+        config.min_name_length = _check_int(
+            path, "lint.min-name-length", _get_option(lint, "min-name-length", 1), minimum=1
+        )
+        config.builtin_constant_rtol = _check_positive_float(
+            path, "lint.builtin-constant-rtol", _get_option(lint, "builtin-constant-rtol", 1e-4)
+        )
 
         return config
 
@@ -268,6 +275,16 @@ def _has_latform_table(path: pathlib.Path) -> bool:
     return isinstance(data.get("tool"), dict) and "latform" in data["tool"]
 
 
+def find_file_in_parents(start: pathlib.Path, filename: str) -> pathlib.Path | None:
+    """Search ``start`` and its parents for a specific filename."""
+    start = start.resolve()
+    for directory in (start, *start.parents):
+        candidate = directory / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def find_config_file(start: pathlib.Path) -> pathlib.Path | None:
     """Search ``start`` and its parents for a latform config file."""
     start = start.resolve()
@@ -290,43 +307,6 @@ def _extract_section(path: pathlib.Path, data: dict[str, Any]) -> dict[str, Any]
     if not isinstance(section, dict):
         raise ConfigError(f"{path}: [tool.latform]/latform config must be a table")
     return section
-
-
-def _parse_case_fields(source: pathlib.Path, fmt: dict[str, Any]) -> None:
-    for key in _CASE_KEYS:
-        if key in fmt and fmt[key] not in _CASE_VALUES:
-            raise ConfigError(
-                f"{source}: format.{key} must be one of {sorted(_CASE_VALUES)}, got {fmt[key]!r}"
-            )
-
-
-def _validate_format_types(source: pathlib.Path, fmt: dict[str, Any]) -> None:
-    """Type-check the boolean and integer ``[format]`` settings."""
-    for key in _FORMAT_BOOL_KEYS & fmt.keys():
-        if not isinstance(fmt[key], bool):
-            raise ConfigError(f"{source}: format.{key} must be a boolean, got {fmt[key]!r}")
-    for key in _FORMAT_INT_KEYS & fmt.keys():
-        value = fmt[key]
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ConfigError(f"{source}: format.{key} must be an integer, got {value!r}")
-        if key == "namelist_indent" and value < 0:
-            raise ConfigError(f"{source}: format.namelist-indent must be >= 0, got {value!r}")
-
-
-def _parse_logicals(source: pathlib.Path, value: Any) -> tuple[str, str] | None:
-    """Parse ``namelist-logicals``: a ``[true, false]`` string pair, or ``false``."""
-    if value is False:
-        return None
-    if (
-        isinstance(value, (list, tuple))
-        and len(value) == 2
-        and all(isinstance(item, str) for item in value)
-    ):
-        return (value[0], value[1])
-    raise ConfigError(
-        f"{source}: format.namelist-logicals must be a [true, false] pair of strings "
-        f"or false to disable, got {value!r}"
-    )
 
 
 def discover_config(
@@ -359,5 +339,11 @@ def discover_config(
 
     found = find_config_file(start)
     if found is None:
+        found = find_file_in_parents(start, "tao.init")
+        if found:
+            conf = LatformProjectConfig.empty(found.parent)
+            conf.top_level = [str(found)]
+            return conf
+
         return LatformProjectConfig.empty(start)
     return LatformProjectConfig.from_file(found)
