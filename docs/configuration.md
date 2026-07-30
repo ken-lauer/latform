@@ -59,6 +59,18 @@ tao-init = "tao.init"   # a path, or a list of paths
 When invoked with no file arguments, `latform` / `latform-lint` then load the
 lattices referenced by that `tao.init` (recursively).
 
+### Zero-config fallback
+
+If **no** config file applies at all — no `latform.toml`, and no
+`pyproject.toml` with a `[tool.latform]` table — `latform` / `latform-lint`
+fall back to searching the current directory and its parents for a `tao.init`.
+The first one found is used as the top-level entry point, exactly as if
+`top-level = ["<that tao.init>"]` had been set. This lets the tools run in a
+bare Tao project directory with no configuration.
+
+The fallback is only a *last resort*: any applicable config file (even an empty
+one) takes precedence, and `--no-config` skips it entirely.
+
 ## Common setups
 
 A minimal single-project config — set the entry point and a couple of house

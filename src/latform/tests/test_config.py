@@ -117,6 +117,39 @@ def test_explicit_missing_path_raises(tmp_path: pathlib.Path):
         discover_config(explicit=tmp_path / "nope.toml")
 
 
+# --- tao.init as an implicit top-level -------------------------------------
+
+
+def test_tao_init_used_as_top_level_when_no_config(tmp_path: pathlib.Path):
+    # With no latform.toml / pyproject.toml, a nearby tao.init becomes the
+    # top-level entry point.
+    (tmp_path / "tao.init").write_text("&tao_start\n/\n")
+    config = discover_config(tmp_path)
+    assert config.source is None  # not loaded from a config file
+    assert config.top_level == [str((tmp_path / "tao.init").resolve())]
+
+
+def test_tao_init_fallback_walks_up_parents(tmp_path: pathlib.Path):
+    (tmp_path / "tao.init").write_text("&tao_start\n/\n")
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    config = discover_config(nested)
+    assert config.top_level == [str((tmp_path / "tao.init").resolve())]
+
+
+def test_config_file_preferred_over_tao_init(tmp_path: pathlib.Path):
+    (tmp_path / "tao.init").write_text("&tao_start\n/\n")
+    (tmp_path / "latform.toml").write_text('top-level = ["m.bmad"]\n')
+    config = discover_config(tmp_path)
+    assert config.source == tmp_path / "latform.toml"
+    assert config.top_level == ["m.bmad"]  # the config file wins; tao.init ignored
+
+
+def test_no_config_skips_tao_init_fallback(tmp_path: pathlib.Path):
+    (tmp_path / "tao.init").write_text("&tao_start\n/\n")
+    assert discover_config(tmp_path, enabled=False).top_level == []
+
+
 def test_min_name_length_default_is_one(project: pathlib.Path):
     assert discover_config(project).min_name_length == 1
 
