@@ -630,6 +630,37 @@ def test_lint_cli_no_recursive_tao_init_skips_lattice(tmp_path, caplog):
     assert any("LF011" in m for m in non_recursive)  # tao.init still checked
 
 
+def test_lint_cli_autodetects_misnamed_namelist(tmp_path, caplog):
+    """
+    A namelist file that is not named ``*.init`` is still linted as a namelist
+    (detected from its contents); ``--format`` can force the interpretation.
+    """
+    path = tmp_path / "tao_setup.txt"
+    path.write_text("&tao_params\n  global%bogus_field = 1\n/\n")
+
+    for extra in ([], ["--format", "namelist"]):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="latform.lint"):
+            with pytest.raises(SystemExit) as excinfo:
+                cli_main([str(path), *extra])
+        assert excinfo.value.code == 1
+        assert any("LF011" in rec.getMessage() for rec in caplog.records)
+
+
+def test_lint_cli_namelist_without_lattices_does_not_crash(tmp_path, caplog):
+    """
+    A namelist file with no ``design_lattice`` entries has no lattices to parse;
+    it is linted on its own rather than raising on an empty file set.
+    """
+    path = tmp_path / "plots.nml"
+    path.write_text("&tao_params\n  global%bogus_field = 1\n/\n")
+    with caplog.at_level(logging.WARNING, logger="latform.lint"):
+        with pytest.raises(SystemExit) as excinfo:
+            cli_main([str(path)])
+    assert excinfo.value.code == 1
+    assert any("LF011" in rec.getMessage() for rec in caplog.records)
+
+
 def test_main_lint_flag_gates_warnings(tmp_path, capsys, caplog):
     from ..main import main
 

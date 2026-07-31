@@ -13,6 +13,7 @@ latform [-h] [-i] [-o] [-r] [-R old,new] [--diff] [--compact]
         [--section-break-character CHAR] [--section-break-width WIDTH]
         [--flatten] [--flatten-call] [--flatten-inline]
         [--strip-comments] [--rename-file FILE]
+        [--format {bmad,namelist}]
         [--lint] [--strict-references] [--ignore CODE]
         [--no-format-namelist] [--namelist-indent N]
         [--namelist-field-case {upper,lower,same}]
@@ -175,9 +176,12 @@ indices, and over-length strings (`LF011`–`LF014`). See
 
 ## Tao init files
 
-When the input is a Tao `tao.init` file (any `*.init`), `latform` expands it:
-it formats each Bmad lattice file the init references (via `design_lattice`) **and**
-the `tao.init` namelist file itself.
+When the input is a Tao `tao.init` file, `latform` expands it: it formats each
+Bmad lattice file the init references (via `design_lattice`) **and** the
+`tao.init` namelist file itself. The input is recognized as a namelist when it is
+named `*.init` or its contents look like one; pass `--format namelist` to force
+it for a differently-named file (or `--format bmad` to opt out). See
+[Detecting namelist inputs](index.md#detecting-namelist-inputs).
 
 ```bash
 latform tao.init            # print the formatted lattices and the tao.init

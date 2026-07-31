@@ -168,6 +168,36 @@ def test_build_files_combine_with_stdin_uses_memory_files(
     assert len(combined.top_files) == 2
 
 
+def test_build_files_autodetects_namelist_by_contents(tmp_path: pathlib.Path):
+    # A namelist file not named *.init is detected from its contents.
+    f = tmp_path / "setup.txt"
+    f.write_text("&tao_params\n  global%plot_on = T\n/\n")
+    (result,) = build_files([f])
+    assert result.tao_init is not None
+
+
+def test_build_files_bmad_not_detected_as_namelist(tmp_path: pathlib.Path):
+    f = tmp_path / "a.bmad"
+    f.write_text("Q1: quad\nml: line=(Q1)\nuse, ml\n")
+    (result,) = build_files([f])
+    assert result.tao_init is None
+
+
+def test_build_files_input_format_namelist_forces(tmp_path: pathlib.Path):
+    f = tmp_path / "setup.conf"
+    f.write_text("&tao_params\n  global%plot_on = T\n/\n")
+    (result,) = build_files([f], input_format="namelist")
+    assert result.tao_init is not None
+
+
+def test_build_files_input_format_bmad_ignores_init_extension(tmp_path: pathlib.Path):
+    f = tmp_path / "weird.init"
+    f.write_text("Q1: quad\nml: line=(Q1)\nuse, ml\n")
+    (result,) = build_files([f], input_format="bmad")
+    assert result.tao_init is None
+    assert result.top_files[0].name == "weird.init"
+
+
 def test_cli_combine_outputs_both_files(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture):
     f1 = tmp_path / "a.bmad"
     f2 = tmp_path / "b.bmad"

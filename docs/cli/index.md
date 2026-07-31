@@ -20,6 +20,25 @@ See [Configuration](../configuration.md) for project-wide settings via
 | [`latform-graph`](inspection.md#latform-graph)       | Visualize file dependency trees                                     |
 | [`latform-lsp`](lsp.md)                              | Language server for editor integration (optional `lsp` extra)       |
 
+## Detecting namelist inputs
+
+`latform` and `latform-lint` decide whether an input is a Bmad lattice or a Tao
+namelist (`tao.init`) automatically: a file is treated as a namelist when it is
+named `*.init` **or** its contents look like a namelist (a line beginning with
+`&`). This means a namelist file with a non-standard name (e.g. `tao_setup.txt`)
+is still handled correctly.
+
+Force the interpretation with `--format` when detection is wrong or you want to
+be explicit:
+
+| Flag                 | Effect                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| `--format namelist`  | Treat the input(s) as a Tao namelist regardless of name       |
+| `--format bmad`      | Treat the input(s) as a Bmad lattice, even a `*.init` file    |
+
+(`latform-apply` has the same `--format {bmad,namelist}` option for its single
+input file.)
+
 ## Namelist (tao.init) formatting
 
 `latform`, `latform-apply`, and `latform-template` can reformat Fortran-namelist

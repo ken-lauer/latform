@@ -6,7 +6,7 @@ counterpart to [`latform --lint`](latform.md#linting): it prints any findings an
 or pre-commit checks.
 
 ```
-latform-lint [-h] [-r] [--combine] [-e]
+latform-lint [-h] [-r] [--combine] [-e] [--format {bmad,namelist}]
              [--strict-references] [--ignore CODE]
              [-V] [-L {DEBUG,INFO,WARNING,CRITICAL}]
              filename [filename ...]
@@ -38,6 +38,7 @@ latform-lint my_lattice.bmad && echo "clean"
 | -------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
 | `--recursive`, `-r`        | off     | Recursively parse lattice files, following `call` statements                                   |
 | `--combine`                | off     | Process all input files together as a single set, sharing one parse stack                      |
+| `--format {bmad,namelist}` | auto    | Force how inputs are interpreted; default auto-detects (see [Detecting namelist inputs](index.md#detecting-namelist-inputs)) |
 | `--error-if-missing`, `-e` | off     | Exit with an error if a file is missing during parsing                                         |
 | `--strict-references`      | off     | Report references not defined in the loaded files (and unknown element types) as lint warnings |
 | `--ignore CODE`            | none    | Suppress the given lint code(s); repeatable or comma-separated (e.g. `--ignore LF004,LF006`)   |

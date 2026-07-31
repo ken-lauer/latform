@@ -614,7 +614,9 @@ def cli_main(args: list[str] | None = None) -> None:
 
     found = False
     try:
-        files_sets = build_files(filenames, combine=parsed.combine)
+        files_sets = build_files(
+            filenames, combine=parsed.combine, input_format=parsed.input_format
+        )
     except FileNotFoundError as ex:
         logger.error("%s", ex)
         raise SystemExit(1) from None
@@ -624,9 +626,11 @@ def cli_main(args: list[str] | None = None) -> None:
         if this_recursive is None:
             this_recursive = files_obj.tao_init is not None
 
-        # A tao.init linted non-recursively is linted on its own: the referenced
-        # design lattices are not loaded, so only the namelist itself is checked.
-        only_tao_init = files_obj.tao_init is not None and not this_recursive
+        # A tao.init is linted on its own (only the namelist, no lattices) when
+        # recursion is off, or when it references no design lattices to parse.
+        only_tao_init = files_obj.tao_init is not None and (
+            not this_recursive or not files_obj.top_files
+        )
         if not only_tao_init:
             files_obj.parse(
                 recurse=this_recursive,
@@ -638,7 +642,7 @@ def cli_main(args: list[str] | None = None) -> None:
             assume_defined=parsed.assume_defined,
             ignore=ignore_codes,
             config=config,
-            check_references=this_recursive,
+            check_references=not only_tao_init,
         ):
             found = True
             name = files_obj.local_file_to_source_filename.get(fn, str(fn))

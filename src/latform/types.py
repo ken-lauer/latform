@@ -6,6 +6,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Literal
 
+from nmlform import Namelist
 from nmlform.types import NamelistFormatOptions
 
 from .const import COMMA, EQUALS, SPACE
@@ -532,7 +533,16 @@ class Lint:
     def to_user_message(self):
         clsname = type(self.context).__name__
         obj_name = str(getattr(self.context, "name", "unnamed"))
-        parts = [f"[{self.code.value}] {obj_name!r} Statement of type {clsname!r}: {self.message}"]
+
+        if isinstance(self.context, Namelist):
+            parts = [
+                f"[{self.code.value}] {obj_name}: {self.message}",
+            ]
+
+        else:
+            parts = [
+                f"[{self.code.value}] {obj_name!r} Statement of type {clsname}: {self.message}",
+            ]
 
         if self.relevant_tokens:
             parts.append("\n    Found near:")
