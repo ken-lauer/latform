@@ -81,6 +81,8 @@ Run any command with `-h` for its full option list, or see the
 
 ### Enforce house style on save / in CI
 
+See also: [latform-pre-commit](https://github.com/ken-lauer/latform-pre-commit).
+
 Format in place and lint as two steps:
 
 ```bash
