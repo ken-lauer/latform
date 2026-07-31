@@ -18,6 +18,7 @@ See [Configuration](../configuration.md) for project-wide settings via
 | [`latform-diff`](inspection.md#latform-diff)         | Compare two lattice files                                           |
 | [`latform-gitdiff`](inspection.md#latform-gitdiff)   | Compare a lattice file across git revisions                         |
 | [`latform-graph`](inspection.md#latform-graph)       | Visualize file dependency trees                                     |
+| [`latform-lsp`](lsp.md)                              | Language server for editor integration (optional `lsp` extra)       |
 
 ## Namelist (tao.init) formatting
 

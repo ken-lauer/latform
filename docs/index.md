@@ -47,6 +47,7 @@ latform provides these CLI commands:
 - [**latform-diff**](cli/inspection.md#latform-diff) -- Compare two lattice files
 - [**latform-gitdiff**](cli/inspection.md#latform-gitdiff) -- Compare a lattice file across git revisions
 - [**latform-graph**](cli/inspection.md#latform-graph) -- Visualize file dependency trees
+- [**latform-lsp**](cli/lsp.md) -- Language server for editor integration (optional `lsp` extra)
 
 ## Documentation
 
