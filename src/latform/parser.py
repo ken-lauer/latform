@@ -6,6 +6,7 @@ import logging
 import os.path
 import pathlib
 import re
+import sys
 from dataclasses import dataclass, field
 from typing import Generator, Iterable, Sequence
 
@@ -894,6 +895,24 @@ class Files:
                 keyword=Token("MARKER", loc=implicit_location, role=Role.kind),
             )
 
+        if "PARAMETER" not in named_items:
+            named_items["PARAMETER"] = Element(
+                name=Token("PARAMETER", loc=implicit_location, role=Role.name_),
+                keyword=Token("!PARAMETER", loc=implicit_location, role=Role.kind),
+            )
+
+        if "PARTICLE_START" not in named_items:
+            named_items["PARTICLE_START"] = Element(
+                name=Token("PARTICLE_START", loc=implicit_location, role=Role.name_),
+                keyword=Token("!PARTICLE_START", loc=implicit_location, role=Role.kind),
+            )
+
+        if "PTC_COM" not in named_items:
+            named_items["PTC_COM"] = Element(
+                name=Token("PTC_COM", loc=implicit_location, role=Role.name_),
+                keyword=Token("!PTC_COM", loc=implicit_location, role=Role.kind),
+            )
+
         return named_items
 
     def _write_reformatted(self, path: pathlib.Path, formatted: str) -> None:
@@ -1098,7 +1117,7 @@ STDIN_FAKE_NAME = "stdin.lat"
 
 
 def build_files(
-    filenames: list[str | pathlib.Path],
+    filenames: Sequence[str | pathlib.Path],
     *,
     combine: bool = False,
     root_path: pathlib.Path | None = None,
@@ -1123,7 +1142,6 @@ def build_files(
     list of Files
         One element if ``combine`` is True, otherwise one per input filename.
     """
-    import sys
 
     if not filenames:
         return []

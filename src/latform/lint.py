@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import enum
 import logging
 import math
 import typing
-from dataclasses import dataclass
 from functools import lru_cache
 from typing import Collection, Generator, Iterable, Sequence
-
-from nmlform import Namelist
 
 from .attrs import element_key_to_attrs
 from .const import named_physical_constants
@@ -24,7 +20,7 @@ from .statements import (
     get_controller_variables,
 )
 from .token import Token
-from .types import Attribute, CallName, Seq
+from .types import Attribute, CallName, Lint, LintCode, Seq
 from .walk import iter_tokens
 
 if typing.TYPE_CHECKING:
@@ -34,43 +30,6 @@ if typing.TYPE_CHECKING:
     from .parser import Files
 
 logger = logging.getLogger(__name__)
-
-
-class LintCode(str, enum.Enum):
-    """Stable identifiers for each lint, usable to opt out via the CLI."""
-
-    unknown_statement = "LF001"
-    undefined_reference = "LF002"
-    unknown_element_type = "LF003"
-    unknown_attribute = "LF004"
-    controller_all_zero_defaults = "LF005"
-    duplicate_attribute = "LF006"
-    unused_constant = "LF007"
-    attribute_override = "LF008"
-    ambiguous_name = "LF009"
-    use_builtin_constant = "LF010"
-
-
-@dataclass()
-class Lint:
-    code: LintCode
-    context: Statement | Namelist
-    message: str
-    relevant_tokens: list[Token] | None
-
-    def to_user_message(self):
-        clsname = type(self.context).__name__
-        obj_name = str(getattr(self.context, "name", "unnamed"))
-        parts = [f"[{self.code.value}] {obj_name!r} Statement of type {clsname!r}: {self.message}"]
-
-        if self.relevant_tokens:
-            parts.append("\n    Found near:")
-            for tok in self.relevant_tokens:
-                if tok.loc:
-                    parts.append(f"{tok.quoted()} at {tok.loc}")
-                else:
-                    parts.append(f"{tok.quoted()}")
-        return " ".join(parts)
 
 
 def lint_statements(
@@ -563,81 +522,6 @@ def lint_unknown_element_types(statements: Sequence[Statement]) -> list[Lint]:
     return lints
 
 
-def _split_element_name(name):
-    if not name:
-        return
-
-    name = name.split("##", 1)[0]
-
-    for part in name.split("\\"):
-        try:
-            int(part)
-        except ValueError:
-            pass
-        else:
-            continue
-        yield part
-
-
-def lint_datums(
-    files_obj: Files,
-    named: dict[Token, Statement],
-) -> list[Lint]:
-    """
-    Lint tao_init datums (&tao_d1_data) for undefined element references.
-    """
-    if not files_obj.tao_init:
-        return []
-
-    lints = []
-    for d1_data in files_obj.tao_init.d1_data:
-        for datum in d1_data.datums:
-            ele_names = {datum.ele_name, datum.ele_ref_name, datum.ele_start_name}
-            for name in ele_names:
-                if not name:
-                    continue
-                for ele_name in _split_element_name(name):
-                    if ele_name.upper() not in named:
-                        lints.append(
-                            Lint(
-                                code=LintCode.undefined_reference,
-                                context=d1_data.namelist,
-                                message=f"Reference to undefined element in tao_init d1_data: {name}",
-                                relevant_tokens=[],
-                            )
-                        )
-    return lints
-
-
-def lint_variables(
-    files_obj: Files,
-    named: dict[Token, Statement],
-) -> list[Lint]:
-    """
-    Lint tao_init variables (&tao_var) for undefined element references.
-    """
-    if not files_obj.tao_init:
-        return []
-
-    lints = []
-    for v1_var in files_obj.tao_init.variables:
-        for var in v1_var.variables:
-            name = var.ele_name
-            if not name:
-                continue
-            for ele_name in _split_element_name(name):
-                if ele_name.upper() not in named:
-                    lints.append(
-                        Lint(
-                            code=LintCode.undefined_reference,
-                            context=v1_var.namelist,
-                            message=f"Reference to undefined element in tao_init var: {name}",
-                            relevant_tokens=[],
-                        )
-                    )
-    return lints
-
-
 def lint_files(
     files_obj: Files,
     *,
@@ -682,12 +566,9 @@ def lint_files(
         ):
             yield fn, lint
 
-    if files_obj.tao_init:
-        init_path = files_obj.tao_init.filename or pathlib.Path("<tao.init>")
-        for lint in (*lint_datums(files_obj, named), *lint_variables(files_obj, named)):
-            # Attribute to the namelist's own source (e.g. a split-out
-            # data_file/var_file), falling back to the tao.init path.
-            yield (getattr(lint.context, "filename", None) or init_path, lint)
+    from .tao.lint import lint_tao_init_files
+
+    yield from lint_tao_init_files(files_obj, named, ignore=ignore)
 
 
 def _build_argparser():
@@ -722,7 +603,6 @@ def cli_main(args: list[str] | None = None) -> None:
     ignore_codes = cli.resolve_ignore_codes(parsed.ignore_lints)
     config = cli.resolve_config(parsed)
     filenames, from_top_level = cli.require_input_files(parsed.filename, config)
-    recursive = parsed.recursive or from_top_level
 
     found = False
     try:
@@ -732,8 +612,11 @@ def cli_main(args: list[str] | None = None) -> None:
         raise SystemExit(1) from None
 
     for files_obj in files_sets:
+        this_recursive = parsed.recursive
+        if this_recursive is None:
+            this_recursive = files_obj.tao_init is not None
         files_obj.parse(
-            recurse=recursive or files_obj.tao_init is not None,
+            recurse=this_recursive,
             raise_if_missing=parsed.error_if_missing,
         )
         files_obj.annotate()

@@ -28,3 +28,22 @@ may need adjustment to link against a Debug/Production build.
    table), and writes the final Python module to stdout.
 
 To add or improve descriptions, edit `common_attrs.py` and re-run `build.sh`.
+
+### Tao namelist schema
+
+`gen_tao_schema.py` generates `../src/latform/tao/_schema.py`: the Tao `*.init`
+namelist groups, their variables, and the reachable closure of derived-type
+structs, used by `latform.tao.schema` for namelist type validation.
+
+It depends on two external files (not in this repo or CI):
+
+- `tao_namelists_schema.json` (from the `bmad` repo)
+- `structs.json` (from the `cppbmad` repo; `codegen` must be importable)
+
+```
+PYTHONPATH=~/Repos/cppbmad python gen_tao_schema.py \
+    --schema ~/Repos/bmad/tao_namelists_schema.json \
+    --structs ~/Repos/cppbmad/structs.json
+```
+
+Regenerate and commit `tao/_schema.py` whenever the upstream schema changes.

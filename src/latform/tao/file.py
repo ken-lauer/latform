@@ -25,16 +25,23 @@ from nmlform import (
     NamelistArrayEntry,
     NamelistArrayGroup,
     NamelistFile,
+    NamelistFormatOptions,
     quote_value,
     unquote_value,
 )
-from nmlform import (
-    Token as NmlToken,
+from nmlform import Token as NmlToken
+
+from ._schema import STRUCTS
+from .enums import integer_enum_for_field
+from .schema import (
+    PathComponent,
+    check_value,
+    is_known_namelist,
+    logical_value,
+    resolve_path,
 )
 
 __all__ = [
-    "DATUM_FIELDS",
-    "VAR_FIELDS",
     "TaoDatum",
     "TaoVariable",
     "TaoD1Data",
@@ -42,42 +49,9 @@ __all__ = [
     "TaoInit",
     "is_init_file",
     "looks_like_namelist",
+    "fix_tao_namelist",
+    "format_tao_namelist",
 ]
-
-# `tao_datum_input` fields in declaration order
-DATUM_FIELDS: tuple[str, ...] = (
-    "data_type",
-    "ele_ref_name",
-    "ele_start_name",
-    "ele_name",
-    "merit_type",
-    "meas",
-    "weight",
-    "good_user",
-    "good_opt",
-    "data_source",
-    "eval_point",
-    "s_offset",
-    "ref_s_offset",
-    "ix_bunch",
-)
-
-# `tao_var_input` fields in declaration order
-# (ref $ACC_ROOT_DIR/tao/code/tao_input_struct.f90)
-VAR_FIELDS: tuple[str, ...] = (
-    "ele_name",
-    "attribute",
-    "universe",
-    "weight",
-    "step",
-    "low_lim",
-    "high_lim",
-    "merit_type",
-    "good_user",
-    "key_bound",
-    "key_delta",
-    "meas",
-)
 
 # ``&tao_start`` keys that name an auxiliary file whose namelists we can parse.
 SOURCE_FILE_KEYS: tuple[str, ...] = (
@@ -135,7 +109,7 @@ def _read_if_exists(path: pathlib.Path) -> str | None:
 class TaoDatum(NamelistArrayEntry):
     """A single ``datum(i)`` entry within a ``&tao_d1_data`` group."""
 
-    FIELDS: ClassVar[tuple[str, ...]] = DATUM_FIELDS
+    FIELDS: ClassVar[tuple[str, ...]] = tuple(STRUCTS["tao_datum_input"])
 
     @property
     def data_type(self) -> NmlToken | None:
@@ -170,7 +144,7 @@ class TaoDatum(NamelistArrayEntry):
 class TaoVariable(NamelistArrayEntry):
     """A single ``var(i)`` entry within a ``&tao_var`` group."""
 
-    FIELDS: ClassVar[tuple[str, ...]] = VAR_FIELDS
+    FIELDS: ClassVar[tuple[str, ...]] = tuple(STRUCTS["tao_var_input"])
 
     @property
     def ele_name(self) -> NmlToken | None:
@@ -504,3 +478,194 @@ class TaoInit(NamelistFile):
     def building_wall_sections(self) -> list[Namelist]:
         """The ``&building_wall_section`` groups, from the ``building_wall_file`` source."""
         return self.namelists_for("building_wall_section")
+
+
+def _parse_index(index_text: str | None) -> int | None:
+    """A component subscript as an int, or ``None`` if absent/non-integer/multi-dim."""
+    if not index_text:
+        return None
+    try:
+        return int(index_text)
+    except ValueError:
+        return None
+
+
+def path_components(assignment: Assignment) -> list[PathComponent]:
+    """The schema `PathComponent` sequence for a namelist assignment's key."""
+    return [
+        PathComponent(component.name, _parse_index(component.index_text))
+        for component in assignment.path.components
+    ]
+
+
+def _enum_index(value: str) -> int | None:
+    """
+    The integer an index literal denotes, whether bare (``2``) or quoted (``'2'``).
+
+    Tao accepts an enum index in either form, so a quoted index is unwrapped
+    before parsing. Returns ``None`` when the literal is not an integer.
+    """
+    text = value.strip()
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _fix_character_value(value: str, enum: dict[int, str] | None) -> str:
+    """
+    Normalize one character value: map an enum index to its name, else quote.
+
+    When ``enum`` governs the field (e.g. the color map) and ``value`` is an
+    integer index in it — bare (``2``) or quoted (``'2'``) — the value becomes
+    the quoted enum name (``'red'``); an integer not in the map is left as
+    written, since Tao also accepts the numeric form. Otherwise an unquoted
+    value is quoted and an already-quoted value is returned unchanged.
+    """
+    if enum is not None:
+        index = _enum_index(value)
+        if index is not None:
+            name = enum.get(index)
+            return quote_value(name) if name is not None else value.lower()
+    if check_value("character", value):
+        return value
+    return quote_value(value)
+
+
+def _fix_character_token(text: str, enum: dict[int, str] | None) -> str:
+    """
+    Normalize a character value literal, preserving any Fortran ``n*`` repeat.
+
+    Only the value part of an ``n*value`` repeat is normalized (via
+    `_fix_character_value`); everything else is left intact.
+    """
+    count, star, value = text.partition("*")
+    if star and count.strip().lstrip("+-").isdigit():
+        return f"{count}*{_fix_character_value(value, enum)}"
+    return _fix_character_value(text, enum)
+
+
+def _fixed_character_value(assignment: Assignment, enum: dict[int, str] | None) -> str | None:
+    """
+    The assignment's right-hand side with each character value normalized.
+
+    Returns ``None`` when nothing changed, so the caller can skip the edit.
+    """
+    changed = False
+    parts = []
+    for token in assignment.field_tokens:
+        fixed = _fix_character_token(token.text, enum)
+        parts.append(fixed)
+        changed = changed or fixed != token.text
+    return " ".join(parts) if changed else None
+
+
+def _fix_logical_token(text: str, pair: tuple[str, str]) -> str:
+    """
+    Rewrite a logical value literal to the canonical ``pair`` (true, false).
+
+    Any Fortran ``n*`` repeat prefix is preserved. A literal that is not a valid
+    logical is returned unchanged, so the validator can still flag it.
+    """
+    count, star, value = text.partition("*")
+    if star and count.strip().lstrip("+-").isdigit():
+        prefix, value = f"{count}*", value
+    else:
+        prefix, value = "", text
+    truth = logical_value(value)
+    if truth is None:
+        return text
+    return prefix + (pair[0] if truth else pair[1])
+
+
+def _fixed_logical_value(assignment: Assignment, pair: tuple[str, str]) -> str | None:
+    """
+    The assignment's right-hand side with each logical value canonicalized.
+
+    Returns ``None`` when nothing changed, so the caller can skip the edit.
+    """
+    changed = False
+    parts = []
+    for token in assignment.field_tokens:
+        fixed = _fix_logical_token(token.text, pair)
+        parts.append(fixed)
+        changed = changed or fixed != token.text
+    return " ".join(parts) if changed else None
+
+
+def _fix_namelist_group(group: Namelist, logicals: tuple[str, str] | None) -> None:
+    """Normalize character (quoting, enum index -> name) and logical assignments."""
+    if not is_known_namelist(group.name):
+        return
+    # `Namelist.set` reparses (invalidating `group.assignments`), so collect the
+    # edits first, then apply them.
+    edits: list[tuple[str, str]] = []
+    for assignment in group.assignments:
+        components = path_components(assignment)
+        leaf = resolve_path(group.name, components).leaf
+        if leaf is None or leaf.kind != "intrinsic":
+            continue
+        if leaf.base == "character":
+            enum = integer_enum_for_field([component.name for component in components])
+            fixed = _fixed_character_value(assignment, enum)
+        elif leaf.base == "logical" and logicals is not None:
+            fixed = _fixed_logical_value(assignment, logicals)
+        else:
+            continue
+        if fixed is not None:
+            edits.append((assignment.key, fixed))
+    for key, value in edits:
+        group.set(key, value)
+
+
+def fix_tao_namelist(
+    namelist: Namelist | NamelistFile,
+    *,
+    logicals: tuple[str, str] | None = ("T", "F"),
+) -> None:
+    """
+    Normalize namelist assignments in place against the Tao type schema.
+
+    This quotes character-valued assignments written unquoted (e.g.
+    ``plot_file = tao.init`` -> ``plot_file = 'tao.init'``), which Tao reads the
+    same but which are otherwise a type error, and rewrites integer indices in
+    enum-valued character fields to their names (e.g. a color ``prompt_color = 2``
+    -> ``prompt_color = 'red'``).
+
+    Logical values are canonicalized to ``logicals`` — a ``(true, false)`` token
+    pair, ``("T", "F")`` by default — so ``.true.``/``TRUE``/``t`` become ``T``
+    and ``.false.``/``F``/``f`` become ``F``. Pass ``logicals=None`` to leave
+    logicals untouched.
+
+    Given a `NamelistFile`, every group in it is fixed; groups (and files) whose
+    namelist name is not in the schema are left untouched.
+    """
+    if isinstance(namelist, NamelistFile):
+        for item in namelist.items:
+            if isinstance(item, Namelist):
+                _fix_namelist_group(item, logicals)
+    else:
+        _fix_namelist_group(namelist, logicals)
+
+
+def format_tao_namelist(
+    namelist: Namelist | NamelistFile,
+    *,
+    options: NamelistFormatOptions | None = None,
+    fix_types: bool = True,
+    logicals: tuple[str, str] | None = ("T", "F"),
+) -> str:
+    """
+    Render a Tao namelist (or file), first fixing argument types when asked.
+
+    With ``fix_types`` (the default), `fix_tao_namelist` runs first — quoting
+    character values, mapping enum indices to names, and canonicalizing logicals
+    to ``logicals`` (the ``(true, false)`` pair, default ``("T", "F")``; pass
+    ``None`` to leave logicals alone). This mutates ``namelist`` in place; render
+    the original first if you need the unmodified text.
+    """
+    if fix_types:
+        fix_tao_namelist(namelist, logicals=logicals)
+    return namelist.render(options)

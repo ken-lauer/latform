@@ -16,6 +16,7 @@ from .debug import print_blocks
 from .lint import lint_files
 from .output import format_statements
 from .parser import Files, build_files
+from .tao import format_tao_namelist
 from .types import FormatOptions, NameCase, NamelistFormatOptions
 
 DESCRIPTION = __doc__
@@ -89,11 +90,16 @@ def process_files(
     config: LatformProjectConfig | None = None,
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
-    files_obj.parse(
-        recurse=recursive,
-        raise_if_missing=error_if_missing,
-        keep_blocks=verbose > 0,
-    )
+
+    only_tao_init = files_obj.tao_init is not None and not recursive
+
+    if not only_tao_init:
+        files_obj.parse(
+            recurse=recursive,
+            raise_if_missing=error_if_missing,
+            keep_blocks=verbose > 0,
+        )
+
     files_obj.annotate()
 
     if options.renames:
@@ -118,8 +124,14 @@ def process_files(
 
     if files_obj.tao_init is not None and files_obj.tao_init.filename is not None:
         init_path = files_obj.tao_init.filename
+        logicals = config.namelist_logicals if config is not None else ("T", "F")
         init_original = files_obj.tao_init.render()
-        init_formatted = files_obj.tao_init.render(options.namelist if format_namelist else None)
+        init_formatted = format_tao_namelist(
+            files_obj.tao_init,
+            options=options.namelist if format_namelist else None,
+            fix_types=format_namelist,
+            logicals=logicals,
+        )
         results[init_path] = (init_original, init_formatted)
         top_set.add(init_path)
 
@@ -178,7 +190,7 @@ def main(
     line_length: int = 100,
     max_line_length: int | None = 0,
     compact: bool = False,
-    recursive: bool = False,
+    recursive: bool | None = None,
     in_place: bool = False,
     name_case: NameCase = "upper",
     attribute_case: NameCase = "lower",
@@ -244,13 +256,18 @@ def main(
     )
     if namelist_options is not None:
         options.namelist = namelist_options
-    recursive = recursive or options.flatten_call  # implied
 
     for files_obj in build_files(filenames, combine=combine):
+        this_recursive = recursive
+        if recursive is None:
+            this_recursive = options.flatten_call or files_obj.tao_init is not None  # implied
+        else:
+            this_recursive = recursive
+
         process_files(
             files_obj,
             options,
-            recursive=recursive,
+            recursive=this_recursive,
             verbose=verbose,
             in_place=in_place,
             diff=diff,
@@ -451,6 +468,7 @@ def cli_main(args: list[str] | None = None) -> None:
             kwargs.pop(dest, None)
 
     filenames, from_top_level = cli.require_input_files(filenames, config)
+
     if from_top_level:
         kwargs["recursive"] = True
 

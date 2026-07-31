@@ -1,0 +1,873 @@
+{
+  "description": "Tao initialization namelists: variable -> Fortran type/structure mapping with array sizing. Extracted from tao/code/tao_init*.f90.",
+  "kind_legend": {
+    "intrinsic": "Fortran intrinsic type (real/integer/logical/character).",
+    "derived": "Fortran derived type (structure); type_name is the exact struct name."
+  },
+  "array_legend": {
+    "null": "Scalar (not an array).",
+    "[lbound, ubound]": "Fixed-size rank-1 array with these declared bounds (inclusive).",
+    "[1, null]": "Rank-1 allocatable; lower bound 1, upper bound determined at read time."
+  },
+  "namelists": [
+    {
+      "name": "tao_start",
+      "read_by": "tao_init",
+      "source_file": "tao/code/tao_init.f90",
+      "variables": [
+        {
+          "var": "startup_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "building_wall_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "hook_init_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "data_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "var_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "plot_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "beam_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "n_universes",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "init_name",
+          "kind": "intrinsic",
+          "type_name": "character(16)",
+          "array": null
+        }
+      ],
+      "file_key": null
+    },
+    {
+      "name": "tao_params",
+      "read_by": "tao_init_global",
+      "source_file": "tao/code/tao_init_mod.f90",
+      "variables": [
+        {
+          "var": "global",
+          "kind": "derived",
+          "type_name": "tao_global_struct",
+          "array": null
+        },
+        {
+          "var": "bmad_com",
+          "kind": "derived",
+          "type_name": "bmad_common_struct",
+          "array": null
+        },
+        {
+          "var": "space_charge_com",
+          "kind": "derived",
+          "type_name": "space_charge_common_struct",
+          "array": null
+        },
+        {
+          "var": "opti_de_param",
+          "kind": "derived",
+          "type_name": "opti_de_param_struct",
+          "array": null
+        },
+        {
+          "var": "n_data_max",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "n_var_max",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "n_d2_data_max",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "n_v1_var_max",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        }
+      ],
+      "file_key": null
+    },
+    {
+      "name": "tao_design_lattice",
+      "read_by": "tao_init_lattice",
+      "source_file": "tao/code/tao_init_lattice.f90",
+      "variables": [
+        {
+          "var": "design_lattice",
+          "kind": "derived",
+          "type_name": "tao_design_lat_input",
+          "array": [
+            1,
+            200
+          ]
+        },
+        {
+          "var": "combine_consecutive_elements_of_like_name",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        },
+        {
+          "var": "unique_name_suffix",
+          "kind": "intrinsic",
+          "type_name": "character(100)",
+          "array": null
+        },
+        {
+          "var": "n_universes",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        }
+      ],
+      "file_key": null
+    },
+    {
+      "name": "tao_dynamic_aperture",
+      "read_by": "tao_init_dynamic_aperture",
+      "source_file": "tao/code/tao_init_mod.f90",
+      "variables": [
+        {
+          "var": "ix_universe",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "da_param",
+          "kind": "derived",
+          "type_name": "aperture_param_struct",
+          "array": null
+        },
+        {
+          "var": "pz",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": [
+            1,
+            100
+          ]
+        },
+        {
+          "var": "a_emit",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "b_emit",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "ellipse_scale",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        }
+      ],
+      "file_key": null
+    },
+    {
+      "name": "tao_beam_init",
+      "read_by": "tao_init_beams",
+      "source_file": "tao/code/tao_init_mod.f90",
+      "variables": [
+        {
+          "var": "ix_universe",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "beam_init",
+          "kind": "derived",
+          "type_name": "beam_init_struct",
+          "array": null
+        },
+        {
+          "var": "always_reinit",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        },
+        {
+          "var": "beam0_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "beam_init_file_name",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "beam_position0_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "beam_track_start",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "beam_track_end",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "beam_saved_at",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "beam_dump_at",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "beam_dump_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "track_start",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "track_end",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "saved_at",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "dump_at",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "dump_file",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "comb_ds_save",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        }
+      ],
+      "file_key": "beam_file"
+    },
+    {
+      "name": "tao_var",
+      "read_by": "tao_init_variables",
+      "source_file": "tao/code/tao_init_variables_mod.f90",
+      "variables": [
+        {
+          "var": "v1_var",
+          "kind": "derived",
+          "type_name": "tao_v1_var_input",
+          "array": null
+        },
+        {
+          "var": "var",
+          "kind": "derived",
+          "type_name": "tao_var_input",
+          "array": [
+            -100,
+            5000
+          ]
+        },
+        {
+          "var": "default_weight",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_meas",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_step",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_key_delta",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "ix_min_var",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "ix_max_var",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "default_universe",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "default_attribute",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "default_low_lim",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_high_lim",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_merit_type",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "default_good_user",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        },
+        {
+          "var": "use_same_lat_eles_as",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "search_for_lat_eles",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "default_key_bound",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        }
+      ],
+      "file_key": "var_file"
+    },
+    {
+      "name": "tao_d2_data",
+      "read_by": "tao_init_data",
+      "source_file": "tao/code/tao_init_data_mod.f90",
+      "variables": [
+        {
+          "var": "d2_data",
+          "kind": "derived",
+          "type_name": "tao_d2_data_input",
+          "array": null
+        },
+        {
+          "var": "n_d1_data",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "universe",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "default_merit_type",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "default_weight",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_meas",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_data_type",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "default_data_source",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        }
+      ],
+      "file_key": "data_file"
+    },
+    {
+      "name": "tao_d1_data",
+      "read_by": "tao_init_data",
+      "source_file": "tao/code/tao_init_data_mod.f90",
+      "variables": [
+        {
+          "var": "d1_data",
+          "kind": "derived",
+          "type_name": "tao_d1_data_input",
+          "array": null
+        },
+        {
+          "var": "datum",
+          "kind": "derived",
+          "type_name": "tao_datum_input",
+          "array": [
+            1,
+            null
+          ]
+        },
+        {
+          "var": "ix_d1_data",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "default_merit_type",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "default_weight",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_meas",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "default_data_type",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "default_data_source",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "use_same_lat_eles_as",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "search_for_lat_eles",
+          "kind": "intrinsic",
+          "type_name": "character(200)",
+          "array": null
+        },
+        {
+          "var": "ix_min_data",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "ix_max_data",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        }
+      ],
+      "file_key": "data_file"
+    },
+    {
+      "name": "building_wall_orientation",
+      "read_by": "tao_init_building_wall",
+      "source_file": "tao/code/tao_init_building_wall.f90",
+      "variables": [
+        {
+          "var": "theta",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "x_offset",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        },
+        {
+          "var": "z_offset",
+          "kind": "intrinsic",
+          "type_name": "real(rp)",
+          "array": null
+        }
+      ],
+      "file_key": "building_wall_file",
+      "note": "Only read if building_wall_file is set (no default)."
+    },
+    {
+      "name": "building_wall_section",
+      "read_by": "tao_init_building_wall",
+      "source_file": "tao/code/tao_init_building_wall.f90",
+      "variables": [
+        {
+          "var": "constraint",
+          "kind": "intrinsic",
+          "type_name": "character(16)",
+          "array": null
+        },
+        {
+          "var": "name",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "point",
+          "kind": "derived",
+          "type_name": "tao_building_wall_point_struct",
+          "array": [
+            1,
+            100
+          ]
+        }
+      ],
+      "file_key": "building_wall_file",
+      "note": "Only read if building_wall_file is set (no default)."
+    },
+    {
+      "name": "tao_plot_page",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "plot_page",
+          "kind": "derived",
+          "type_name": "tao_plot_page_input",
+          "array": null
+        },
+        {
+          "var": "default_plot",
+          "kind": "derived",
+          "type_name": "tao_plot_input",
+          "array": null
+        },
+        {
+          "var": "default_graph",
+          "kind": "derived",
+          "type_name": "tao_graph_input",
+          "array": null
+        },
+        {
+          "var": "region",
+          "kind": "derived",
+          "type_name": "tao_region_input",
+          "array": [
+            1,
+            100
+          ]
+        },
+        {
+          "var": "place",
+          "kind": "derived",
+          "type_name": "tao_place_input",
+          "array": [
+            1,
+            30
+          ]
+        },
+        {
+          "var": "include_default_plots",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "tao_template_plot",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "plot",
+          "kind": "derived",
+          "type_name": "tao_plot_input",
+          "array": null
+        },
+        {
+          "var": "default_graph",
+          "kind": "derived",
+          "type_name": "tao_graph_input",
+          "array": null
+        },
+        {
+          "var": "default_curve",
+          "kind": "derived",
+          "type_name": "tao_curve_input",
+          "array": null
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "tao_template_graph",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "graph",
+          "kind": "derived",
+          "type_name": "tao_graph_input",
+          "array": null
+        },
+        {
+          "var": "graph_index",
+          "kind": "intrinsic",
+          "type_name": "integer",
+          "array": null
+        },
+        {
+          "var": "curve",
+          "kind": "derived",
+          "type_name": "tao_curve_input",
+          "array": [
+            1,
+            40
+          ]
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "floor_plan_drawing",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "ele_shape",
+          "kind": "derived",
+          "type_name": "tao_ele_shape_input",
+          "array": [
+            1,
+            60
+          ]
+        },
+        {
+          "var": "include_default_shapes",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "lat_layout_drawing",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "ele_shape",
+          "kind": "derived",
+          "type_name": "tao_ele_shape_input",
+          "array": [
+            1,
+            60
+          ]
+        },
+        {
+          "var": "include_default_shapes",
+          "kind": "intrinsic",
+          "type_name": "logical",
+          "array": null
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "element_shapes",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "deprecated": true,
+      "note": "Legacy shape namelist; superseded by element_shapes_floor_plan / element_shapes_lat_layout.",
+      "variables": [
+        {
+          "var": "shape",
+          "kind": "derived",
+          "type_name": "old_tao_ele_shape_struct",
+          "array": [
+            1,
+            30
+          ]
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "element_shapes_floor_plan",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "ele_shape",
+          "kind": "derived",
+          "type_name": "tao_ele_shape_input",
+          "array": [
+            1,
+            60
+          ]
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "element_shapes_lat_layout",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "ele_shape",
+          "kind": "derived",
+          "type_name": "tao_ele_shape_input",
+          "array": [
+            1,
+            60
+          ]
+        }
+      ],
+      "file_key": "plot_file"
+    },
+    {
+      "name": "shape_pattern",
+      "read_by": "tao_init_plotting",
+      "source_file": "tao/code/tao_init_plotting.f90",
+      "variables": [
+        {
+          "var": "name",
+          "kind": "intrinsic",
+          "type_name": "character(40)",
+          "array": null
+        },
+        {
+          "var": "line",
+          "kind": "derived",
+          "type_name": "qp_line_struct",
+          "array": null
+        },
+        {
+          "var": "pt",
+          "kind": "derived",
+          "type_name": "tao_shape_pattern_point_struct",
+          "array": [
+            1,
+            30
+          ]
+        },
+        {
+          "var": "scale",
+          "kind": "intrinsic",
+          "type_name": "character(8)",
+          "array": null
+        }
+      ],
+      "file_key": "plot_file"
+    }
+  ],
+  "files_note": "All namelists are read from tao.init by default. Those with a non-null 'file_key' can instead be read from a separate file whose path is given by that key in the tao_start namelist; if the key is unset the namelist stays in tao.init. Exception: building_wall_file has no default, so the building_wall namelists are only read if that path is given."
+}

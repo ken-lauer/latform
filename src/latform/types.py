@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import pathlib
 import typing
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ from .token import Comments, Delimiter, Location, Role, Token
 from .util import delimit, flatten, partition_items, split_items
 
 if typing.TYPE_CHECKING:
+    from nmlform import Namelist
+
     from .output import FormatOptions
     from .statements import Statement
 
@@ -469,13 +472,8 @@ class FormatOptions:
     flatten_inline: bool = False
     newline_at_eof: bool = True
     strip_comments: bool = False
+    # All namelist (*.init/*.nml) formatting lives on this sub-dataclass.
     namelist: NamelistFormatOptions = field(default_factory=NamelistFormatOptions)
-    # For now, reuses indent_size/indent_char for field indentation
-    # namelist_indent_size: int = 2
-    # namelist_indent_char: str = " "
-    namelist_field_case: NameCase = "lower"
-    namelist_align_equals: bool = False
-    namelist_align_comments: bool = True  # uses comment_col
 
 
 @dataclass
@@ -503,3 +501,44 @@ class OutputLine:
 
 SequencePart = Attribute | Seq | Token
 TokenizerItem = Block | Token | Delimiter
+
+
+class LintCode(str, enum.Enum):
+    """Stable identifiers for each lint, usable to opt out via the CLI."""
+
+    unknown_statement = "LF001"
+    undefined_reference = "LF002"
+    unknown_element_type = "LF003"
+    unknown_attribute = "LF004"
+    controller_all_zero_defaults = "LF005"
+    duplicate_attribute = "LF006"
+    unused_constant = "LF007"
+    attribute_override = "LF008"
+    ambiguous_name = "LF009"
+    use_builtin_constant = "LF010"
+    tao_unknown_field = "LF011"
+    tao_type_mismatch = "LF012"
+    tao_index_out_of_bounds = "LF013"
+    tao_string_too_long = "LF014"
+
+
+@dataclass()
+class Lint:
+    code: LintCode
+    context: Statement | Namelist
+    message: str
+    relevant_tokens: list[Token] | None
+
+    def to_user_message(self):
+        clsname = type(self.context).__name__
+        obj_name = str(getattr(self.context, "name", "unnamed"))
+        parts = [f"[{self.code.value}] {obj_name!r} Statement of type {clsname!r}: {self.message}"]
+
+        if self.relevant_tokens:
+            parts.append("\n    Found near:")
+            for tok in self.relevant_tokens:
+                if tok.loc:
+                    parts.append(f"{tok.quoted()} at {tok.loc}")
+                else:
+                    parts.append(f"{tok.quoted()}")
+        return " ".join(parts)

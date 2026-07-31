@@ -432,16 +432,18 @@ def test_cli_interpolate_namelist_field_case(tmp_path, capsys):
     assert "\n  X = 1\n" in capsys.readouterr().out
 
 
-def test_cli_interpolate_namelist_align_equals(tmp_path, capsys):
+def test_cli_interpolate_no_namelist_align_equals(tmp_path, capsys):
     (tmp_path / "a.nml").write_text(_ALIGN_NML)
-    cli_main_apply([str(tmp_path / "a.nml"), "--namelist-align-equals"])
-    assert "\n  a    = 1  ! one\n" in capsys.readouterr().out
+    cli_main_apply([str(tmp_path / "a.nml"), "--no-namelist-align-equals"])
+    # Equals no longer aligned; comments still are (the default).
+    assert "\n  a = 1     ! one\n" in capsys.readouterr().out
 
 
 def test_cli_interpolate_no_namelist_align_comments(tmp_path, capsys):
     (tmp_path / "a.nml").write_text(_ALIGN_NML)
     cli_main_apply([str(tmp_path / "a.nml"), "--no-namelist-align-comments"])
-    assert "\n  a = 1 ! one\n" in capsys.readouterr().out
+    # Equals are aligned (the default), but comments are not.
+    assert "\n  a    = 1 ! one\n" in capsys.readouterr().out
 
 
 def test_cli_interpolate_no_format_namelist(tmp_path, capsys):
@@ -492,7 +494,8 @@ def test_cli_interpolate_in_place_namelist(tmp_path, capsys):
     path = tmp_path / "tao.init"
     path.write_text(_NML_SRC)
     cli_main_apply([str(path), "-i", "--set", "tao_params", "global%plot_on", "F"])
-    assert "global%plot_on = F" in path.read_text()
+    # Equals are aligned by default, so the shorter key is padded to the column.
+    assert "global%plot_on       = F" in path.read_text()
     assert "wrote:" in capsys.readouterr().out
 
 
