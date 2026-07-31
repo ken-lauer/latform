@@ -12,6 +12,7 @@ nav:
       - Linting: cli/lint.md
       - Templating: cli/templating.md
       - Inspection/diff: cli/inspection.md
+      - Language server: cli/lsp.md
   - Developers:
       - Python API: api.md
       - Development: development/development_guidelines.md
