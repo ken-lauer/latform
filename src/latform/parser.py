@@ -1121,6 +1121,7 @@ def build_files(
     *,
     combine: bool = False,
     root_path: pathlib.Path | None = None,
+    input_format: str | None = None,
 ) -> list[Files]:
     """
     Construct one or more `Files` objects from CLI-style filename arguments.
@@ -1136,6 +1137,13 @@ def build_files(
         semantics of the legacy CLI loop.
     root_path : pathlib.Path, optional
         Directory used to resolve the synthetic stdin path. Defaults to ``Path.cwd()``.
+    input_format : {"bmad", "namelist"}, optional
+        Force how inputs are interpreted. ``None`` (default) auto-detects: an
+        input is treated as a Tao ``tao.init`` namelist when it is named
+        ``*.init`` or its contents look like a namelist (see
+        `looks_like_namelist`); otherwise it is treated as Bmad. ``"namelist"``
+        forces namelist handling for files that would not otherwise be detected;
+        ``"bmad"`` forces lattice handling even for a ``*.init`` file.
 
     Returns
     -------
@@ -1151,15 +1159,31 @@ def build_files(
     def _is_stdin(fn) -> bool:
         return str(fn) == STDIN_TOKEN
 
+    def _is_namelist(fn, contents: str | None = None) -> bool:
+        """Decide whether ``fn`` should be handled as a Tao namelist file."""
+        if input_format is not None:
+            return input_format == "namelist"
+        if is_init_file(fn):
+            return True
+        if contents is None:
+            # Peek at the file to auto-detect a misnamed namelist.
+            try:
+                contents = pathlib.Path(fn).read_text()
+            except OSError:
+                return False
+        return looks_like_namelist(contents)
+
     def _make_one(fn: str | pathlib.Path) -> Files:
         if _is_stdin(fn):
             fake_name = (root_path / STDIN_FAKE_NAME).resolve()
-            files = MemoryFiles(
-                top_files=[fake_name], initial_contents={fake_name: sys.stdin.read()}
-            )
+            contents = sys.stdin.read()
+            if _is_namelist(fn, contents):
+                files: Files = MemoryFiles.from_tao_init_contents(contents, fake_name)
+            else:
+                files = MemoryFiles(top_files=[fake_name], initial_contents={fake_name: contents})
             files.local_file_to_source_filename[fake_name] = STDIN_LABEL
             return files
-        if is_init_file(fn):
+        if _is_namelist(fn):
             return Files.from_tao_init(fn)
         return Files(top_files=[pathlib.Path(fn)])
 
@@ -1176,9 +1200,15 @@ def build_files(
             if stdin_path is not None:
                 raise ValueError("stdin ('-') can only be used once when combining inputs")
             stdin_path = (root_path / STDIN_FAKE_NAME).resolve()
-            top_files.append(stdin_path)
-            initial_contents[stdin_path] = sys.stdin.read()
-        elif is_init_file(fn):
+            contents = sys.stdin.read()
+            if _is_namelist(fn, contents):
+                stdin_files = MemoryFiles.from_tao_init_contents(contents, stdin_path)
+                top_files.extend(stdin_files.top_files)
+                initial_contents.update(stdin_files.initial_contents)
+            else:
+                top_files.append(stdin_path)
+                initial_contents[stdin_path] = contents
+        elif _is_namelist(fn):
             top_files.extend(Files.from_tao_init(fn).top_files)
         else:
             top_files.append(pathlib.Path(fn))

@@ -45,6 +45,16 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="Process all input files together as a single set, sharing one parse stack.",
     )
     parser.add_argument(
+        "--format",
+        dest="input_format",
+        choices=("bmad", "namelist"),
+        default=None,
+        help=(
+            "Force how input file(s) are interpreted: 'bmad' lattice or 'namelist' "
+            "(a Tao tao.init). Default: auto-detect from the extension or contents."
+        ),
+    )
+    parser.add_argument(
         "-e",
         "--error-if-missing",
         action="store_true",

@@ -91,7 +91,9 @@ def process_files(
 ) -> None:
     """Parse, annotate, lint, format, and emit one Files set."""
 
-    only_tao_init = files_obj.tao_init is not None and not recursive
+    # A tao.init is processed on its own (only the namelist, no lattices) when
+    # recursion is off, or when it references no design lattices to parse.
+    only_tao_init = files_obj.tao_init is not None and (not recursive or not files_obj.top_files)
 
     if not only_tao_init:
         files_obj.parse(
@@ -110,7 +112,11 @@ def process_files(
 
     if lint:
         for fn, lint_item in lint_files(
-            files_obj, assume_defined=assume_defined, ignore=ignore_lints, config=config
+            files_obj,
+            assume_defined=assume_defined,
+            ignore=ignore_lints,
+            config=config,
+            check_references=not only_tao_init,
         ):
             msg = lint_item.to_user_message()
             if recursive:
@@ -215,6 +221,7 @@ def main(
     ignore_lints: list[str] | None = None,
     format_namelist: bool = True,
     namelist_options: NamelistFormatOptions | None = None,
+    input_format: str | None = None,
     config: LatformProjectConfig | None = None,
 ) -> None:
     if verbose >= 4:
@@ -257,7 +264,7 @@ def main(
     if namelist_options is not None:
         options.namelist = namelist_options
 
-    for files_obj in build_files(filenames, combine=combine):
+    for files_obj in build_files(filenames, combine=combine, input_format=input_format):
         this_recursive = recursive
         if recursive is None:
             this_recursive = options.flatten_call or files_obj.tao_init is not None  # implied
