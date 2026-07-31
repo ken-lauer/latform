@@ -110,7 +110,11 @@ def process_files(
 
     if lint:
         for fn, lint_item in lint_files(
-            files_obj, assume_defined=assume_defined, ignore=ignore_lints, config=config
+            files_obj,
+            assume_defined=assume_defined,
+            ignore=ignore_lints,
+            config=config,
+            check_references=recursive,
         ):
             msg = lint_item.to_user_message()
             if recursive:

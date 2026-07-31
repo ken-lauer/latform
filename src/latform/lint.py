@@ -528,6 +528,7 @@ def lint_files(
     assume_defined: bool = True,
     ignore: Collection[str] = (),
     config: LatformProjectConfig | None = None,
+    check_references: bool = True,
 ) -> Generator[tuple[pathlib.Path, Lint], None, None]:
     """
     Yield ``(filename, lint)`` for every lint across a parsed `Files` set.
@@ -544,6 +545,11 @@ def lint_files(
         When given, its global and per-file lint ignores are merged in per
         file, and its ``min-name-length`` / ``builtin-constant-rtol`` settings
         apply.
+    check_references : bool, optional
+        Whether to validate ``tao.init`` datum/variable element references
+        against the loaded lattice. Pass False when the set was parsed
+        non-recursively, since the element namespace is then incomplete and the
+        references cannot be resolved reliably.
     """
     named = files_obj.get_named_items()
     used_names = get_used_names(
@@ -568,7 +574,9 @@ def lint_files(
 
     from .tao.lint import lint_tao_init_files
 
-    yield from lint_tao_init_files(files_obj, named, ignore=ignore)
+    yield from lint_tao_init_files(
+        files_obj, named, ignore=ignore, check_references=check_references
+    )
 
 
 def _build_argparser():
@@ -615,16 +623,22 @@ def cli_main(args: list[str] | None = None) -> None:
         this_recursive = parsed.recursive
         if this_recursive is None:
             this_recursive = files_obj.tao_init is not None
-        files_obj.parse(
-            recurse=this_recursive,
-            raise_if_missing=parsed.error_if_missing,
-        )
+
+        # A tao.init linted non-recursively is linted on its own: the referenced
+        # design lattices are not loaded, so only the namelist itself is checked.
+        only_tao_init = files_obj.tao_init is not None and not this_recursive
+        if not only_tao_init:
+            files_obj.parse(
+                recurse=this_recursive,
+                raise_if_missing=parsed.error_if_missing,
+            )
         files_obj.annotate()
         for fn, lint in lint_files(
             files_obj,
             assume_defined=parsed.assume_defined,
             ignore=ignore_codes,
             config=config,
+            check_references=this_recursive,
         ):
             found = True
             name = files_obj.local_file_to_source_filename.get(fn, str(fn))

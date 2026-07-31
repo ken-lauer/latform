@@ -229,6 +229,7 @@ def lint_tao_init_files(
     named: dict[Token, Statement],
     *,
     ignore: Collection[str] = (),
+    check_references: bool = True,
 ) -> Generator[tuple[pathlib.Path, Lint], None, None]:
     """
     Yield ``(filename, lint)`` for every Tao ``*.init`` lint in a parsed file set.
@@ -236,14 +237,23 @@ def lint_tao_init_files(
     Covers datum/variable element references and schema type validation across
     ``tao.init`` and its split-out source files. ``ignore`` lists lint codes
     (e.g. ``"LF012"``) to suppress. No-op when the file set has no ``tao.init``.
+
+    Parameters
+    ----------
+    check_references : bool, optional
+        Whether to validate datum/variable element references against ``named``.
+        This is only meaningful when the referenced lattices are fully loaded, so
+        callers pass False when parsing non-recursively (``named`` is then
+        incomplete and every reference would spuriously look undefined). Schema
+        type validation, which does not depend on the lattice, still runs.
     """
     if not files_obj.tao_init:
         return
     init_path = files_obj.tao_init.filename or pathlib.Path("<tao.init>")
     ignored = {code.upper() for code in ignore}
     tao_lints = (
-        *lint_datums(files_obj.tao_init, named),
-        *lint_variables(files_obj.tao_init, named),
+        *(lint_datums(files_obj.tao_init, named) if check_references else ()),
+        *(lint_variables(files_obj.tao_init, named) if check_references else ()),
         *lint_tao_schema(files_obj.tao_init),
     )
     for lint in tao_lints:

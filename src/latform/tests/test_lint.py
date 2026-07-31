@@ -597,6 +597,39 @@ def test_lint_cli_ignore_suppresses_findings(tmp_path):
     assert excinfo.value.code == 0
 
 
+def test_lint_cli_no_recursive_tao_init_skips_lattice(tmp_path, caplog):
+    """
+    ``latform-lint --no-recursive tao.init`` lints only the namelist: the
+    referenced design lattices are not loaded, so their lints (and datum/variable
+    element references) are not reported. Namelist schema checks still run.
+    """
+    (tmp_path / "lat.bmad").write_text("q1: quadrupole, bogus_attr = 1\nml: line = (q1)\nuse, ml\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'lat.bmad'\n"
+        "/\n\n"
+        "&tao_params\n"
+        "  global%bogus_field = 1\n"
+        "/\n"
+    )
+    init = str(tmp_path / "tao.init")
+
+    with caplog.at_level(logging.WARNING, logger="latform.lint"):
+        with pytest.raises(SystemExit):
+            cli_main([init])
+    recursive = [rec.getMessage() for rec in caplog.records]
+    assert any("LF004" in m for m in recursive)  # lattice linted when recursive
+    assert any("LF011" in m for m in recursive)  # tao.init schema lint
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="latform.lint"):
+        with pytest.raises(SystemExit):
+            cli_main([init, "--no-recursive"])
+    non_recursive = [rec.getMessage() for rec in caplog.records]
+    assert not any("LF004" in m for m in non_recursive)  # lattice not loaded
+    assert any("LF011" in m for m in non_recursive)  # tao.init still checked
+
+
 def test_main_lint_flag_gates_warnings(tmp_path, capsys, caplog):
     from ..main import main
 
@@ -682,6 +715,26 @@ def test_datum_lints_surfaced_through_lint_files():
     # The datum lint is attributed to the tao.init file.
     (init_fn,) = {fn for fn, lint in reported if lint.code is LintCode.undefined_reference}
     assert init_fn.name == "tao.init"
+
+
+def test_datum_references_skipped_when_not_recursive():
+    """
+    Non-recursive parsing leaves the element namespace incomplete, so a tao.init
+    linted on its own must not check datum/variable element references (they would
+    all look undefined). Schema checks, which do not need the lattice, still run.
+    """
+    tao_init = _datum_init("MISSING") + "&tao_params\n  global%bogus_field = 1\n/\n"
+    files = _tao_files(tao_init)
+
+    recursive = [lint.code for _fn, lint in lint_files(files, assume_defined=False)]
+    assert LintCode.undefined_reference in recursive
+    assert LintCode.tao_unknown_field in recursive
+
+    non_recursive = [
+        lint.code for _fn, lint in lint_files(files, assume_defined=False, check_references=False)
+    ]
+    assert LintCode.undefined_reference not in non_recursive
+    assert LintCode.tao_unknown_field in non_recursive
 
 
 def test_no_datum_lints_without_tao_init():
