@@ -153,6 +153,59 @@ def test_instantiate_rewrites_tao_init(tmp_path):
     assert "beam_init%n_particle = 5000" in c2
 
 
+def test_instantiate_renames_elements_in_tao_init(tmp_path):
+    """Lattice element renames propagate into tao.init element references."""
+    (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'cx.lat.bmad'\n"
+        "/\n\n"
+        "&tao_d1_data\n"
+        "  datum(1)%ele_name = 'CX_Q'\n"
+        "  datum(2)%data_type = 'expression: lat::orbit.x[CX_Q]|model'\n"
+        "/\n\n"
+        "&tao_var\n"
+        "  var(1)%ele_name = 'cx_q'\n"
+        "/\n"
+    )
+    spec = {
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "renames": {r"CX(_.*|$)": r"{instance:upper}\1"},
+        "tao_init": {"input": "tao.init", "output": "{instance}/tao.init"},
+        "instances": {"c1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]["c1/tao.init"]
+    flat = out.replace(" ", "")
+    assert "datum(1)%ele_name='C1_Q'" in flat
+    assert "lat::orbit.x[C1_Q]|model" in out
+    assert "var(1)%ele_name='C1_Q'" in flat
+
+
+def test_instantiate_renames_tao_init_only_elements(tmp_path):
+    """Names only the tao.init references (not defined in the template lattices)
+    are still renamed by the instance's rename rules."""
+    (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_var\n"
+        "  var(1)%ele_name = 'cx.pat'\n"
+        "  var(2)%ele_name = 'beginning'\n"
+        "/\n\n"
+        "&tao_d1_data\n"
+        "  datum(1) = 'orbit.x' '' '' 'CX_EXTERNAL' 'target' 0 1e1\n"
+        "/\n"
+    )
+    spec = {
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "renames": {"parts": {"CX": "{instance:upper}"}},
+        "tao_init": {"input": "tao.init", "output": "{instance}/tao.init"},
+        "instances": {"c1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]["c1/tao.init"]
+    assert "'C1.pat'" in out
+    assert "'C1_EXTERNAL'" in out
+    assert "'beginning'" in out  # pseudo-element never renamed
+
+
 def _multi_tao_init_spec(tmp_path) -> dict:
     (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
     (tmp_path / "tao.init").write_text(

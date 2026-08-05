@@ -13,6 +13,7 @@ import posixpath
 import re
 
 from .apply import (
+    _expand_ruleset_over_names,
     add_logging_argument,
     apply_renames,
     apply_values,
@@ -23,7 +24,7 @@ from .apply import (
     split_namelist_key,
 )
 from .parser import MemoryFiles, parse
-from .tao import TaoInit, format_tao_namelist
+from .tao import TaoInit, collect_tao_element_names, format_tao_namelist, rename_tao_elements
 from .token import Role, Token
 from .types import FormatOptions, NamelistFormatOptions
 from .util import load_json_or_similar
@@ -138,13 +139,23 @@ def _instantiate_tao_init(
     in_to_out: dict[str, str],
     instance: str,
     options: NamelistFormatOptions | None = None,
+    renames: dict[str, str] | None = None,
+    rules: dict | None = None,
 ) -> dict[str, str]:
     """
     Render one instance's ``tao.init`` from the template spec.
 
     Rewrites ``design_lattice`` files to the instance's output lattice paths
-    (via ``in_to_out``, the same map used for ``call`` targets) and applies any
-    per-instance namelist add/update overrides.
+    (via ``in_to_out``, the same map used for ``call`` targets), applies the
+    instance's element renames to element references (via
+    `latform.tao.rename_tao_elements`), and applies any per-instance namelist
+    add/update overrides.
+
+    ``renames`` is the literal map from the lattice rename (authoritative for
+    names the lattices define). ``rules`` is the instance's interpolated
+    ruleset; it is additionally expanded over the element names referenced in
+    this file, so names only the ``tao.init`` knows (e.g. elements defined
+    outside the template set) are renamed by the same rules.
     """
     input_rel = tao_init_spec["input"]
     output_rel = _interpolate(tao_init_spec["output"], instance)
@@ -164,6 +175,17 @@ def _instantiate_tao_init(
             changed = True
     if changed:
         tao_init.lattice_files = remapped
+
+    merged: dict[str, str] = {}
+    if rules and (rules["literal"] or rules["regex"] or rules["parts"]):
+        harvested = _expand_ruleset_over_names(rules, collect_tao_element_names(tao_init))
+        merged.update({old.upper(): new for old, new in harvested.items()})
+    # The lattice-expanded map wins on conflict (it is anchored to the names
+    # the lattices actually define); keys are uppercased so differently-cased
+    # references to the same element cannot shadow it.
+    merged.update({old.upper(): new for old, new in (renames or {}).items()})
+    if merged:
+        rename_tao_elements(tao_init, merged)
 
     for name_key, assignments in ((override or {}).get("namelists") or {}).items():
         name, index = split_namelist_key(name_key)
@@ -326,8 +348,9 @@ def instantiate(
         )
         # Replace {instance} and similar in the rename rules
         rules = _interpolate_ruleset(rules, name)
+        element_renames: dict[str, str] = {}
         if rules["literal"] or rules["regex"] or rules["parts"]:
-            apply_renames(files, rules)
+            element_renames = apply_renames(files, rules)
 
         # Full output path per input (may include directories). Rewrite `call`
         # targets by resolving each against the transform set's input paths.
@@ -347,6 +370,8 @@ def instantiate(
                 in_to_out,
                 name,
                 options.namelist if format_namelist else None,
+                renames=element_renames,
+                rules=rules,
             )
             collisions = sorted(set(rendered) & set(instance_files))
             if collisions:

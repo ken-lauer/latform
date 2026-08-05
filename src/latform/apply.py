@@ -669,11 +669,18 @@ def _expand_ruleset_over_names(
     return expanded
 
 
-def apply_renames(files: MemoryFiles, rules: dict) -> None:
+def apply_renames(files: MemoryFiles, rules: dict) -> dict[str, str]:
+    """
+    Apply a rename ruleset to the file set (code and comments).
+
+    Returns the ruleset expanded over the file set's names — the literal
+    ``old -> new`` map that was actually applied.
+    """
     expanded = _expand_ruleset_over_names(rules, _collect_names(files))
     if expanded:
         files.rename(expanded)
     _rename_in_comments(files, rules)
+    return expanded
 
 
 _COMMENT_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_.]*")
