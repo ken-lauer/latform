@@ -305,6 +305,19 @@ suffix (1-based) targets the N-th of a repeated group. With the list form, the
 per-instance `tao_init` override is keyed by the entry's `input` path, as
 above.
 
+Element renames also apply to the emitted `tao.init` files, wherever an
+element is referenced: datum/variable/curve fields such as `ele_name` and
+`ele_ref_name` (in either the `datum(1)%ele_name = ...` or the positional
+`datum(1) = 'orbit.x' '' '' 'Q1' ...` form), element match patterns (`ele_id`,
+`search_for_lat_eles`), and element references inside expressions
+(`lat::orbit.x[Q1]`, `ele::Q1[k1]`). This includes elements the template
+lattices do not define. Two limitations: a match pattern containing wildcards
+(e.g. `quad::Q*`) is left untouched with a warning, and the `beginning`/`end`
+pseudo-elements are never renamed. Datum and variable labels (`d2_data%name`,
+`v1_var%name`) and `data::`/`var::` references are names of data, not
+elements, so renames do not touch them — use a per-instance `namelists`
+override to change a label.
+
 For a single `tao.init`, a bare mapping is also accepted — the per-instance
 override is then the flat `namelists` block directly:
 
