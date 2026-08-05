@@ -173,6 +173,46 @@ def _instantiate_tao_init(
     return {output_rel: format_tao_namelist(tao_init, options=options)}
 
 
+def _normalize_tao_init_specs(spec_value) -> tuple[list[dict], bool]:
+    """
+    Normalize the spec-level ``tao_init`` to a list of ``{input, output}`` entries.
+
+    Returns the entries plus whether the list form was used — per-instance
+    overrides are keyed by ``input`` in the list form, and are the flat
+    ``{namelists: ...}`` mapping in the single-mapping form.
+    """
+    if not spec_value:
+        return [], False
+    if isinstance(spec_value, list):
+        inputs = [entry["input"] for entry in spec_value]
+        duplicates = sorted({i for i in inputs if inputs.count(i) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate tao_init input(s): {duplicates}")
+        return list(spec_value), True
+    return [spec_value], False
+
+
+def _tao_init_override(
+    overrides: dict,
+    entry: dict,
+    known_inputs: set[str],
+    multi: bool,
+) -> dict | None:
+    """Resolve the per-instance ``tao_init`` override for one spec entry."""
+    override = overrides.get("tao_init")
+    if not override:
+        return None
+    if not multi:
+        return override
+    unknown = sorted(set(override) - known_inputs)
+    if unknown:
+        raise ValueError(
+            f"per-instance tao_init override key(s) {unknown} do not match any "
+            f"tao_init input: {sorted(known_inputs)}"
+        )
+    return override.get(entry["input"])
+
+
 def load_instances(path: pathlib.Path | str) -> dict:
     """Load an instances YAML/etc file into a plain dict."""
     return load_json_or_similar(path)
@@ -219,12 +259,14 @@ def instantiate(
         optional global ``renames``, optional ``delimiters`` (default delimiter
         set for prefix/suffix/parts), optional ``format`` (formatting options
         for the emitted files, config-file ``[format]`` style; applied on top
-        of ``options``), optional ``tao_init`` (``{input, output}``
-        for a Tao ``tao.init`` whose ``design_lattice`` files are rewritten to
-        the generated lattices), and ``instances`` (name -> overrides). A
-        per-instance ``tao_init.namelists`` override (``{namelist: {key: value}}``,
-        with a ``name#N`` suffix to target the N-th repeated group) adds or
-        updates namelist sections.
+        of ``options``), optional ``tao_init`` (one ``{input, output}`` mapping
+        or a list of them, for Tao ``tao.init`` files whose ``design_lattice``
+        files are rewritten to the generated lattices), and ``instances``
+        (name -> overrides). A per-instance ``tao_init`` override adds or
+        updates namelist sections via a ``namelists`` block
+        (``{namelist: {key: value}}``, with a ``name#N`` suffix to target the
+        N-th repeated group); with the list form, the override is keyed by the
+        entry's ``input`` path (``{input: {namelists: ...}}``).
     base_dir : pathlib.Path | str
         Directory the ``input`` paths are relative to.
     options : FormatOptions, optional
@@ -250,7 +292,8 @@ def instantiate(
     global_rules = normalize_renames(spec.get("renames"), default_delims)
     instances = spec["instances"]
     context_files = spec.get("context") or []
-    tao_init_spec = spec.get("tao_init")
+    tao_init_specs, multi_tao_init = _normalize_tao_init_specs(spec.get("tao_init"))
+    tao_init_inputs = {entry["input"] for entry in tao_init_specs}
 
     contents = {
         (base_dir / tf["input"]).resolve(): (base_dir / tf["input"]).read_text()
@@ -296,17 +339,19 @@ def instantiate(
         instance_files = {
             output_paths[p]: format_statements(files.by_filename[p], options) for p in contents
         }
-        if tao_init_spec:
-            instance_files.update(
-                _instantiate_tao_init(
-                    tao_init_spec,
-                    overrides.get("tao_init"),
-                    base_dir,
-                    in_to_out,
-                    name,
-                    options.namelist if format_namelist else None,
-                )
+        for entry in tao_init_specs:
+            rendered = _instantiate_tao_init(
+                entry,
+                _tao_init_override(overrides, entry, tao_init_inputs, multi_tao_init),
+                base_dir,
+                in_to_out,
+                name,
+                options.namelist if format_namelist else None,
             )
+            collisions = sorted(set(rendered) & set(instance_files))
+            if collisions:
+                raise ValueError(f"output path collision for instance {name!r}: {collisions}")
+            instance_files.update(rendered)
         results[name] = instance_files
 
     return results
