@@ -15,7 +15,7 @@ and formats standalone — while a YAML sidecar supplies per-element values.
 
 ```
 latform-apply TEMPLATE [--format {bmad,namelist}] [--values VALUES.yaml]
-              [--set NAMELIST KEY VALUE]
+              [--set 'TARGET = VALUE'] [--unset TARGET]
               [--rename OLD NEW] [--prefix FROM TO] [--suffix FROM TO]
               [--parts DELIMS FROM TO] [--delimiters CHARS]
               [--no-format-namelist] [--namelist-indent N]
@@ -24,7 +24,49 @@ latform-apply TEMPLATE [--format {bmad,namelist}] [--values VALUES.yaml]
               [-o OUT | -i]
 ```
 
-Given `quad.bmad`:
+### Setting values
+
+`--set 'TARGET = VALUE'` is the inline form and is repeatable; `--unset TARGET`
+is its counterpart for removals. A **target** is written the way Bmad itself
+writes it:
+
+| Target            | Example                                | What it edits                                            |
+| ----------------- | -------------------------------------- | -------------------------------------------------------- |
+| `NAME`            | `--set 'A = 10'`                       | a constant                                               |
+| `NAME[ATTRIBUTE]` | `--set 'Q1[k1] = 1.523'`               | an element attribute                                     |
+| `parameter[...]`  | `--set 'parameter[e_tot] = 5e9'`       | a parameter / `beginning` / `particle_start` / `ptc_com` |
+| `/regex/[...]`    | `--set '/.*_BPM/[type] = BPM_TYPE'`    | every element whose name matches                         |
+| `GROUP[KEY]`      | `--set 'tao_params[global%plot_on]=F'` | a namelist key (`*.init` / `*.nml`)                      |
+
+```bash
+# const.bmad:  A = 4
+latform-apply const.bmad --set 'A = 10' -i
+# -> A = 10
+
+# quad.bmad:  Q1: quadrupole, L=0.3, k1=0.0
+latform-apply quad.bmad --set 'Q1[k1] = 1.523' --set 'Q1[L] = 74e-3/2'
+# -> Q1: quadrupole, L=74e-3/2, k1=1.523
+
+latform-apply quad.bmad --unset 'Q1[k1]'
+# -> Q1: quadrupole, L=0.3
+```
+
+The target must already exist in the template, so a typo is an error rather than
+a new definition. Two exceptions, both unambiguous:
+
+- An attribute of an element **not** defined in the file but always present
+  (`parameter`, `beginning`, `end`, `particle_start`, `ptc_com`) is appended as a
+  new `parameter[e_tot] = 5e9` statement.
+- A missing namelist group or key is appended (see
+  [Namelist files](#namelist-files)).
+
+When a standalone `Q1[k1] = 3` statement is present, `--set 'Q1[k1] = 7'` edits
+**that** statement rather than the `Q1:` definition it shadows — the definition
+would have no effect. `--unset 'Q1[k1]'` likewise drops the statement.
+
+### Values files
+
+`--values` takes the same overrides in bulk. Given `quad.bmad`:
 
 ```
 Q1: quadrupole, L=0.3, k1=0.0
@@ -35,16 +77,21 @@ and `values.yaml`:
 ```yaml
 Q1:
   k1: 1.523 # override an attribute
+Q1[L]: 74e-3/2 # the flat spelling of the same thing
+parameter[e_tot]: 5e9
 # "/.*_BPM/": { type: BPM_TYPE }   # regex key: every matching element
 # BEN0: { type: null }             # null removes an attribute
 ```
 
 ```bash
 latform-apply quad.bmad --values values.yaml
-# -> Q1: quadrupole, L=0.3, k1=1.523
+# -> Q1: quadrupole, L=74e-3/2, k1=1.523
 
 # --values - reads the overrides (YAML or JSON) from stdin, for programmatic use
 echo '{"Q1": {"k1": 1.523}}' | latform-apply quad.bmad --values -
+
+# --set / --unset win over --values
+latform-apply quad.bmad --values values.yaml --set 'Q1[k1] = 0'
 ```
 
 `--rename` is repeatable and accepts literal or regex rules:
@@ -87,14 +134,16 @@ tao_params:
   global%plot_on: null # remove the key
 tao_beam_init:
   beam_init%n_particle: 5000 # group appended if absent
+tao_params[global%plot_on]: T # the flat spelling, as used by --set
 ```
 
 ```bash
 latform-apply tao.init --values values.yaml
 
-# --set NAMELIST KEY VALUE is the inline, repeatable equivalent (and wins over
+# --set 'GROUP[KEY] = VALUE' is the inline, repeatable equivalent (and wins over
 # --values); -i rewrites tao.init in place instead of printing to stdout.
-latform-apply tao.init --set tao_params global%n_opti_cycles 50 -i
+latform-apply tao.init --set 'tao_params[global%n_opti_cycles] = 50' -i
+latform-apply tao.init --unset 'tao_params[global%plot_on]' -i
 ```
 
 The output namelist is **reformatted by default** (field indentation, lowercase
@@ -138,7 +187,9 @@ renames:
 instances:
   c1: {}
   c2:
-    values: { CX_LINE_ROT: pi/2 } # per-instance overrides
+    values: # per-instance overrides
+      CX_LINE_ROT: pi/2
+      CX_BEN0[g]: 0.1 # same targets as latform-apply --set
 ```
 
 `renames` also accepts a **structured** form with any of `prefix`, `suffix`,

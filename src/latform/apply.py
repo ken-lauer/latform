@@ -732,7 +732,7 @@ Overrides are given inline with --set 'TARGET = VALUE' (repeatable), or in bulk 
 parameter (parameter[e_tot]); renames rewrite element names. For Fortran-namelist
 files (*.init/*.nml), a target is a namelist key (tao_params[global%plot_on]) and
 renames do not apply. The format is auto-detected from the extension unless
---format is given. See docs/cli.md.
+--format is given. See docs/cli/templating.md.
 """
 
 
@@ -854,8 +854,8 @@ def main_apply(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--values",
         help=(
-            "YAML/JSON/TOML overrides (element/constant for Bmad; namelist groups "
-            "for namelist). Use '-' to read YAML/JSON from stdin"
+            "YAML/JSON/TOML overrides, keyed by the same targets as --set (nested\n"
+            "mappings work too). Use '-' to read YAML/JSON from stdin"
         ),
     )
     parser.add_argument(
