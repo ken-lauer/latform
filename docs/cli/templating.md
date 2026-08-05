@@ -274,10 +274,39 @@ outputs automatically.
 
 ### Tao init (`tao_init:`)
 
-An optional top-level `tao_init:` key renders a Tao `tao.init` per instance. It
-takes an `input` (the template `tao.init`) and an `output` path (which may use
-`{instance}`). The `design_lattice` file entries are rewritten to the instance's
-generated lattice paths — the same rewriting applied to `call` targets.
+An optional top-level `tao_init:` key renders Tao `tao.init` files per
+instance. It takes a list of entries, each with an `input` (the template
+`tao.init`) and an `output` path (which may use `{instance}`). The
+`design_lattice` file entries are rewritten to the instance's generated
+lattice paths — the same rewriting applied to `call` targets.
+
+```yaml
+tao_init:
+  - input: tao.init
+    output: "{instance}/tao.init"
+  - input: tao_smooth.init
+    output: "{instance}/tao_smooth.init"
+
+instances:
+  c1: {}
+  c2:
+    tao_init:
+      tao.init: # keyed by the entry's input path
+        namelists: # add/update namelist sections for this instance
+          tao_params:
+            global%n_opti_cycles: 50 # updated in place
+          tao_beam_init:
+            beam_init%n_particle: 5000 # group appended if absent
+```
+
+A per-instance `namelists` block adds or updates namelist sections: each entry
+is a `{key: value}` map, values interpolate `{instance}`, and a `name#N`
+suffix (1-based) targets the N-th of a repeated group. With the list form, the
+per-instance `tao_init` override is keyed by the entry's `input` path, as
+above.
+
+For a single `tao.init`, a bare mapping is also accepted — the per-instance
+override is then the flat `namelists` block directly:
 
 ```yaml
 tao_init:
@@ -285,19 +314,12 @@ tao_init:
   output: "{instance}/tao.init"
 
 instances:
-  c1: {}
   c2:
     tao_init:
-      namelists: # add/update namelist sections for this instance
+      namelists:
         tao_params:
-          global%n_opti_cycles: 50 # updated in place
-        tao_beam_init:
-          beam_init%n_particle: 5000 # group appended if absent
+          global%n_opti_cycles: 50
 ```
-
-A per-instance `tao_init.namelists` block adds or updates namelist sections:
-each entry is a `{key: value}` map, values interpolate `{instance}`, and a
-`name#N` suffix (1-based) targets the N-th of a repeated group.
 
 The emitted `tao.init` is **reformatted by default**, and its values are
 normalized against the bundled Tao schema — strings quoted, enum indices mapped

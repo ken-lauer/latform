@@ -139,6 +139,23 @@ def test_rename_line_with_repetition_and_reversal():
     ]
 
 
+def test_rename_preserves_comments_attached_to_renamed_tokens():
+    """Comments riding on a renamed token (e.g. line members) are kept."""
+    code = "\n".join(
+        [
+            "q1: quad",
+            "b1: sbend",
+            "l1: line = (",
+            "  q1,  ! quad first",
+            "  b1)  ! then bend",
+        ]
+    )
+    text = rename(code, {"q1": "zz", "b1": "yy"})
+    assert "! quad first" in text
+    assert "! then bend" in text
+    assert "ZZ," in text and "YY" in text
+
+
 def test_rename_bracketed_reference_always_applies():
     # `BX_QUA1[k1]` is structurally a name (the bracket proves it), so it is
     # renamed even in strict mode and even though BX_QUA1 is not defined here.

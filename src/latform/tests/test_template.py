@@ -153,6 +153,72 @@ def test_instantiate_rewrites_tao_init(tmp_path):
     assert "beam_init%n_particle = 5000" in c2
 
 
+def _multi_tao_init_spec(tmp_path) -> dict:
+    (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'cx.lat.bmad'\n"
+        "/\n\n"
+        "&tao_params\n"
+        "  global%n_opti_cycles = 100\n"
+        "/\n"
+    )
+    (tmp_path / "tao_smooth.init").write_text(
+        "&tao_design_lattice\n  design_lattice(1)%file = 'cx.lat.bmad'\n/\n"
+    )
+    return {
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "tao_init": [
+            {"input": "tao.init", "output": "{instance}/tao.init"},
+            {"input": "tao_smooth.init", "output": "{instance}/tao_smooth.init"},
+        ],
+        "instances": {"c1": {}},
+    }
+
+
+def test_instantiate_multiple_tao_inits(tmp_path):
+    """The tao_init list form renders each entry, rewriting lattices in all of them."""
+    spec = _multi_tao_init_spec(tmp_path)
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]
+    assert set(res) == {"c1.lat.bmad", "c1/tao.init", "c1/tao_smooth.init"}
+    assert "design_lattice(1)%file = '../c1.lat.bmad'" in res["c1/tao.init"]
+    assert "design_lattice(1)%file = '../c1.lat.bmad'" in res["c1/tao_smooth.init"]
+
+
+def test_instantiate_multiple_tao_inits_override_keyed_by_input(tmp_path):
+    """List-form per-instance overrides target one entry by its input path."""
+    spec = _multi_tao_init_spec(tmp_path)
+    spec["instances"]["c1"] = {
+        "tao_init": {
+            "tao.init": {"namelists": {"tao_params": {"global%n_opti_cycles": "50"}}},
+        }
+    }
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]
+    assert "global%n_opti_cycles = 50" in res["c1/tao.init"]
+    assert "tao_params" not in res["c1/tao_smooth.init"]  # other entry untouched
+
+
+def test_instantiate_multiple_tao_inits_unknown_override_key_raises(tmp_path):
+    spec = _multi_tao_init_spec(tmp_path)
+    spec["instances"]["c1"] = {"tao_init": {"tao_typo.init": {"namelists": {}}}}
+    with pytest.raises(ValueError, match="tao_typo.init"):
+        instantiate(spec, base_dir=tmp_path, options=default_options)
+
+
+def test_instantiate_tao_init_duplicate_input_raises(tmp_path):
+    spec = _multi_tao_init_spec(tmp_path)
+    spec["tao_init"][1] = {"input": "tao.init", "output": "{instance}/other.init"}
+    with pytest.raises(ValueError, match="duplicate tao_init input"):
+        instantiate(spec, base_dir=tmp_path, options=default_options)
+
+
+def test_instantiate_tao_init_output_collision_raises(tmp_path):
+    spec = _multi_tao_init_spec(tmp_path)
+    spec["tao_init"][1]["output"] = "{instance}/tao.init"
+    with pytest.raises(ValueError, match="collision"):
+        instantiate(spec, base_dir=tmp_path, options=default_options)
+
+
 def _messy_tao_init_spec(tmp_path) -> dict:
     (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
     (tmp_path / "tao.init").write_text(

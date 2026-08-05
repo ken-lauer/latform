@@ -83,22 +83,24 @@ class _RenameContext:
         )
 
     @functools.lru_cache(maxsize=None)
-    def apply_rename(self, tok: Token, allow_regex: bool = True):
-        lower = tok.lower()
-        renamed = None
+    def _renamed_text(self, text: str, allow_regex: bool = True) -> str | None:
+        lower = text.lower()
         try:
-            renamed = self.lower_renames[lower]
+            return self.lower_renames[lower]
         except KeyError:
             if allow_regex:
                 for pat, to in self.regex_renames.items():
                     if pat.match(lower):
-                        renamed = pat.sub(to, tok)
-                        break
+                        return pat.sub(to, text)
+        return None
 
-        if renamed:
-            return Token(renamed, role=tok.role)
-
-        return tok
+    def apply_rename(self, tok: Token, allow_regex: bool = True) -> Token:
+        renamed = self._renamed_text(str(tok), allow_regex)
+        if not renamed:
+            return tok
+        # The token is rebuilt per node (only the text lookup is cached) so its
+        # attached comments carry over rather than being shared or dropped.
+        return Token(renamed, loc=tok.loc, comments=tok._comments, role=tok.role)
 
     def apply(self, statements: list[Statement]):
         for item in walk(statements):
