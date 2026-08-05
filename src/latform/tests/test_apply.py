@@ -4,7 +4,14 @@ import pathlib
 
 import pytest
 
-from ..apply import cli_main_apply, interpolate, interpolate_namelist
+from ..apply import (
+    cli_main_apply,
+    interpolate,
+    interpolate_namelist,
+    normalize_value_keys,
+    parse_set_argument,
+    split_attribute_key,
+)
 from ..output import default_options
 from ..types import FormatOptions, NamelistFormatOptions
 
@@ -69,6 +76,129 @@ def test_apply_values_expression_value():
     src = "Q1: quadrupole, L=0.0"
     out = interpolate(src, values={"Q1": {"L": "74e-3/2"}})
     assert "74e-3/2" in out.replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("Q1[L]", ("Q1", "L")),
+        (" Q1 [ L ] ", ("Q1", "L")),
+        ("A", ("A", None)),
+        ("tao_params[global%plot_on]", ("tao_params", "global%plot_on")),
+        ("tao_d1_data#2[key]", ("tao_d1_data#2", "key")),
+        ("/Q[0-9]+/[k1]", ("/Q[0-9]+/", "k1")),  # a regex name may hold brackets itself
+        ("/Q[0-9]+/", ("/Q[0-9]+/", None)),
+    ],
+)
+def test_split_attribute_key(key, expected):
+    assert split_attribute_key(key) == expected
+
+
+@pytest.mark.parametrize("key", ["[L]", "Q1[]"])
+def test_split_attribute_key_invalid(key):
+    with pytest.raises(ValueError):
+        split_attribute_key(key)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("A = 10", ("A", "10")),
+        ("A=10", ("A", "10")),
+        ("Q1[L] = 74e-3/2", ("Q1[L]", "74e-3/2")),
+        ("tao_params[global%plot_on]=F", ("tao_params[global%plot_on]", "F")),
+    ],
+)
+def test_parse_set_argument(text, expected):
+    assert parse_set_argument(text) == expected
+
+
+@pytest.mark.parametrize("text", ["A", "= 10", "A ="])
+def test_parse_set_argument_invalid(text):
+    with pytest.raises(ValueError):
+        parse_set_argument(text)
+
+
+def test_normalize_value_keys_merges_flat_and_nested():
+    values = {"Q1": {"k1": 1}, "Q1[L]": 2, "A": 3}
+    assert normalize_value_keys(values) == {"Q1": {"k1": 1, "L": 2}, "A": 3}
+
+
+def test_normalize_value_keys_leaves_input_untouched():
+    values = {"Q1": {"k1": 1}}
+    normalize_value_keys({**values, "Q1[L]": 2})
+    assert values == {"Q1": {"k1": 1}}
+
+
+@pytest.mark.parametrize("values", [{"A": 1, "A[x]": 2}, {"A[x]": 2, "A": 1}])
+def test_normalize_value_keys_scalar_and_attribute_conflict(values):
+    with pytest.raises(ValueError):
+        normalize_value_keys(values)
+
+
+def test_apply_values_flat_attribute_key():
+    src = "Q1: quadrupole, L=0.3, k1=0.0"
+    out = interpolate(src, values={"Q1[k1]": 1.523})
+    assert "k1=1.523" in out.lower().replace(" ", "")
+
+
+def test_apply_values_updates_attribute_override_statement():
+    src = "Q1: quadrupole, k1=0.0\nQ1[k1] = 3\n"
+    out = interpolate(src, values={"Q1[k1]": 7})
+    # The override statement is what Bmad actually uses, so it -- not the
+    # definition -- is updated.
+    assert "Q1[k1] = 7" in out
+    assert "k1=0.0" in out.replace(" ", "")
+
+
+def test_apply_values_updates_parameter_statement():
+    src = "parameter[e_tot] = 1e9\n"
+    out = interpolate(src, values={"parameter[e_tot]": "5e9"})
+    assert "parameter[e_tot] = 5e9" in out
+
+
+def test_apply_values_removes_attribute_override_statement():
+    src = "Q1: quadrupole, k1=0.0\nQ1[k1] = 3\n"
+    out = interpolate(src, values={"Q1[k1]": None})
+    assert "[k1]" not in out
+    assert "k1=0.0" in out.replace(" ", "")
+
+
+def test_apply_values_regex_key_reaches_override_statements():
+    src = "A_BPM1: monitor\nA_BPM2: monitor\nA_BPM2[alias] = old\n"
+    out = interpolate(src, values={"/A_BPM/[alias]": "new"})
+    assert "A_BPM1: monitor, alias=new" in out.replace("  ", " ")
+    assert "A_BPM2[alias] = new" in out
+
+
+@pytest.mark.parametrize(
+    "key", ["parameter[e_tot]", "beginning[beta_a]", "particle_start[x]", "end[s]"]
+)
+def test_apply_values_appends_implicit_element_statement(key):
+    # The parser's synthesized elements have no definition to edit, so the
+    # statement is added instead.
+    out = interpolate("A = 4\n", values={key: "1.0"})
+    assert f"{key} = 1.0" in out.lower()  # names are case-normalized on output
+
+
+def test_apply_values_implicit_element_removal_errors():
+    with pytest.raises(KeyError):
+        interpolate("A = 4\n", values={"parameter[e_tot]": None})
+
+
+def test_apply_values_unknown_attribute_target_errors():
+    with pytest.raises(KeyError):
+        interpolate("A = 4\n", values={"NOPE[x]": "1"})
+
+
+def test_apply_values_cannot_remove_constant():
+    with pytest.raises(ValueError):
+        interpolate("A = 4\n", values={"A": None})
+
+
+def test_apply_values_attributes_on_constant_errors():
+    with pytest.raises(TypeError):
+        interpolate("A = 4\n", values={"A[x]": 1})
 
 
 def test_cli_interpolate_to_stdout(tmp_path, capsys):
@@ -454,15 +584,7 @@ def test_cli_interpolate_no_format_namelist(tmp_path, capsys):
 
 def test_cli_interpolate_namelist_set(tmp_path, capsys):
     (tmp_path / "tao.init").write_text(_NML_SRC)
-    cli_main_apply(
-        [
-            str(tmp_path / "tao.init"),
-            "--set",
-            "tao_params",
-            "global%n_opti_cycles",
-            "50",
-        ]
-    )
+    cli_main_apply([str(tmp_path / "tao.init"), "--set", "tao_params[global%n_opti_cycles] = 50"])
     assert "global%n_opti_cycles = 50" in capsys.readouterr().out
 
 
@@ -475,25 +597,29 @@ def test_cli_interpolate_set_overrides_values_file(tmp_path, capsys):
             "--values",
             str(tmp_path / "v.yaml"),
             "--set",
-            "tao_params",
-            "global%n_opti_cycles",
-            "77",
+            "tao_params[global%n_opti_cycles] = 77",
         ]
     )
     out = capsys.readouterr().out
     assert "global%n_opti_cycles = 77" in out  # --set wins over --values
 
 
-def test_cli_interpolate_set_on_bmad_errors(tmp_path):
-    (tmp_path / "t.bmad").write_text("Q1: quadrupole\n")
+def test_cli_interpolate_namelist_unset(tmp_path, capsys):
+    (tmp_path / "tao.init").write_text(_NML_SRC)
+    cli_main_apply([str(tmp_path / "tao.init"), "--unset", "tao_params[global%plot_on]"])
+    assert "plot_on" not in capsys.readouterr().out
+
+
+def test_cli_interpolate_namelist_set_without_key_errors(tmp_path):
+    (tmp_path / "tao.init").write_text(_NML_SRC)
     with pytest.raises(SystemExit):
-        cli_main_apply([str(tmp_path / "t.bmad"), "--set", "a", "b", "c"])
+        cli_main_apply([str(tmp_path / "tao.init"), "--set", "tao_params = 5"])
 
 
 def test_cli_interpolate_in_place_namelist(tmp_path, capsys):
     path = tmp_path / "tao.init"
     path.write_text(_NML_SRC)
-    cli_main_apply([str(path), "-i", "--set", "tao_params", "global%plot_on", "F"])
+    cli_main_apply([str(path), "-i", "--set", "tao_params[global%plot_on] = F"])
     # Equals are aligned by default, so the shorter key is padded to the column.
     assert "global%plot_on       = F" in path.read_text()
     assert "wrote:" in capsys.readouterr().out
@@ -505,6 +631,53 @@ def test_cli_interpolate_in_place_bmad(tmp_path):
     cli_main_apply([str(path), "-i", "--rename", r"CX(_.*|$)", r"C1\1"])
     text = path.read_text()
     assert "C1_Q" in text and "CX_Q" not in text
+
+
+def test_cli_set_bmad_constant_in_place(tmp_path):
+    path = tmp_path / "const.bmad"
+    path.write_text("A = 4\n")
+    cli_main_apply([str(path), "--set", "A = 10", "-i"])
+    assert path.read_text().strip() == "A = 10"
+
+
+def test_cli_set_bmad_element_attribute(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text("Q1: quadrupole, L=0.3, k1=0.0\n")
+    cli_main_apply([str(tmp_path / "t.bmad"), "--set", "Q1[k1] = 1.523"])
+    assert "k1=1.523" in capsys.readouterr().out.replace(" ", "")
+
+
+def test_cli_set_bmad_parameter_statement(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text("parameter[e_tot] = 1e9\n")
+    cli_main_apply([str(tmp_path / "t.bmad"), "--set", "parameter[e_tot] = 5e9"])
+    assert "parameter[e_tot] = 5e9" in capsys.readouterr().out
+
+
+def test_cli_set_bmad_regex_target(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text("A_BPM1: monitor\nA_BPM2: monitor\nA_Q: quadrupole\n")
+    cli_main_apply([str(tmp_path / "t.bmad"), "--set", "/A_BPM/[type] = BPM_TYPE"])
+    assert capsys.readouterr().out.lower().replace(" ", "").count("type=bpm_type") == 2
+
+
+def test_cli_unset_bmad_attribute(tmp_path, capsys):
+    (tmp_path / "t.bmad").write_text('BEN0: sbend, L=1.0, type="old"\n')
+    cli_main_apply([str(tmp_path / "t.bmad"), "--unset", "BEN0[type]"])
+    out = capsys.readouterr().out
+    assert "type" not in out and "L=1.0" in out.replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--set", "NOPE = 1"],  # no such constant/element
+        ["--set", "A"],  # missing '=' entirely
+        ["--set", "A ="],  # missing value
+        ["--unset", "A"],  # a whole constant cannot be removed
+    ],
+)
+def test_cli_set_bmad_errors(tmp_path, args):
+    (tmp_path / "t.bmad").write_text("A = 4\n")
+    with pytest.raises(SystemExit):
+        cli_main_apply([str(tmp_path / "t.bmad"), *args])
 
 
 def test_cli_interpolate_output_and_in_place_mutually_exclusive(tmp_path):

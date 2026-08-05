@@ -18,8 +18,8 @@ from typing import Literal
 from nmlform import NamelistFile, is_namelist_file
 
 from .comments import Comments
-from .parser import MemoryFiles, parse
-from .statements import Constant, Element
+from .parser import MemoryFiles, implicit_location, parse, target_selector_text
+from .statements import Constant, Element, Parameter, Statement
 from .token import Role, Token
 from .types import Attribute, FormatOptions, NamelistFormatOptions, Seq
 from .util import load_json_or_similar
@@ -33,7 +33,12 @@ __all__ = [
     "interpolate_namelist",
     "main_apply",
     "cli_main_apply",
+    "normalize_value_keys",
+    "parse_set_argument",
+    "split_attribute_key",
 ]
+
+logger = logging.getLogger(__name__)
 
 FileFormat = Literal["namelist", "bmad"]
 
@@ -64,23 +69,200 @@ def _remove_element_attribute(element: Element, attr_name: str) -> None:
     ]
 
 
-def _resolve_targets(named: dict, key: str) -> list:
+def split_attribute_key(key: str) -> tuple[str, str | None]:
     """
-    Resolve a values key to target statements.
+    Split a ``NAME[ATTRIBUTE]`` key into ``(name, attribute)``.
 
-    A ``/regex/`` key (slash-delimited) matches every named item whose name
-    matches; any other key is an exact, case-insensitive name.
+    A key without a trailing bracket gives ``(key, None)``. The name may itself
+    contain brackets (a ``/regex/`` key), so the *last* bracket group wins.
+
+    Examples
+    --------
+    >>> split_attribute_key("Q1[L]")
+    ('Q1', 'L')
+    >>> split_attribute_key("A")
+    ('A', None)
+    """
+    text = key.strip()
+    if not text.endswith("]") or "[" not in text:
+        return text, None
+    name, _, attr = text[:-1].rpartition("[")
+    name, attr = name.strip(), attr.strip()
+    if not name or not attr:
+        raise ValueError(f"invalid target {key!r}: expected NAME[ATTRIBUTE]")
+    return name, attr
+
+
+def normalize_value_keys(values: dict) -> dict:
+    """
+    Fold flat ``NAME[ATTRIBUTE]`` keys into the nested ``{NAME: {ATTRIBUTE: value}}`` form.
+
+    Both spellings may be mixed freely; entries for the same name are merged,
+    with later keys winning. Keys without a bracket are passed through untouched.
+    """
+    normalized: dict = {}
+    for key, value in values.items():
+        name, attr = split_attribute_key(str(key))
+        existing = normalized.get(name)
+        if attr is None:
+            if isinstance(existing, dict) and isinstance(value, dict):
+                existing.update(value)
+                continue
+            if name in normalized and (isinstance(existing, dict) or isinstance(value, dict)):
+                raise ValueError(
+                    f"conflicting overrides for {name!r}: {key!r} is both scalar and mapping"
+                )
+            normalized[name] = dict(value) if isinstance(value, dict) else value
+        else:
+            if existing is None and name not in normalized:
+                existing = normalized.setdefault(name, {})
+            if not isinstance(existing, dict):
+                raise ValueError(
+                    f"conflicting overrides for {name!r}: {key!r} follows a scalar value"
+                )
+            existing[attr] = value
+    return normalized
+
+
+def parse_set_argument(text: str) -> tuple[str, str]:
+    """
+    Split a ``--set 'TARGET = VALUE'`` argument into ``(target, value)``.
+
+    Examples
+    --------
+    >>> parse_set_argument("Q1[L] = 0.3")
+    ('Q1[L]', '0.3')
+    >>> parse_set_argument("A=10")
+    ('A', '10')
+    """
+    target, sep, value = text.partition("=")
+    target, value = target.strip(), value.strip()
+    if not sep or not target:
+        raise ValueError(f"invalid --set {text!r}: expected 'TARGET = VALUE'")
+    if not value:
+        raise ValueError(f"invalid --set {text!r}: empty value (use --unset to remove {target!r})")
+    return target, value
+
+
+def _key_matches(key: str):
+    """
+    Build a name predicate for a values key.
+
+    A ``/regex/`` key (slash-delimited) matches every name the pattern is found
+    in; any other key is an exact, case-insensitive name.
     """
     if len(key) >= 2 and key.startswith("/") and key.endswith("/"):
         pattern = re.compile(key[1:-1], re.IGNORECASE)
-        matches = [statement for name, statement in named.items() if pattern.search(str(name))]
-        if not matches:
-            raise KeyError(f"no element or constant matches {key!r}")
-        return matches
-    try:
-        return [named[key.upper()]]
-    except KeyError:
-        raise KeyError(f"template has no element or constant named {key!r}") from None
+        return lambda name: pattern.search(name) is not None
+    upper = key.upper()
+    return lambda name: name.upper() == upper
+
+
+def _resolve_targets(
+    named: dict[Token, Statement], key: str, *, required: bool = True
+) -> list[Statement]:
+    """
+    Resolve a values key to target statements (elements, constants, or lines).
+
+    With ``required`` unset, an unmatched key gives an empty list instead of
+    raising -- the caller may still find a ``NAME[ATTRIBUTE]`` statement for it.
+    """
+    matches_key = _key_matches(key)
+    matches = [statement for name, statement in named.items() if matches_key(str(name))]
+    if not matches and required:
+        raise KeyError(f"template has no element or constant matching {key!r}")
+    return matches
+
+
+def _find_attribute_statements(
+    files: MemoryFiles, key: str, attr_name: str
+) -> list[tuple[pathlib.Path, Parameter]]:
+    """
+    Find existing ``TARGET[ATTRIBUTE] = ...`` statements matching a key and attribute.
+
+    These are the standalone override statements (``Q1[k1] = 3``,
+    ``parameter[e_tot] = 5e9``) rather than attributes of an element definition.
+    """
+    matches_key = _key_matches(key)
+    found = []
+    for filename, statements in files.by_filename.items():
+        for statement in statements:
+            if (
+                isinstance(statement, Parameter)
+                and str(statement.name).upper() == attr_name.upper()
+                and matches_key(target_selector_text(statement.target))
+            ):
+                found.append((filename, statement))
+    return found
+
+
+def _is_implicit_element(statement: Statement) -> bool:
+    """
+    Is this one of the parser's synthesized elements?
+
+    ``parameter``, ``beginning``, ``end``, ``particle_start``, and ``ptc_com``
+    exist even when a file never mentions them; they have no definition to edit,
+    so their attributes live only in ``NAME[ATTRIBUTE] = ...`` statements.
+    """
+    return (
+        isinstance(statement, Element)
+        and statement.name.loc is not None
+        and statement.name.loc.filename == implicit_location.filename
+    )
+
+
+def _append_attribute_statement(
+    files: MemoryFiles, name: str, attr_name: str, value: object
+) -> None:
+    """Add a new ``NAME[ATTRIBUTE] = VALUE`` statement to the end of the file."""
+    filenames = list(files.by_filename)
+    if len(filenames) != 1:
+        raise ValueError(
+            f"cannot add {name}[{attr_name}] to a multi-file template; "
+            f"add the statement to the intended file first"
+        )
+    (statement,) = parse(f"{name}[{attr_name}] = {value}", filenames[0], annotate=False)
+    files.by_filename[filenames[0]].append(statement)
+
+
+def _apply_attribute_overrides(
+    files: MemoryFiles, named: dict[Token, Statement], key: str, override: dict
+) -> None:
+    """Apply a ``{attribute: value}`` override for one values key."""
+    targets = _resolve_targets(named, key, required=False)
+    for attr_name, attr_value in override.items():
+        # An existing `NAME[ATTR] = ...` statement shadows the element definition,
+        # so it -- not the definition -- is what has to change.
+        statements = _find_attribute_statements(files, key, attr_name)
+        if not statements and not targets:
+            raise KeyError(
+                f"template has no element, constant, or {key}[{attr_name}] statement "
+                f"matching {key!r}"
+            )
+        shadowed = {target_selector_text(st.target).upper() for _, st in statements}
+        for filename, statement in statements:
+            if attr_value is None:
+                files.by_filename[filename] = [
+                    st for st in files.by_filename[filename] if st is not statement
+                ]
+            else:
+                statement.value = _parse_value(str(attr_value))
+        for target in targets:
+            if not isinstance(target, Element):
+                raise TypeError(f"{key!r} is not an element; cannot set attributes on it")
+            if str(target.name).upper() in shadowed:
+                continue
+            if _is_implicit_element(target):
+                if attr_value is None:
+                    raise KeyError(
+                        f"template has no {str(target.name).lower()}[{attr_name}] "
+                        f"statement to remove"
+                    )
+                _append_attribute_statement(files, str(target.name).lower(), attr_name, attr_value)
+            elif attr_value is None:
+                _remove_element_attribute(target, attr_name)
+            else:
+                _override_element_attribute(target, attr_name, attr_value)
 
 
 def apply_values(files: MemoryFiles, values: dict) -> None:
@@ -92,26 +274,28 @@ def apply_values(files: MemoryFiles, values: dict) -> None:
     files : MemoryFiles
         A parsed, annotated file collection.
     values : dict
-        Keys are element or constant names (or a ``/regex/`` matching several).
+        Keys are element or constant names (or a ``/regex/`` matching several),
+        optionally with a ``[attribute]`` suffix.
         A ``dict`` value overrides element attributes (``{attr: value}``); an
         attribute value of ``None`` removes that attribute; a scalar value
         overrides a constant's value.
+        An attribute override edits an existing ``NAME[ATTRIBUTE] = ...``
+        statement when the template has one (removal drops the statement),
+        and the element definition otherwise.
     """
     named = files.get_named_items()
-    for key, override in values.items():
+    for key, override in normalize_value_keys(values).items():
+        if isinstance(override, dict):
+            _apply_attribute_overrides(files, named, key, override)
+            continue
         for target in _resolve_targets(named, key):
-            if isinstance(override, dict):
-                if not isinstance(target, Element):
-                    raise TypeError(f"{key!r} is not an element; cannot set attributes on it")
-                for attr_name, attr_value in override.items():
-                    if attr_value is None:
-                        _remove_element_attribute(target, attr_name)
-                    else:
-                        _override_element_attribute(target, attr_name, attr_value)
-            else:
-                if not hasattr(target, "value"):
-                    raise TypeError(f"{key!r} cannot take a scalar override")
-                target.value = _parse_value(str(override))
+            if override is None:
+                raise ValueError(
+                    f"cannot remove {key!r}; only attributes (NAME[ATTRIBUTE]) can be removed"
+                )
+            if not hasattr(target, "value"):
+                raise TypeError(f"{key!r} cannot take a scalar override")
+            target.value = _parse_value(str(override))
 
 
 def split_namelist_key(key: str) -> tuple[str, int]:
@@ -141,10 +325,16 @@ def apply_namelist_values(nml_file: NamelistFile, values: dict) -> None:
         Each value is a ``{key: value}`` mapping of raw assignment values;
         existing keys are updated in place and
         missing keys are appended.
+        The flat ``group[key]: value`` spelling is accepted as well.
         A value of ``None`` removes that key.
         A group named only for removals that does not exist is left uncreated.
     """
-    for name_key, assignments in values.items():
+    for name_key, assignments in normalize_value_keys(values).items():
+        if not isinstance(assignments, dict):
+            raise TypeError(
+                f"namelist override {name_key!r} must be a mapping of keys to values "
+                f"(use '{name_key}[KEY]' to target a single key)"
+            )
         name, index = split_namelist_key(name_key)
         removals = [key for key, value in assignments.items() if value is None]
         settings = {key: str(value) for key, value in assignments.items() if value is not None}
@@ -219,7 +409,8 @@ def interpolate(
     values : dict, optional
         For Bmad, overrides keyed by element/constant name (see
         `apply_values`). For namelist files, overrides keyed by namelist
-        group name (see `apply_namelist_values`).
+        group name (see `apply_namelist_values`). Either way, a key may use the
+        flat ``TARGET[ATTRIBUTE]`` spelling in place of a nested mapping.
     renames : dict, optional
         Rename rules applied after values: either the flat shortcut form
         (``{pattern: replacement}``, literal unless it contains ``* + ?``) or the
@@ -536,10 +727,12 @@ def _rename_in_comments(files: MemoryFiles, rules: dict) -> None:
 _APPLY_DESCRIPTION = """\
 Apply values and renames to a single Bmad or namelist template file.
 
-For Bmad, overrides are keyed by element/constant name and renames rewrite element
-names. For Fortran-namelist files (*.init/*.nml), overrides are keyed by namelist
-group (--values, or --set NAMELIST KEY VALUE); renames do not apply. The format is
-auto-detected from the extension unless --format is given. See docs/cli.md.
+Overrides are given inline with --set 'TARGET = VALUE' (repeatable), or in bulk with
+--values. For Bmad, a target is a constant (A), an element attribute (Q1[L]), or a
+parameter (parameter[e_tot]); renames rewrite element names. For Fortran-namelist
+files (*.init/*.nml), a target is a namelist key (tao_params[global%plot_on]) and
+renames do not apply. The format is auto-detected from the extension unless
+--format is given. See docs/cli/templating.md.
 """
 
 
@@ -573,18 +766,27 @@ def _load_values(source: str) -> dict | None:
     return load_json_or_similar(source)
 
 
-def _merge_set_overrides(values: dict | None, sets: list[tuple[str, str, str]]) -> dict | None:
+def _merge_set_overrides(
+    values: dict | None, sets: list[str], unsets: list[str] | None = None
+) -> dict | None:
     """
-    Fold ``--set NAMELIST KEY VALUE`` triples into a namelist ``values`` mapping.
+    Fold ``--set 'TARGET = VALUE'`` and ``--unset TARGET`` into a ``values`` mapping.
 
-    Later triples win, and ``--set`` overrides values loaded from ``--values``.
+    Later arguments win, and both override values loaded from ``--values``.
     """
-    if not sets:
+    unsets = unsets or []
+    if not sets and not unsets:
         return values
-    merged: dict = {k: dict(v) if isinstance(v, dict) else v for k, v in (values or {}).items()}
-    for namelist, key, value in sets:
-        merged.setdefault(namelist, {})[key] = value
-    return merged
+    inline: dict = {}
+    for text in sets:
+        target, value = parse_set_argument(text)
+        inline[target] = value
+    for text in unsets:
+        target = text.strip()
+        if not target:
+            raise ValueError("invalid --unset: expected a TARGET")
+        inline[target] = None
+    return normalize_value_keys({**(values or {}), **inline})
 
 
 def _cmd_apply(parsed) -> None:
@@ -599,27 +801,30 @@ def _cmd_apply(parsed) -> None:
     options = dataclasses.replace(default_options, namelist=cli.build_namelist_options(parsed))
 
     values = _load_values(parsed.values) if parsed.values else None
-    if parsed.set_ and file_format != "namelist":
-        raise SystemExit("--set is only valid for namelist files (*.init, *.nml)")
-    values = _merge_set_overrides(values, parsed.set_)
 
     renames = {old: new for old, new in parsed.rename} or None
     prefix = {frm: to for frm, to in parsed.prefix} or None
     suffix = {frm: to for frm, to in parsed.suffix} or None
     parts = [{"delimiters": d, "from": frm, "to": to} for d, frm, to in parsed.parts] or None
-    result = interpolate(
-        contents,
-        values=values,
-        renames=renames,
-        prefix=prefix,
-        suffix=suffix,
-        parts=parts,
-        delimiters=parsed.delimiters,
-        filename=parsed.template,
-        options=options,
-        file_format=file_format,
-        format_namelist=parsed.format_namelist,
-    )
+    try:
+        values = _merge_set_overrides(values, parsed.set_, parsed.unset)
+        result = interpolate(
+            contents,
+            values=values,
+            renames=renames,
+            prefix=prefix,
+            suffix=suffix,
+            parts=parts,
+            delimiters=parsed.delimiters,
+            filename=parsed.template,
+            options=options,
+            file_format=file_format,
+            format_namelist=parsed.format_namelist,
+        )
+    except (KeyError, TypeError, ValueError) as ex:
+        # Bad --set/--unset/--values targets are user errors, not tracebacks.
+        logger.error("%s", ex.args[0] if isinstance(ex, KeyError) and ex.args else ex)
+        raise SystemExit(1) from None
     if parsed.in_place:
         pathlib.Path(parsed.template).write_text(result)
         print(f"wrote: {parsed.template}")
@@ -649,18 +854,29 @@ def main_apply(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--values",
         help=(
-            "YAML/JSON/TOML overrides (element/constant for Bmad; namelist groups "
-            "for namelist). Use '-' to read YAML/JSON from stdin"
+            "YAML/JSON/TOML overrides, keyed by the same targets as --set (nested\n"
+            "mappings work too). Use '-' to read YAML/JSON from stdin"
         ),
     )
     parser.add_argument(
         "--set",
-        nargs=3,
-        metavar=("NAMELIST", "KEY", "VALUE"),
+        metavar="TARGET=VALUE",
         action="append",
         default=[],
         dest="set_",
-        help="Set a namelist KEY=VALUE in group NAMELIST (namelist files only); repeatable",
+        help=(
+            "Set a value; repeatable. TARGET is a Bmad constant (A), an element\n"
+            "attribute (Q1[L]), a parameter (parameter[e_tot]), a /regex/ over\n"
+            "element names (/.*_BPM/[type]), or a namelist key\n"
+            "(tao_params[global%%plot_on])"
+        ),
+    )
+    parser.add_argument(
+        "--unset",
+        metavar="TARGET",
+        action="append",
+        default=[],
+        help="Remove an element attribute, parameter, or namelist key; repeatable",
     )
     parser.add_argument(
         "--rename",

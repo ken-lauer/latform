@@ -81,6 +81,8 @@ Run any command with `-h` for its full option list, or see the
 
 ### Enforce house style on save / in CI
 
+See also: [latform-pre-commit](https://github.com/ken-lauer/latform-pre-commit).
+
 Format in place and lint as two steps:
 
 ```bash
@@ -135,9 +137,15 @@ latform-graph -f mermaid -o deps.mmd main.bmad  # Mermaid diagram to a file
 
 ### Fill in a single template file
 
-A Bmad template is itself valid Bmad; a YAML sidecar supplies per-element values.
+A Bmad template is itself valid Bmad; `--set` edits one value inline, and a YAML
+sidecar supplies them in bulk.
 
 ```bash
+latform-apply const.bmad --set 'A = 10' -i             # a constant
+latform-apply quad.bmad --set 'Q1[k1] = 1.523'         # an element attribute
+latform-apply quad.bmad --set 'parameter[e_tot] = 5e9' # a parameter
+latform-apply quad.bmad --unset 'BEN0[type]'           # drop an attribute
+
 # values.yaml:  Q1: { k1: 1.523 }
 latform-apply quad.bmad --values values.yaml
 latform-apply quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'   # regex rename
@@ -146,7 +154,7 @@ latform-apply quad.bmad --rename 'Q(\d+)' 'ARC_Q\1'   # regex rename
 The same command edits `tao.init` / namelist files, keyed by namelist group:
 
 ```bash
-latform-apply tao.init --set tao_params global%n_opti_cycles 50 -i
+latform-apply tao.init --set 'tao_params[global%n_opti_cycles] = 50' -i
 ```
 
 ### Expand a template set across instances
