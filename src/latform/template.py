@@ -552,15 +552,16 @@ output paths. See docs/cli.md.
 """
 
 
-def _cmd_instantiate(parsed: argparse.Namespace) -> None:
+def _cmd_instantiate(parsed: argparse.Namespace, config) -> None:
     import dataclasses
 
     from . import cli
-    from .output import default_options
 
     spec = load_json_or_similar(parsed.instances)
     base_dir = pathlib.Path(parsed.instances).resolve().parent
-    options = dataclasses.replace(default_options, namelist=cli.build_namelist_options(parsed))
+    options = dataclasses.replace(
+        cli.config_format_options(config), namelist=cli.build_namelist_options(parsed)
+    )
     results = instantiate(
         spec,
         base_dir=base_dir,
@@ -604,11 +605,14 @@ def main(argv: list[str] | None = None) -> None:
 
     from . import cli
 
+    cli.add_config_arguments(parser)
     cli.add_namelist_format_arguments(parser)
 
-    parsed = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    args = argv if argv is not None else sys.argv[1:]
+    config = cli.apply_config_argparse_defaults(parser, args)
+    parsed = parser.parse_args(args)
     configure_logging(parsed.log_level)
-    _cmd_instantiate(parsed)
+    _cmd_instantiate(parsed, config)
 
 
 def cli_main(argv: list[str] | None = None) -> None:

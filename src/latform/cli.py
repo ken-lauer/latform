@@ -136,6 +136,74 @@ NAMELIST_FORMAT_DESTS = (
     "namelist_align_comments",
 )
 
+# Config ``[format]`` keys that map directly onto `FormatOptions` fields.
+# The flatten toggles change *what* is emitted rather than how it is laid
+# out, and the namelist keys live on the nested options (see
+# `build_namelist_options`), so neither belongs here.
+_FORMAT_OPTION_DESTS = (
+    "line_length",
+    "max_line_length",
+    "compact",
+    "name_case",
+    "attribute_case",
+    "kind_case",
+    "builtin_case",
+    "controller_variable_case",
+    "section_break_character",
+    "section_break_width",
+    "strip_comments",
+)
+
+
+def config_format_options(config: LatformProjectConfig, base=None):
+    """
+    Fold the config's ``[format]`` settings into a `FormatOptions`.
+
+    Mirrors the ``latform`` CLI's handling: ``compact`` also flips
+    ``newline_before_new_type``, and ``max_line_length`` is derived from
+    ``line_length`` when only the latter is configured.
+
+    Parameters
+    ----------
+    config : LatformProjectConfig
+        The resolved project configuration.
+    base : FormatOptions, optional
+        Options to apply the settings on top of (default:
+        `latform.output.default_options`).
+    """
+    import dataclasses
+
+    from .output import default_options
+
+    base = base if base is not None else default_options
+    kwargs = {key: value for key, value in config.format.items() if key in _FORMAT_OPTION_DESTS}
+    if "compact" in kwargs:
+        kwargs["newline_before_new_type"] = not kwargs["compact"]
+    if "line_length" in kwargs and "max_line_length" not in kwargs:
+        kwargs["max_line_length"] = int(kwargs["line_length"] * 1.3)
+    return dataclasses.replace(base, **kwargs)
+
+
+def apply_config_argparse_defaults(
+    parser: argparse.ArgumentParser,
+    args: Sequence[str],
+) -> LatformProjectConfig:
+    """
+    Resolve the config and fold its namelist ``[format]`` settings into
+    ``parser`` as argparse defaults, so explicit CLI flags still override.
+
+    Peeks at ``--config``/``--no-config`` via ``parse_known_args`` before the
+    real parse; the caller must call ``parser.parse_args`` afterwards.
+    """
+    prelim, _ = parser.parse_known_args(list(args))
+    config = resolve_config(prelim)
+    namelist_defaults = {
+        key: value for key, value in config.format.items() if key in NAMELIST_FORMAT_DESTS
+    }
+    if namelist_defaults:
+        parser.set_defaults(**namelist_defaults)
+    return config
+
 
 def add_namelist_format_arguments(parser: argparse.ArgumentParser) -> None:
     """Add the ``tao.init`` / namelist reformatting flags shared by the CLIs."""

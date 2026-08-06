@@ -165,6 +165,11 @@ under `--output-dir` (default: current directory). A YAML sidecar lists the
 template files and per-instance values, renames, and output paths. Use
 `--dry-run` to list the files that would be written without writing them.
 
+Formatting defaults come from a discovered `latform.toml` / `pyproject.toml`
+`[format]` table (see [Configuration](../configuration.md)), as they do for
+`latform` and `latform-apply`; CLI flags override the config, and an
+instances-file `format:` section is applied on top of both.
+
 ```
 latform-template INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
                  [--no-format-namelist] [--namelist-indent N]

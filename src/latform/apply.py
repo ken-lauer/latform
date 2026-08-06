@@ -796,16 +796,17 @@ def _merge_set_overrides(
     return normalize_value_keys({**(values or {}), **inline})
 
 
-def _cmd_apply(parsed) -> None:
+def _cmd_apply(parsed, config) -> None:
     import dataclasses
 
     from . import cli
-    from .output import default_options
 
     contents = pathlib.Path(parsed.template).read_text()
     file_format = parsed.format or ("namelist" if is_namelist_file(parsed.template) else "bmad")
 
-    options = dataclasses.replace(default_options, namelist=cli.build_namelist_options(parsed))
+    options = dataclasses.replace(
+        cli.config_format_options(config), namelist=cli.build_namelist_options(parsed)
+    )
 
     values = _load_values(parsed.values) if parsed.values else None
 
@@ -925,6 +926,7 @@ def main_apply(argv: list[str] | None = None) -> None:
 
     from . import cli
 
+    cli.add_config_arguments(parser)
     cli.add_namelist_format_arguments(parser)
 
     out_group = parser.add_mutually_exclusive_group()
@@ -936,9 +938,11 @@ def main_apply(argv: list[str] | None = None) -> None:
         help="Rewrite the template file in place",
     )
 
-    parsed = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    args = argv if argv is not None else sys.argv[1:]
+    config = cli.apply_config_argparse_defaults(parser, args)
+    parsed = parser.parse_args(args)
     configure_logging(parsed.log_level)
-    _cmd_apply(parsed)
+    _cmd_apply(parsed, config)
 
 
 def cli_main_apply(argv: list[str] | None = None) -> None:

@@ -553,6 +553,31 @@ def test_cli_instantiate_writes_files(tmp_path, capsys):
     assert "C1_Q" in (tmp_path / "out" / "c1" / "c1.bmad").read_text()
 
 
+def test_cli_config_format_defaults(tmp_path, capsys):
+    """``[format]`` settings from a latform config supply the generation
+    defaults; the instances file's own ``format:`` section still wins."""
+    (tmp_path / "cx.bmad").write_text("cx_q: quadrupole, k1=0.0\n")
+    (tmp_path / "latform.toml").write_text('[format]\nname-case = "same"\n')
+    (tmp_path / "instances.yaml").write_text(
+        'template:\n  - input: cx.bmad\n    output: "{instance}.bmad"\ninstances:\n  c1: {}\n'
+    )
+    args = ["-d", str(tmp_path / "out"), "--config", str(tmp_path / "latform.toml")]
+    cli_main([str(tmp_path / "instances.yaml"), *args])
+    assert "cx_q: quadrupole" in (tmp_path / "out" / "c1.bmad").read_text()
+
+    (tmp_path / "instances.yaml").write_text(
+        "template:\n"
+        "  - input: cx.bmad\n"
+        '    output: "{instance}.bmad"\n'
+        "format:\n"
+        "  name-case: upper\n"
+        "instances:\n"
+        "  c1: {}\n"
+    )
+    cli_main([str(tmp_path / "instances.yaml"), *args])
+    assert "CX_Q: quadrupole" in (tmp_path / "out" / "c1.bmad").read_text()
+
+
 def test_cli_instantiate_dry_run_writes_nothing(tmp_path, capsys):
     (tmp_path / "cx.bmad").write_text("CX_Q: quadrupole\n")
     (tmp_path / "instances.yaml").write_text(
