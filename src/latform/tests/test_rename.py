@@ -28,6 +28,7 @@ def test_rename_updates_definition_and_references():
     )
     assert text.lower().splitlines() == [
         "zz: quad, l=0.5",
+        "",
         "ln: line = (zz, zz)",
     ]
 
@@ -94,6 +95,7 @@ def test_rename_parameter_target_and_expression_reference():
     assert text.lower().splitlines() == [
         "knew: quad",
         "k2: quad",
+        "",
         "knew[k2] = knew[k2] + 2",
     ]
 
@@ -135,6 +137,7 @@ def test_rename_line_with_repetition_and_reversal():
         "A: quad",
         "BB: quad",
         "CC: quad",
+        "",
         "L1: line = (A, 2*BB, --CC)",
     ]
 

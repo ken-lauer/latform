@@ -2904,8 +2904,10 @@ OVERLAY: overlay = {
 
     expected = """\
 QUA2: quad
+
 XCR_B1 = 0
 B1 = 0
+
 OVERLAY: OVERLAY = {
   QUA2[hkick]:kick,
   QUA2[b1]:XCR_B1*multipoles_on*kick,
