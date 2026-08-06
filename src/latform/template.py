@@ -349,31 +349,46 @@ def instantiate(
     Parameters
     ----------
     spec : dict
-        Parsed instances file: ``template`` (list of ``{input, output}``),
-        optional ``template_root`` (directory, relative to ``base_dir``, that
-        all ``input``/``context`` paths are read from; the spec's path
-        coordinates — inputs, ``paths`` keys, header ``{source}`` — remain
-        relative to it), optional global ``renames``, optional ``paths`` (explicit path
-        replacements for ``call``/``design_lattice`` targets:
-        ``{referenced: replacement}``, interpolating ``{instance}``; a key
-        matches the reference either resolved relative to the template root
-        (replacement relative to the output dir) or exactly as written in the
-        calling file (replacement inserted verbatim), and wins over the
-        automatic transform-set rewrite; also usable per instance), optional
-        ``delimiters`` (default delimiter
-        set for prefix/suffix/parts), optional ``format`` (formatting options
-        for the emitted files, config-file ``[format]`` style; applied on top
-        of ``options``), optional ``tao_init`` (one ``{input, output}`` mapping
-        or a list of them, for Tao ``tao.init`` files whose ``design_lattice``
-        files are rewritten to the generated lattices), optional ``header``
-        (comment text prepended to every generated file; `DEFAULT_HEADER` when
-        absent, disabled when null/empty; interpolates ``{source}``,
-        ``{instances}``, and ``{instance}``), and ``instances``
-        (name -> overrides). A per-instance ``tao_init`` override adds or
-        updates namelist sections via a ``namelists`` block
-        (``{namelist: {key: value}}``, with a ``name#N`` suffix to target the
-        N-th repeated group); with the list form, the override is keyed by the
-        entry's ``input`` path (``{input: {namelists: ...}}``).
+        Parsed instances file. Required keys:
+
+        * ``template``: list of ``{input, output}`` — the files to transform
+          and where each instance's copy goes. ``output`` may interpolate
+          ``{instance}`` (with ``:upper``/``:lower``).
+        * ``instances``: ``{name: overrides}``. Each instance's overrides may
+          hold ``values``, ``insert``, ``renames``, ``paths``, and
+          ``tao_init`` blocks that apply to that instance only.
+
+        Optional keys:
+
+        * ``template_root``: directory, relative to ``base_dir``, that all
+          inputs (``template``, ``context``, ``tao_init``) are read from.
+          The spec's path coordinates — inputs, ``paths`` keys, the header's
+          ``{source}`` — remain relative to it.
+        * ``renames``: global element rename rules (flat ``{from: to}``, or
+          structured ``prefix``/``suffix``/``regex``/``parts``).
+        * ``paths``: explicit ``{referenced: replacement}`` rewrites for
+          ``call``/``design_lattice`` targets, interpolating ``{instance}``.
+          A key matches the reference either resolved relative to the
+          template root (replacement relative to the output dir) or exactly
+          as written in the calling file (replacement inserted verbatim),
+          winning over the automatic transform-set rewrite.
+        * ``context``: files loaded for name resolution only — never
+          transformed or written.
+        * ``delimiters``: default delimiter set for prefix/suffix/parts
+          renames.
+        * ``format``: formatting options for the emitted files (config-file
+          ``[format]`` style), applied on top of ``options``.
+        * ``tao_init``: one ``{input, output}`` mapping or a list of them;
+          each renders a Tao ``tao.init`` per instance with its
+          ``design_lattice`` files rewritten to the generated lattices. A
+          per-instance override adds or updates namelist sections via a
+          ``namelists`` block (``{namelist: {key: value}}``, with a
+          ``name#N`` suffix to target the N-th repeated group); with the
+          list form, the override is keyed by the entry's ``input`` path
+          (``{input: {namelists: ...}}``).
+        * ``header``: comment text prepended to every generated file;
+          `DEFAULT_HEADER` when absent, disabled when null/empty.
+          Interpolates ``{source}``, ``{instances}``, and ``{instance}``.
     base_dir : pathlib.Path | str
         Directory the ``input`` paths are relative to (the instances file's
         directory); a spec ``template_root`` is resolved against it.
