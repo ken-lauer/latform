@@ -128,7 +128,6 @@ def configure_logging(level: str) -> None:
     logging.basicConfig()
 
 
-#: Argparse dests added by :func:`add_namelist_format_arguments`.
 NAMELIST_FORMAT_DESTS = (
     "format_namelist",
     "namelist_indent",
