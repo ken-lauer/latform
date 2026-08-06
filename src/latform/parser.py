@@ -143,6 +143,10 @@ def _make_attribute_list(items: list[TokenizerItem]) -> list[Attribute]:
     item = Seq.from_items(items)
     if not isinstance(item, Seq):
         return [_make_attribute(item)]
+    if item.delimiter != COMMA:
+        # A single attribute with no comma (e.g. a lone inline ``call::file``):
+        # the Seq is the attribute itself, not a list of them.
+        return [_make_attribute(item)]
 
     return [_make_attribute(item) for item in item.items]
 

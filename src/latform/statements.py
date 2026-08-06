@@ -378,7 +378,7 @@ class Element(Statement):
 def get_call_filename(
     st: Simple,
     *,
-    caller_directory: pathlib.Path | None + None,
+    caller_directory: pathlib.Path | None = None,
     expand_vars: bool = True,
 ) -> tuple[str, pathlib.Path]:
     if not isinstance(st, Simple):

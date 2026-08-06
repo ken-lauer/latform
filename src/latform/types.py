@@ -85,8 +85,23 @@ class Seq:
         )
 
     def annotate(self, named: dict[Token, typing.Any]):
+        self._collapse_inline_call()
         for item in self.items:
             item.annotate(named=named)
+
+    def _collapse_inline_call(self) -> None:
+        """Collapse an inline ``call::<path>`` argument's path into a single `Role.filename` token."""
+        items = self.items
+        if len(items) < 3 or not isinstance(items[0], Token) or items[0]._upper != "CALL":
+            return
+        if not isinstance(items[1], Delimiter) or str(items[1]) != "::":
+            return
+        path = items[2:]
+        if not all(isinstance(part, Token) for part in path):
+            return
+        if len(path) == 1 and path[0].role is Role.filename:
+            return
+        self.items[2:] = [Token.join(path, role=Role.filename)]
 
     @classmethod
     def from_item(cls: type[Self], item: TokenizerItem) -> Self | Seq | Token:
@@ -360,6 +375,9 @@ class Attribute:
             # use, xyz -> 'xyz' is an Attribute without a value, just a name (? TODO)
             if isinstance(self.name, Token):
                 self.name.annotate(named=named)
+            elif isinstance(self.name, Seq):
+                # Possibly a bare inline call (e.g. call::surface.bmad)
+                self.name._collapse_inline_call()
             return
 
         match self.name:
@@ -457,7 +475,7 @@ class FormatOptions:
     indent_size: int = 2
     indent_char: str = " "
     comment_col: int = 40
-    newline_before_new_type: bool = False
+    newline_before_new_type: bool = True
     newline_between_lines: bool = True
     trailing_comma: bool = False
     statement_comma_threshold_for_multiline: int = 8

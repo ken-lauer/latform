@@ -2273,9 +2273,7 @@ c: crystal, call::$AB/my_curvature.bmad, h_misalign = call::my_surface.bmad
                                 items=[
                                     T("call"),
                                     Delimiter("::"),
-                                    T("$AB"),
-                                    SLASH,
-                                    T("my_curvature.bmad"),
+                                    T("$AB/my_curvature.bmad"),
                                 ],
                             ),
                             value=None,
@@ -2291,6 +2289,26 @@ c: crystal, call::$AB/my_curvature.bmad, h_misalign = call::my_surface.bmad
                 )
             ],
             id="inline_call",
+        ),
+        pytest.param(
+            "d: crystal, call::external.bmad",
+            [
+                Element(
+                    name=T("d"),
+                    keyword=T("crystal"),
+                    ele_list=None,
+                    attributes=[
+                        Attribute(
+                            name=Seq(
+                                delimiter=SPACE,
+                                items=[T("call"), Delimiter("::"), T("external.bmad")],
+                            ),
+                            value=None,
+                        ),
+                    ],
+                )
+            ],
+            id="inline_call_only_attribute",
         ),
         pytest.param(
             "parameter[particle] = deuteron",
@@ -2886,8 +2904,10 @@ OVERLAY: overlay = {
 
     expected = """\
 QUA2: quad
+
 XCR_B1 = 0
 B1 = 0
+
 OVERLAY: OVERLAY = {
   QUA2[hkick]:kick,
   QUA2[b1]:XCR_B1*multipoles_on*kick,

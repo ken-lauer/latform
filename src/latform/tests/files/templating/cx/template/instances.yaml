@@ -10,6 +10,9 @@ template:
   - input: cx.col.bmad
     output: "{instance}.col.bmad"
 
+# No generated-file header (the expected outputs are compared byte-for-byte).
+header: null
+
 # Prefix rename applied to every instance (handles CX_, CX. and bare CX).
 renames:
   "CX([_.].*|$)": "{instance:upper}\\1"
