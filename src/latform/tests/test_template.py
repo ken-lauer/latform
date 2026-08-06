@@ -112,6 +112,28 @@ def test_call_target_directory_component_rewritten(tmp_path):
     assert "call, file=c1/foo/bar.bmad" in res["c1.bmad"]  # call path directory rewritten
 
 
+def test_inline_call_target_rewritten(tmp_path):
+    """Inline ``call::`` paths (bare and attribute-valued) pointing at
+    transform-set files are rewritten; other targets are left untouched."""
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "top.bmad").write_text(
+        "c: crystal, call::sub/surface.bmad, h_misalign = call::sub/surface.bmad\n"
+        "d: crystal, call::external.bmad\n"
+    )
+    (tmp_path / "sub" / "surface.bmad").write_text("qq: quadrupole, l = 0.5\n")
+    spec = {
+        "template": [
+            {"input": "top.bmad", "output": "{instance}.bmad"},
+            {"input": "sub/surface.bmad", "output": "{instance}_surface.bmad"},
+        ],
+        "instances": {"m1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["m1"]["m1.bmad"]
+    squashed = out.replace(" ", "")
+    assert "C:crystal,call::m1_surface.bmad,h_misalign=call::m1_surface.bmad" in squashed
+    assert "call::external.bmad" in squashed  # not in the transform set: untouched
+
+
 def test_instantiate_rewrites_tao_init(tmp_path):
     """A tao_init spec rewrites design_lattice files and adds/updates namelists."""
     (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
