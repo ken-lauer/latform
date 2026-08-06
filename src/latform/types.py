@@ -475,7 +475,7 @@ class FormatOptions:
     indent_size: int = 2
     indent_char: str = " "
     comment_col: int = 40
-    newline_before_new_type: bool = False
+    newline_before_new_type: bool = True
     newline_between_lines: bool = True
     trailing_comma: bool = False
     statement_comma_threshold_for_multiline: int = 8
