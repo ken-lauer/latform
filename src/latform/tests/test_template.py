@@ -217,6 +217,32 @@ def test_paths_per_instance_override_and_interpolation(tmp_path):
     assert "call, file=../special.bmad" in res["m2"]["m2/main.bmad"]
 
 
+def test_paths_as_written_reference_match(tmp_path):
+    """A ``paths`` key also matches a reference exactly as written in the
+    calling file; the replacement is inserted verbatim and wins over the
+    transform set's automatic rewrite."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "top.lat.bmad").write_text("call, file=dfq.bmad\ncall, file=../y1.bmad\n")
+    (sub / "dfq.bmad").write_text("Q: marker\n")
+    spec = {
+        "template": [
+            {"input": "sub/top.lat.bmad", "output": "sub_{instance}/top.lat.bmad"},
+            # dfq.bmad is in the transform set: without the explicit entry the
+            # reference would be auto-rewritten to the (same-named) output.
+            {"input": "sub/dfq.bmad", "output": "sub_{instance}/dfq.bmad"},
+        ],
+        "paths": {
+            "dfq.bmad": "dfrepl.bmad",
+            "../y1.bmad": "../{instance}.bmad",
+        },
+        "instances": {"m1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["m1"]["sub_m1/top.lat.bmad"]
+    assert "call, file=dfrepl.bmad" in out
+    assert "call, file=../m1.bmad" in out
+
+
 def test_paths_env_var_replacement_kept_verbatim(tmp_path):
     """A replacement containing ``$VAR`` (or an absolute path) is not made
     relative to the output file's directory."""

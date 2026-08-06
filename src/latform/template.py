@@ -138,21 +138,58 @@ def _relative_target(new_out: str, out_dir: str) -> str:
     return posixpath.relpath(new_out, out_dir or ".")
 
 
+def _map_reference(
+    ref: str,
+    in_dir: str,
+    out_dir: str,
+    explicit_paths: Mapping[str, str],
+    in_to_out: Mapping[str, str],
+) -> str | None:
+    """
+    Map one referenced path to its rewritten target, or None to leave it alone.
+
+    Precedence:
+
+    1. An explicit ``paths`` entry matching the reference resolved against the
+       referencing file's input directory (template-root coordinates); the
+       replacement is output-dir-relative and adjusted to ``out_dir``.
+    2. An explicit ``paths`` entry matching the reference exactly as written;
+       the replacement is inserted verbatim.
+    3. The transform set's automatic input -> output mapping (adjusted to
+       ``out_dir``).
+    """
+    resolved_in = posixpath.normpath(posixpath.join(in_dir, ref))
+    new_out = explicit_paths.get(resolved_in)
+    if new_out is not None:
+        return _relative_target(new_out, out_dir)
+    as_written = explicit_paths.get(posixpath.normpath(ref))
+    if as_written is not None:
+        return as_written
+    new_out = in_to_out.get(resolved_in)
+    if new_out is not None:
+        return _relative_target(new_out, out_dir)
+    return None
+
+
 def _rewrite_call_filenames(
     files: MemoryFiles,
     transform_paths: Mapping[pathlib.Path, tuple[str, str]],
     in_to_out: Mapping[str, str],
+    explicit_paths: Mapping[str, str],
 ) -> None:
     """
     Rewrite ``call`` targets (``call, file=`` and inline ``call::``) that
-    resolve to a transform-set file or an explicit ``paths`` entry.
+    resolve to a transform-set file or match an explicit ``paths`` entry.
 
     Parameters
     ----------
     transform_paths : Mapping[pathlib.Path, tuple[str, str]]
         ``{resolved_path: (input_rel, output_rel)}`` for the transform set.
     in_to_out : Mapping[str, str]
-        Normalized input relative path -> output relative path.
+        Normalized input relative path -> output relative path for the
+        transform set.
+    explicit_paths : Mapping[str, str]
+        Interpolated ``paths`` entries; see `_map_reference` for matching.
     """
     for path, (input_rel, output_rel) in transform_paths.items():
         in_dir = posixpath.dirname(input_rel)
@@ -161,10 +198,9 @@ def _rewrite_call_filenames(
             node = item.node
             if not (isinstance(node, Token) and node.role is Role.filename):
                 continue
-            resolved_in = posixpath.normpath(posixpath.join(in_dir, str(node)))
-            new_out = in_to_out.get(resolved_in)
-            if new_out is not None:
-                item.replace(Token(_relative_target(new_out, out_dir), role=Role.filename))
+            new_target = _map_reference(str(node), in_dir, out_dir, explicit_paths, in_to_out)
+            if new_target is not None:
+                item.replace(Token(new_target, role=Role.filename))
 
 
 def _instantiate_tao_init(
@@ -172,6 +208,7 @@ def _instantiate_tao_init(
     override: dict | None,
     base_dir: pathlib.Path,
     in_to_out: Mapping[str, str],
+    explicit_paths: Mapping[str, str],
     instance: str,
     options: NamelistFormatOptions | None = None,
     renames: dict[str, str] | None = None,
@@ -201,12 +238,11 @@ def _instantiate_tao_init(
     remapped: list[str] = []
     changed = False
     for entry in tao_init.lattice_files:
-        resolved_in = posixpath.normpath(posixpath.join(in_dir, entry))
-        mapped = in_to_out.get(resolved_in)
+        mapped = _map_reference(entry, in_dir, out_dir, explicit_paths, in_to_out)
         if mapped is None:
             remapped.append(entry)
         else:
-            remapped.append(_relative_target(mapped, out_dir))
+            remapped.append(mapped)
             changed = True
     if changed:
         tao_init.lattice_files = remapped
@@ -318,10 +354,13 @@ def instantiate(
         all ``input``/``context`` paths are read from; the spec's path
         coordinates — inputs, ``paths`` keys, header ``{source}`` — remain
         relative to it), optional global ``renames``, optional ``paths`` (explicit path
-        replacements for ``call``/``design_lattice`` targets outside the
-        transform set: ``{referenced: replacement}``, both relative to
-        ``base_dir``/the output dir respectively, interpolating ``{instance}``;
-        also usable per instance), optional ``delimiters`` (default delimiter
+        replacements for ``call``/``design_lattice`` targets:
+        ``{referenced: replacement}``, interpolating ``{instance}``; a key
+        matches the reference either resolved relative to the template root
+        (replacement relative to the output dir) or exactly as written in the
+        calling file (replacement inserted verbatim), and wins over the
+        automatic transform-set rewrite; also usable per instance), optional
+        ``delimiters`` (default delimiter
         set for prefix/suffix/parts), optional ``format`` (formatting options
         for the emitted files, config-file ``[format]`` style; applied on top
         of ``options``), optional ``tao_init`` (one ``{input, output}`` mapping
@@ -416,14 +455,15 @@ def instantiate(
         output_paths = {p: _interpolate(output_patterns[p], name) for p in contents}
         transform_paths = {p: (input_basenames[p], output_paths[p]) for p in contents}
         in_to_out = {posixpath.normpath(input_basenames[p]): output_paths[p] for p in contents}
-        # Explicit path replacements, for targets outside the transform set
-        # (e.g. ../foo.bmad -> ../bar.bmad). An entry that collides with a
-        # transform input wins over the automatic rewrite.
-        for src, dest in {**global_paths, **(overrides.get("paths") or {})}.items():
-            key = posixpath.normpath(_interpolate(str(src), name))
-            in_to_out[key] = _interpolate(str(dest), name)
+        # Explicit path replacements (e.g. ../foo.bmad -> ../bar.bmad),
+        # matched by resolved path or as written; they win over the automatic
+        # transform-set rewrite (see _map_reference).
+        explicit_paths = {
+            posixpath.normpath(_interpolate(str(src), name)): _interpolate(str(dest), name)
+            for src, dest in {**global_paths, **(overrides.get("paths") or {})}.items()
+        }
 
-        _rewrite_call_filenames(files, transform_paths, in_to_out)
+        _rewrite_call_filenames(files, transform_paths, in_to_out, explicit_paths)
 
         instance_files = {
             output_paths[p]: (
@@ -439,6 +479,7 @@ def instantiate(
                 _tao_init_override(overrides, entry, tao_init_inputs, multi_tao_init),
                 input_dir,
                 in_to_out,
+                explicit_paths,
                 name,
                 options.namelist if format_namelist else None,
                 renames=element_renames,

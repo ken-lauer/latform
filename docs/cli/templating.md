@@ -313,12 +313,19 @@ instances:
       ../foo.bmad: ../special.bmad # per-instance override
 ```
 
-Keys are the referenced file as resolved against the instances file's
-directory (the same way `call` targets resolve, so one entry covers the same
-file referenced from different subdirectories); values are relative to
-`--output-dir`, and each rewritten reference is adjusted to the referencing
-file's own output location. A value that is absolute or contains an
-environment variable (`$LATTICE_ROOT/settings.bmad`) is inserted verbatim.
+A key matches a reference in either of two ways, tried in order:
+
+1. **Resolved**: the key names the referenced file relative to the template
+   root (the same way `call` targets resolve, so one entry covers the same
+   file referenced from different subdirectories). The value is relative to
+   `--output-dir`, and each rewritten reference is adjusted to the
+   referencing file's own output location. A value that is absolute or
+   contains an environment variable (`$LATTICE_ROOT/settings.bmad`) is
+   inserted verbatim.
+2. **As written**: the key is the reference text exactly as it appears in the
+   calling file (`dg1.bmad`, `../y1.bmad`), wherever it appears; the value is
+   inserted verbatim.
+
 Replacements apply everywhere the transform-set rewrite does: `call, file=`
 statements, inline `call::` arguments, and `tao_init` `design_lattice`
 entries.
