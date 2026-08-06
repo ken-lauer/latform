@@ -269,8 +269,41 @@ latform-template instances.yaml -d build/ --dry-run
 Files that the template `call`s but are not in `template` (e.g. shared
 `settings/`) can be listed under a top-level `context:` key to be loaded for
 name resolution only — they are never written, and `call`s to them are left
-untouched. `call`s between transform-set files are rewritten to the instance
-outputs automatically.
+untouched. `call`s between transform-set files (both `call, file=` statements
+and inline `call::` arguments) are rewritten to the instance outputs
+automatically.
+
+### Path replacements (`paths:`)
+
+To redirect a reference to a file that is **not** part of the transform set —
+say each instance should call a different pre-existing settings file — use a
+`paths:` block, globally and/or per instance (the per-instance entry wins on
+conflict, as does any `paths` entry over the automatic transform-set rewrite):
+
+```yaml
+template:
+  - input: cx.bmad
+    output: "{instance}/{instance}.bmad"
+
+paths:
+  ../foo.bmad: ../bar_{instance}.bmad # {instance} interpolates in the value
+
+instances:
+  c1: {}
+  c2:
+    paths:
+      ../foo.bmad: ../special.bmad # per-instance override
+```
+
+Keys are the referenced file as resolved against the instances file's
+directory (the same way `call` targets resolve, so one entry covers the same
+file referenced from different subdirectories); values are relative to
+`--output-dir`, and each rewritten reference is adjusted to the referencing
+file's own output location. A value that is absolute or contains an
+environment variable (`$LATTICE_ROOT/settings.bmad`) is inserted verbatim.
+Replacements apply everywhere the transform-set rewrite does: `call, file=`
+statements, inline `call::` arguments, and `tao_init` `design_lattice`
+entries.
 
 ### Generated-file header (`header:`)
 

@@ -121,13 +121,26 @@ def _resolve_by_basename(files: MemoryFiles, basename: str) -> pathlib.Path:
     raise KeyError(f"template has no file named {basename!r}")
 
 
+def _relative_target(new_out: str, out_dir: str) -> str:
+    """
+    Make a mapped output path relative to the referencing file's output dir.
+
+    Absolute and ``$VAR``-containing targets are kept verbatim — they do not
+    live in the output tree, so relocating them would corrupt them.
+    """
+    if posixpath.isabs(new_out) or "$" in new_out:
+        return new_out
+    return posixpath.relpath(new_out, out_dir or ".")
+
+
 def _rewrite_call_filenames(
     files: MemoryFiles,
-    transform_paths: dict,
+    transform_paths: dict[pathlib.Path, tuple[pathlib.Path, pathlib.Path]],
     in_to_out: dict[str, str],
 ) -> None:
     """
-    Rewrite ``call, file=`` targets that point at other transform-set files.
+    Rewrite ``call`` targets (``call, file=`` and inline ``call::``) that
+    resolve to a transform-set file or an explicit ``paths`` entry.
 
     Parameters
     ----------
@@ -146,8 +159,7 @@ def _rewrite_call_filenames(
             resolved_in = posixpath.normpath(posixpath.join(in_dir, str(node)))
             new_out = in_to_out.get(resolved_in)
             if new_out is not None:
-                new_target = posixpath.relpath(new_out, out_dir or ".")
-                item.replace(Token(new_target, role=Role.filename))
+                item.replace(Token(_relative_target(new_out, out_dir), role=Role.filename))
 
 
 def _instantiate_tao_init(
@@ -189,7 +201,7 @@ def _instantiate_tao_init(
         if mapped is None:
             remapped.append(entry)
         else:
-            remapped.append(posixpath.relpath(mapped, out_dir or "."))
+            remapped.append(_relative_target(mapped, out_dir))
             changed = True
     if changed:
         tao_init.lattice_files = remapped
@@ -297,7 +309,11 @@ def instantiate(
     ----------
     spec : dict
         Parsed instances file: ``template`` (list of ``{input, output}``),
-        optional global ``renames``, optional ``delimiters`` (default delimiter
+        optional global ``renames``, optional ``paths`` (explicit path
+        replacements for ``call``/``design_lattice`` targets outside the
+        transform set: ``{referenced: replacement}``, both relative to
+        ``base_dir``/the output dir respectively, interpolating ``{instance}``;
+        also usable per instance), optional ``delimiters`` (default delimiter
         set for prefix/suffix/parts), optional ``format`` (formatting options
         for the emitted files, config-file ``[format]`` style; applied on top
         of ``options``), optional ``tao_init`` (one ``{input, output}`` mapping
@@ -339,6 +355,7 @@ def instantiate(
     template_files = spec["template"]
     default_delims = delim_set(spec.get("delimiters"))
     global_rules = normalize_renames(spec.get("renames"), default_delims)
+    global_paths = spec.get("paths") or {}
     instances = spec["instances"]
     context_files = spec.get("context") or []
     tao_init_specs, multi_tao_init = _normalize_tao_init_specs(spec.get("tao_init"))
@@ -384,6 +401,12 @@ def instantiate(
         output_paths = {p: _interpolate(output_patterns[p], name) for p in contents}
         transform_paths = {p: (input_basenames[p], output_paths[p]) for p in contents}
         in_to_out = {posixpath.normpath(input_basenames[p]): output_paths[p] for p in contents}
+        # Explicit path replacements, for targets outside the transform set
+        # (e.g. ../foo.bmad -> ../bar.bmad). An entry that collides with a
+        # transform input wins over the automatic rewrite.
+        for src, dest in {**global_paths, **(overrides.get("paths") or {})}.items():
+            key = posixpath.normpath(_interpolate(str(src), name))
+            in_to_out[key] = _interpolate(str(dest), name)
         _rewrite_call_filenames(files, transform_paths, in_to_out)
 
         instance_files = {

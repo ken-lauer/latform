@@ -134,6 +134,75 @@ def test_inline_call_target_rewritten(tmp_path):
     assert "call::external.bmad" in squashed  # not in the transform set: untouched
 
 
+def test_paths_replacement_outside_transform_set(tmp_path):
+    """An explicit ``paths`` entry rewrites references to files that are not
+    part of the transform set, for both call forms."""
+    (tmp_path / "top.bmad").write_text(
+        "call, file=../foo.bmad\nc: crystal, call::../foo.bmad\ncall, file=../keep.bmad\n"
+    )
+    spec = {
+        "template": [{"input": "top.bmad", "output": "{instance}.bmad"}],
+        "paths": {"../foo.bmad": "../bar.bmad"},
+        "instances": {"m1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["m1"]["m1.bmad"]
+    assert "call, file=../bar.bmad" in out
+    assert "call::../bar.bmad" in out.replace(" ", "")
+    assert "call, file=../keep.bmad" in out  # unmapped reference untouched
+
+
+def test_paths_per_instance_override_and_interpolation(tmp_path):
+    """Global ``paths`` interpolate ``{instance}``; a per-instance block wins,
+    and replacements are made relative to each output file's directory."""
+    (tmp_path / "top.bmad").write_text("call, file=../settings.bmad\n")
+    spec = {
+        "template": [{"input": "top.bmad", "output": "{instance}/main.bmad"}],
+        "paths": {"../settings.bmad": "settings_{instance}.bmad"},
+        "instances": {
+            "m1": {},
+            "m2": {"paths": {"../settings.bmad": "special.bmad"}},
+        },
+    }
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)
+    # values are relative to the output base dir; main.bmad lives one level down
+    assert "call, file=../settings_m1.bmad" in res["m1"]["m1/main.bmad"]
+    assert "call, file=../special.bmad" in res["m2"]["m2/main.bmad"]
+
+
+def test_paths_env_var_replacement_kept_verbatim(tmp_path):
+    """A replacement containing ``$VAR`` (or an absolute path) is not made
+    relative to the output file's directory."""
+    (tmp_path / "top.bmad").write_text("call, file=old/settings.bmad\n")
+    spec = {
+        "template": [{"input": "top.bmad", "output": "{instance}/main.bmad"}],
+        "paths": {"old/settings.bmad": "$LATTICE_ROOT/settings.bmad"},
+        "instances": {"m1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["m1"]["m1/main.bmad"]
+    assert "call, file=$LATTICE_ROOT/settings.bmad" in out
+
+
+def test_paths_replacement_in_tao_init(tmp_path):
+    """``paths`` entries also apply to tao.init design_lattice files."""
+    (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\n")
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n"
+        "  design_lattice(1)%file = 'cx.lat.bmad'\n"
+        "  design_lattice(2)%file = '../common.bmad'\n"
+        "/\n"
+    )
+    spec = {
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "tao_init": {"input": "tao.init", "output": "{instance}/tao.init"},
+        "paths": {"../common.bmad": "../common_{instance}.bmad"},
+        "instances": {"c1": {}},
+    }
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)
+    c1 = res["c1"]["c1/tao.init"]
+    assert "design_lattice(1)%file = '../c1.lat.bmad'" in c1
+    assert "design_lattice(2)%file = '../../common_c1.bmad'" in c1
+
+
 def test_instantiate_rewrites_tao_init(tmp_path):
     """A tao_init spec rewrites design_lattice files and adds/updates namelists."""
     (tmp_path / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncl: line=(CX_Q)\nuse, cl\n")
