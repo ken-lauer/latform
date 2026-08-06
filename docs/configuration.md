@@ -1,10 +1,11 @@
 # Configuration
 
-`latform` and `latform-lint` read project-wide settings from a configuration
-file. Settings may live in a standalone `latform.toml` (bare tables) or under
-`[tool.latform]` in `pyproject.toml`. Discovery walks upward from the current
-directory; the first `latform.toml` wins, otherwise the first `pyproject.toml`
-that contains a `[tool.latform]` table.
+`latform`, `latform-lint`, `latform-apply`, and `latform-template` read
+project-wide settings from a configuration file. Settings may live in a
+standalone `latform.toml` (bare tables) or under `[tool.latform]` in
+`pyproject.toml`. Discovery walks upward from the current directory; the first
+`latform.toml` wins, otherwise the first `pyproject.toml` that contains a
+`[tool.latform]` table.
 
 ```toml
 # latform.toml
@@ -40,6 +41,11 @@ Precedence is **command-line flag > config file > built-in default**, so an
 explicit flag such as `--name-case upper` always overrides the config. Lint
 ignores are cumulative: `--ignore` on the command line, the global `[lint] ignore`
 list, and any matching `[lint.per-file-ignores]` entries are all applied.
+
+`[format]` also supplies the formatting defaults for `latform-apply` and
+`latform-template` (the flatten toggles excepted — those only make sense for
+`latform` itself). For `latform-template`, an instances-file `format:` section
+is applied on top of the config.
 
 | Option        | Description                                                             |
 | ------------- | ----------------------------------------------------------------------- |
@@ -117,7 +123,6 @@ untouched. See [Value normalization](cli/index.md#value-normalization-tao-schema
 
 !!! note
 
-    These `[format]` keys are read by `latform` (the same command that applies
-    the rest of `[format]`). `latform-apply` and `latform-template` do not read
-    `latform.toml`; pass their namelist options as flags instead. As with every
-    `[format]` key, an explicit CLI flag overrides the config value.
+    These `[format]` keys are read by `latform`, `latform-apply`, and
+    `latform-template` alike. As with every `[format]` key, an explicit CLI
+    flag overrides the config value.

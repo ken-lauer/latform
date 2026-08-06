@@ -208,6 +208,37 @@ def test_cli_interpolate_to_stdout(tmp_path, capsys):
     assert "C1_Q" in out and "CX_Q" not in out
 
 
+def test_cli_config_format_defaults(tmp_path, capsys):
+    """``[format]`` settings from a latform config supply the defaults."""
+    (tmp_path / "t.bmad").write_text("cx_q: quadrupole, k1=0.0\n")
+    (tmp_path / "latform.toml").write_text('[format]\nname-case = "same"\n')
+    cli_main_apply([str(tmp_path / "t.bmad"), "--config", str(tmp_path / "latform.toml")])
+    assert "cx_q: quadrupole" in capsys.readouterr().out  # default would uppercase
+
+
+def test_cli_no_config_ignores_format(tmp_path, capsys, monkeypatch):
+    """A discovered config applies; ``--no-config`` restores builtin defaults."""
+    (tmp_path / "t.bmad").write_text("cx_q: quadrupole, k1=0.0\n")
+    (tmp_path / "latform.toml").write_text('[format]\nname-case = "same"\n')
+    monkeypatch.chdir(tmp_path)
+    cli_main_apply(["t.bmad"])
+    assert "cx_q: quadrupole" in capsys.readouterr().out
+    cli_main_apply(["t.bmad", "--no-config"])
+    assert "CX_Q: quadrupole" in capsys.readouterr().out
+
+
+def test_cli_config_namelist_defaults_flag_overrides(tmp_path, capsys):
+    """Config namelist settings become flag defaults; an explicit flag wins."""
+    (tmp_path / "t.init").write_text("&tao_params\n  global%plot_on = T\n/\n")
+    (tmp_path / "latform.toml").write_text("[format]\nnamelist-indent = 6\n")
+    config_args = ["--config", str(tmp_path / "latform.toml")]
+    cli_main_apply([str(tmp_path / "t.init"), *config_args])
+    assert "      global%plot_on" in capsys.readouterr().out
+    cli_main_apply([str(tmp_path / "t.init"), *config_args, "--namelist-indent", "2"])
+    out = capsys.readouterr().out
+    assert "  global%plot_on" in out and "      global%plot_on" not in out
+
+
 def test_cli_interpolate_with_values_file(tmp_path, capsys):
     (tmp_path / "t.bmad").write_text("Q1: quadrupole, k1=0.0\n")
     (tmp_path / "v.yaml").write_text("Q1: {k1: 1.5}\n")

@@ -165,6 +165,11 @@ under `--output-dir` (default: current directory). A YAML sidecar lists the
 template files and per-instance values, renames, and output paths. Use
 `--dry-run` to list the files that would be written without writing them.
 
+Formatting defaults come from a discovered `latform.toml` / `pyproject.toml`
+`[format]` table (see [Configuration](../configuration.md)), as they do for
+`latform` and `latform-apply`; CLI flags override the config, and an
+instances-file `format:` section is applied on top of both.
+
 ```
 latform-template INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
                  [--no-format-namelist] [--namelist-indent N]
@@ -175,6 +180,8 @@ latform-template INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
 `instances.yaml` (paths are relative to the file's own directory):
 
 ```yaml
+# template_root: ../shared/templates   # optional base dir for all inputs
+
 template:
   - input: cx.bmad
     output: "{instance}/{instance}.bmad" # {instance} -> c1, c2, ...
@@ -266,11 +273,67 @@ latform-template instances.yaml -d build/ --dry-run
 # ...
 ```
 
+When the template files live somewhere other than next to the instances file,
+a top-level `template_root:` sets the directory (relative to the instances
+file) that every input — `template`, `context`, and `tao_init` — is read
+from, instead of prefixing each entry with `../../...`. The spec's own path
+coordinates are unaffected: `input` paths, `paths:` keys, and the header's
+`{source}` are all written relative to the root. Output paths are relative to
+`--output-dir` as always.
+
+```yaml
+template_root: ../../shared/templates
+
+template:
+  - input: cx.bmad # read from ../../shared/templates/cx.bmad
+    output: "{instance}/{instance}.bmad"
+```
+
 Files that the template `call`s but are not in `template` (e.g. shared
 `settings/`) can be listed under a top-level `context:` key to be loaded for
 name resolution only — they are never written, and `call`s to them are left
-untouched. `call`s between transform-set files are rewritten to the instance
-outputs automatically.
+untouched. `call`s between transform-set files (both `call, file=` statements
+and inline `call::` arguments) are rewritten to the instance outputs
+automatically.
+
+### Path replacements (`paths:`)
+
+To redirect a reference to a file that is **not** part of the transform set —
+say each instance should call a different pre-existing settings file — use a
+`paths:` block, globally and/or per instance (the per-instance entry wins on
+conflict, as does any `paths` entry over the automatic transform-set rewrite):
+
+```yaml
+template:
+  - input: cx.bmad
+    output: "{instance}/{instance}.bmad"
+
+paths:
+  ../foo.bmad: ../bar_{instance}.bmad # {instance} interpolates in the value
+
+instances:
+  c1: {}
+  c2:
+    paths:
+      ../foo.bmad: ../special.bmad # per-instance override
+```
+
+A key matches a reference in either of two ways, tried in order:
+
+1. **Resolved**: the key names the referenced file relative to the template
+   root (the same way `call` targets resolve, so one entry covers the same
+   file referenced from different subdirectories). The value is relative to
+   `--output-dir`, and each rewritten reference is adjusted to the
+   referencing file's own output location. A value that is absolute or
+   contains an environment variable (`$LATTICE_ROOT/settings.bmad`) is
+   inserted verbatim.
+2. **As written**: the key is the reference text exactly as it appears in the
+   calling file (`dg1.bmad`, `../y1.bmad`), wherever it appears; the value is
+   inserted verbatim.
+
+Replacements apply everywhere the transform-set rewrite does: `call, file=`
+statements, inline `call::` arguments, and `tao_init` `design_lattice`
+entries.
 
 ### Generated-file header (`header:`)
 
