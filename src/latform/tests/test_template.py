@@ -134,6 +134,54 @@ def test_inline_call_target_rewritten(tmp_path):
     assert "call::external.bmad" in squashed  # not in the transform set: untouched
 
 
+def test_template_root_inputs_read_from_root(tmp_path):
+    """With ``template_root``, template/context inputs are read relative to it
+    while cross-file resolution and call rewriting work as usual."""
+    root = tmp_path / "shared" / "templates"
+    (root / "sub").mkdir(parents=True)
+    (root / "top.bmad").write_text("call, file=sub/leaf.bmad\nTPL_M: marker, x_offset=TPL_X\n")
+    (root / "sub" / "leaf.bmad").write_text("TPL_L: marker\n")
+    (root / "ctx.bmad").write_text("TPL_X = 1\n")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    spec = {
+        "template_root": "../shared/templates",
+        "template": [
+            {"input": "top.bmad", "output": "{instance}.bmad"},
+            {"input": "sub/leaf.bmad", "output": "{instance}_leaf.bmad"},
+        ],
+        "context": ["ctx.bmad"],
+        "renames": {r"TPL(_.*|$)": r"{instance:upper}\1"},
+        "instances": {"m1": {}},
+    }
+    res = instantiate(spec, base_dir=proj, options=default_options)["m1"]
+    assert set(res) == {"m1.bmad", "m1_leaf.bmad"}
+    out = res["m1.bmad"]
+    assert "call, file=m1_leaf.bmad" in out
+    assert "x_offset=M1_X" in out.replace(" ", "")  # context resolved + renamed
+
+
+def test_template_root_tao_init_and_paths(tmp_path):
+    """``tao_init`` inputs are read from ``template_root``; ``paths`` keys stay
+    in template-root coordinates."""
+    root = tmp_path / "templates"
+    root.mkdir()
+    (root / "cx.lat.bmad").write_text("CX_Q: quadrupole, k1=0.0\ncall, file=../common.bmad\n")
+    (root / "tao.init").write_text(
+        "&tao_design_lattice\n  design_lattice(1)%file = 'cx.lat.bmad'\n/\n"
+    )
+    spec = {
+        "template_root": "templates",
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "tao_init": {"input": "tao.init", "output": "{instance}/tao.init"},
+        "paths": {"../common.bmad": "common_{instance}.bmad"},
+        "instances": {"c1": {}},
+    }
+    res = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]
+    assert "call, file=common_c1.bmad" in res["c1.lat.bmad"]
+    assert "design_lattice(1)%file = '../c1.lat.bmad'" in res["c1/tao.init"]
+
+
 def test_paths_replacement_outside_transform_set(tmp_path):
     """An explicit ``paths`` entry rewrites references to files that are not
     part of the transform set, for both call forms."""

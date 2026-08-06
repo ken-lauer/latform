@@ -309,7 +309,10 @@ def instantiate(
     ----------
     spec : dict
         Parsed instances file: ``template`` (list of ``{input, output}``),
-        optional global ``renames``, optional ``paths`` (explicit path
+        optional ``template_root`` (directory, relative to ``base_dir``, that
+        all ``input``/``context`` paths are read from; the spec's path
+        coordinates — inputs, ``paths`` keys, header ``{source}`` — remain
+        relative to it), optional global ``renames``, optional ``paths`` (explicit path
         replacements for ``call``/``design_lattice`` targets outside the
         transform set: ``{referenced: replacement}``, both relative to
         ``base_dir``/the output dir respectively, interpolating ``{instance}``;
@@ -328,7 +331,8 @@ def instantiate(
         N-th repeated group); with the list form, the override is keyed by the
         entry's ``input`` path (``{input: {namelists: ...}}``).
     base_dir : pathlib.Path | str
-        Directory the ``input`` paths are relative to.
+        Directory the ``input`` paths are relative to (the instances file's
+        directory); a spec ``template_root`` is resolved against it.
     options : FormatOptions, optional
         Formatting options for emitted files.
     format_namelist : bool, optional
@@ -361,16 +365,22 @@ def instantiate(
     tao_init_specs, multi_tao_init = _normalize_tao_init_specs(spec.get("tao_init"))
     tao_init_inputs = {entry["input"] for entry in tao_init_specs}
 
+    # All template inputs (template/context/tao_init) are read relative to
+    # ``template_root``; the spec's own path coordinates are unaffected.
+    input_dir = base_dir / spec["template_root"] if spec.get("template_root") else base_dir
+
     contents = {
-        (base_dir / tf["input"]).resolve(): (base_dir / tf["input"]).read_text()
+        (input_dir / tf["input"]).resolve(): (input_dir / tf["input"]).read_text()
         for tf in template_files
     }
-    input_basenames = {(base_dir / tf["input"]).resolve(): tf["input"] for tf in template_files}
-    output_patterns = {(base_dir / tf["input"]).resolve(): tf["output"] for tf in template_files}
+    input_basenames = {(input_dir / tf["input"]).resolve(): tf["input"] for tf in template_files}
+    output_patterns = {(input_dir / tf["input"]).resolve(): tf["output"] for tf in template_files}
 
     # Resolution-only files: loaded so cross-file references resolve, but never
     # transformed or written, and calls to them are left untouched.
-    context_contents = {(base_dir / c).resolve(): (base_dir / c).read_text() for c in context_files}
+    context_contents = {
+        (input_dir / c).resolve(): (input_dir / c).read_text() for c in context_files
+    }
 
     results: dict[str, dict[str, str]] = {}
     for name, overrides in instances.items():
@@ -421,7 +431,7 @@ def instantiate(
             rendered = _instantiate_tao_init(
                 entry,
                 _tao_init_override(overrides, entry, tao_init_inputs, multi_tao_init),
-                base_dir,
+                input_dir,
                 in_to_out,
                 name,
                 options.namelist if format_namelist else None,

@@ -175,6 +175,8 @@ latform-template INSTANCES.yaml [-d OUTPUT_DIR] [--dry-run]
 `instances.yaml` (paths are relative to the file's own directory):
 
 ```yaml
+# template_root: ../shared/templates   # optional base dir for all inputs
+
 template:
   - input: cx.bmad
     output: "{instance}/{instance}.bmad" # {instance} -> c1, c2, ...
@@ -264,6 +266,22 @@ latform-template instances.yaml -d build/
 latform-template instances.yaml -d build/ --dry-run
 # would write: build/c1/c1.bmad
 # ...
+```
+
+When the template files live somewhere other than next to the instances file,
+a top-level `template_root:` sets the directory (relative to the instances
+file) that every input — `template`, `context`, and `tao_init` — is read
+from, instead of prefixing each entry with `../../...`. The spec's own path
+coordinates are unaffected: `input` paths, `paths:` keys, and the header's
+`{source}` are all written relative to the root. Output paths are relative to
+`--output-dir` as always.
+
+```yaml
+template_root: ../../shared/templates
+
+template:
+  - input: cx.bmad # read from ../../shared/templates/cx.bmad
+    output: "{instance}/{instance}.bmad"
 ```
 
 Files that the template `call`s but are not in `template` (e.g. shared
