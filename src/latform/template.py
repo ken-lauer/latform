@@ -26,7 +26,7 @@ from .apply import (
     split_namelist_key,
 )
 from .parser import MemoryFiles, parse
-from .statements import Statement
+from .statements import Empty, Statement
 from .tao import TaoInit, collect_tao_element_names, format_tao_namelist, rename_tao_elements
 from .token import Role, Token
 from .types import FormatOptions, NamelistFormatOptions
@@ -69,12 +69,30 @@ def _interpolate(text: str, instance: str) -> str:
 
 def _resolve_header(header: str, instance: str, source: str, instances_name: str) -> str:
     """
-    Resolve a file's header text, ending in a blank line; ``""`` when opted out.
+    Resolve a file's header comment text; ``""`` when opted out.
     """
     if not header:
         return ""
     text = header.replace("{source}", source).replace("{instances}", instances_name)
-    return _interpolate(text, instance).rstrip("\n") + "\n\n"
+    return _interpolate(text, instance).rstrip("\n")
+
+
+def _prepend_header(statements: list[Statement], header_text: str) -> list[Statement]:
+    """
+    Prepend the resolved header to a file's statements as a comment block.
+
+    The header is parsed and merged into the statement stream (attached as
+    leading comments of the first statement when possible), so it is emitted
+    by the normal output formatting path and survives reformatting unchanged.
+    Mutates ``statements[0]`` in place when merging.
+    """
+    if not header_text:
+        return statements
+    header_statements = list(parse(header_text, "<header>", annotate=False))
+    if statements and header_statements and isinstance(header_statements[-1], Empty):
+        trailing = header_statements.pop()
+        statements[0].comments.pre[:0] = trailing.comments.pre
+    return header_statements + statements
 
 
 def _interpolate_ruleset(rules: dict, instance: str) -> dict:
@@ -481,14 +499,21 @@ def instantiate(
         _rewrite_call_filenames(files, transform_paths, in_to_out, explicit_paths)
 
         instance_files = {
-            output_paths[p]: (
-                _resolve_header(header, name, input_basenames[p], instances_name)
-                + format_statements(files.by_filename[p], options)
+            output_paths[p]: format_statements(
+                _prepend_header(
+                    files.by_filename[p],
+                    _resolve_header(header, name, input_basenames[p], instances_name),
+                ),
+                options,
             )
             for p in contents
         }
         for entry in tao_init_specs:
+            # Namelist output does not go through the Bmad formatter, so the
+            # header stays a plain text prefix here.
             entry_header = _resolve_header(header, name, entry["input"], instances_name)
+            if entry_header:
+                entry_header += "\n\n"
             rendered = _instantiate_tao_init(
                 entry,
                 _tao_init_override(overrides, entry, tao_init_inputs, multi_tao_init),
