@@ -147,3 +147,5 @@ old_style_named_physical_constants = {
     "anom_mag_muon": anomalous_mag_moment_muon,  # Old style. Deprecated.
     "anom_mag_deuteron": anomalous_mag_moment_deuteron,  # Old style. Deprecated.
 }
+
+DEFERRABLE_ELEMENT_ATTRIBUTES_UPPER = frozenset({"SUPERIMPOSE", "REF", "TO_LINE", "TO_ELEMENT"})

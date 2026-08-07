@@ -8,6 +8,7 @@ from typing import Collection, Generator, Iterable, Sequence
 
 from .attrs import element_key_to_attrs
 from .const import named_physical_constants
+from .parser import match_element_selector
 from .statements import (
     Assignment,
     Constant,
@@ -18,6 +19,8 @@ from .statements import (
     Simple,
     Statement,
     get_controller_variables,
+    get_deferred_element_attributes,
+    normalize_element_selector,
 )
 from .token import Token
 from .types import Attribute, CallName, Lint, LintCode, Seq
@@ -51,6 +54,7 @@ def lint_statements(
     if not assume_defined:
         lints.extend(lint_undefined_references(statements, named))
         lints.extend(lint_unknown_element_types(statements))
+        lints.extend(lint_superimpose_refs(statements, named))
     return [lint for lint in lints if lint.code.value not in ignored]
 
 
@@ -494,6 +498,46 @@ def lint_undefined_references(
                     context=statement,
                     message=f"Reference to undefined element or constant: {name}",
                     relevant_tokens=[name],
+                )
+            )
+    return lints
+
+
+def lint_superimpose_refs(
+    statements: Sequence[Statement],
+    named: dict[Token, Statement],
+) -> list[Lint]:
+    """
+    Flag superimposed elements whose ``ref`` matches no defined element.
+
+    A ``ref`` that matches defined-but-unused elements is not flagged here;
+    only a selector that matches nothing anywhere (a likely typo) is reported.
+    """
+
+    deferred = get_deferred_element_attributes(statements)
+
+    lints = []
+    for st in statements:
+        if not isinstance(st, Element):
+            continue
+        superposition = st.get_superposition_settings(deferred)
+        if not superposition.enabled or superposition.ref is None:
+            continue
+        matched = match_element_selector(
+            named.values(), normalize_element_selector(superposition.ref)
+        )
+        if matched is None:
+            continue  # Unsupported selector syntax; cannot validate
+        if not matched:
+            relevant = [superposition.ref_token] if superposition.ref_token is not None else None
+            lints.append(
+                Lint(
+                    code=LintCode.superimpose_ref_unmatched,
+                    context=st,
+                    message=(
+                        f"Superimpose ref {superposition.ref!r} does not match any defined element"
+                    ),
+                    relevant_tokens=relevant,
                 )
             )
     return lints

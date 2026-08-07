@@ -473,7 +473,7 @@ def parse_items(items: list[TokenizerItem], *, match_unhandled: bool = True):
 def get_named_items(statements: Sequence[Statement]) -> dict[Token, Statement]:
     named_items = {}
     for statement in statements:
-        if isinstance(statement, (Element, Constant)):
+        if isinstance(statement, (Element, Constant, ElementList)):
             named_items[statement.name.upper()] = statement
         elif isinstance(statement, Line):
             if isinstance(statement.name, CallName):
@@ -940,6 +940,35 @@ class Files:
     def flatten_all(self, call: bool, inline: bool) -> dict[pathlib.Path, list[Statement]]:
         """Flatten each top-level file independently, keyed by its path."""
         return {top: self.flatten(call=call, inline=inline, top=top) for top in self.top_files}
+
+    def get_statements_in_order(self, *, repeat_called_files: bool = True) -> list[Statement]:
+        """Get all statements in order, as evaluated by Bmad."""
+
+        handled = set()
+        active = set()
+
+        def _flatten(fn):
+            if fn in active:
+                # Guard against call cycles
+                return
+            if fn in handled and not repeat_called_files:
+                return
+            handled.add(fn)
+            active.add(fn)
+            try:
+                for st in self.by_filename.get(fn, []):
+                    yield st
+                    if is_call_statement(st):
+                        called = st.metadata.get("local_path")
+                        if called is not None:
+                            yield from _flatten(called)
+            finally:
+                active.discard(fn)
+
+        res = []
+        for fn in self.top_files:
+            res.extend(_flatten(fn))
+        return res
 
     def rename(
         self,

@@ -19,18 +19,21 @@ from rich.console import Console
 from rich.table import Table
 
 from .location import Location
-from .parser import Files, build_files
+from .parser import Files, build_files, implicit_location, match_element_selector
 from .statements import (
-    Attribute,
+    Constant,
     Element,
     ElementList,
     Line,
     Parameter,
     Simple,
     Statement,
+    _attribute_value_text,
+    get_deferred_element_attributes,
+    normalize_element_selector,
 )
 from .token import Token
-from .types import NameCase
+from .types import Attribute, NameCase, Seq
 
 DESCRIPTION = __doc__
 logger = logging.getLogger(__name__)
@@ -112,75 +115,226 @@ def _passes_filter(name: str, glob_pat: str | None, re_pat: str | None) -> bool:
     return True
 
 
-def _resolve_used_elements(files: Files, named_items: dict[Token, Statement]) -> set[str]:
+_FORK_TYPES_UPPER = frozenset({"FORK", "PHOTON_FORK"})
+_SLAVE_CONTROLLER_TYPES_UPPER = frozenset({"OVERLAY", "GROUP", "RAMPER", "GIRDER"})
+
+
+def _iter_seq_element_names(seq: Seq) -> Iterable[Token]:
     """
-    Traverse from USE statements to find all effectively used elements.
+    Name tokens within a line/list definition sequence.
+
+    Handles nested entries like ``2*qf`` (repetition), ``-sub`` (reflection),
+    and ``sub(x)`` (replacement line calls); repeat counts and delimiters are
+    skipped.
+    """
+    for item in seq.items:
+        if isinstance(item, Token):
+            # Names cannot start with a digit, so this skips repeat counts
+            if item and not item[0].isdigit():
+                yield item
+        elif isinstance(item, Seq):
+            yield from _iter_seq_element_names(item)
+
+
+def _match_selector_names(
+    selector: str, named_items: dict[Token, Statement]
+) -> frozenset[str] | None:
+    """
+    Uppercased names of defined elements matched by a Bmad element selector.
+
+    Returns None if the selector syntax is not supported.
+    """
+    matched = match_element_selector(named_items.values(), normalize_element_selector(selector))
+    if matched is None:
+        return None
+    return frozenset(str(el.name.upper()) for el in matched)
+
+
+def _controller_slave_selectors(element: Element) -> list[str]:
+    """Slave element selectors from a controller's ``{...}`` element list."""
+    ele_list = element.ele_list
+    base = element.base_element
+    while ele_list is None and base is not None:
+        # Inherited controllers (``ov2: ov1``) take their slaves from the base
+        ele_list = base.ele_list
+        base = base.base_element
+    if ele_list is None:
+        return []
+    selectors = []
+    for item in ele_list.items:
+        if isinstance(item, Token):
+            # Girder-style member list
+            selectors.append(str(item))
+        elif isinstance(item, Seq):
+            # Control spec such as ``q*[k1]: 0.1`` -- the slave selector is
+            # everything before the ``[attr]`` part (wildcards tokenize as
+            # separate delimiters, so the leading pieces are joined back up)
+            parts: list[str] = []
+            for sub in item.items:
+                if isinstance(sub, Seq) or str(sub) == ":":
+                    break
+                parts.append(str(sub))
+            if parts:
+                selectors.append("".join(parts))
+    return selectors
+
+
+def _first_used_slave(
+    element: Element, named_items: dict[Token, Statement], used: dict[Token, str]
+) -> str | None:
+    """The name of one used slave of a controller, if any."""
+    for selector in _controller_slave_selectors(element):
+        names = _match_selector_names(selector, named_items)
+        if names is None:
+            # Unsupported selector syntax; assume in use rather than
+            # incorrectly reporting the controller as unused.
+            return selector
+        for match in names:
+            if match in used:
+                return match
+    return None
+
+
+def _fork_targets(
+    element: Element, deferred: dict[Token, dict[str, Token | Seq | None]]
+) -> list[Token]:
+    """Uppercased ``to_line``/``to_element`` targets of a fork element."""
+    values: dict[str, Token | Seq | None] = {}
+    for attr in element.attributes:
+        if isinstance(attr.name, Token) and attr.name._upper in {"TO_LINE", "TO_ELEMENT"}:
+            values[attr.name._upper] = attr.value
+    for uname, value in deferred.get(element.name.upper(), {}).items():
+        if uname in {"TO_LINE", "TO_ELEMENT"}:
+            values[uname] = value
+
+    targets = []
+    for value in values.values():
+        text = _attribute_value_text(value)
+        if text:
+            targets.append(text.upper())
+    return targets
+
+
+def _resolve_used_elements(
+    files: Files,
+    named_items: dict[Token, Statement],
+) -> dict[str, str]:
+    """
+    Resolve which named items are active in the expanded lattice.
+
+    Starting from the roots of the last USE statement, lines are expanded
+    recursively (including repetitions, reflections, replacement-line calls,
+    list members, and fork targets).  A fixpoint pass then folds in usage that
+    depends on other elements being used:
+
+    - superimposed elements, used when superposition is enabled and their
+      ``ref`` matches a used element (or defaults to the beginning marker);
+    - controllers (overlay/group/ramper/girder), used when at least one of
+      their slaves is used;
+    - base elements of used elements (``qd: qf`` marks ``qf`` used).
 
     Returns
     -------
-    set[str]
-        A set of element names (uppercased) that are active in the lattice.
+    dict[str, str]
+        Mapping of uppercased active names to a human-readable reason.
     """
-
+    all_statements = files.get_statements_in_order(repeat_called_files=False)
     use_cmds = [
         st
-        for statements in files.by_filename.values()
-        for st in statements
-        if isinstance(st, Simple) and st.statement.lower() == "use"
+        for st in all_statements
+        if isinstance(st, Simple) and st.statement._upper == "USE" and st.arguments
     ]
 
-    # Roots are the arguments to USE commands
-    roots: list[str] = []
-    for cmd in use_cmds:
-        roots.append(_fmt(cmd.arguments[0]))
+    # Bmad semantics: the last USE statement wins; each of its arguments is
+    # the root line of a branch.  Bare argument tokens are parsed as
+    # value-less Attributes.
+    roots: list[Token] = []
+    if use_cmds:
+        for use_cmd in reversed(use_cmds):
+            for arg in use_cmd.arguments:
+                if isinstance(arg, Token):
+                    roots.append(arg.upper())
+                elif (
+                    isinstance(arg, Attribute) and isinstance(arg.name, Token) and arg.value is None
+                ):
+                    roots.append(arg.name.upper())
 
-    used_names: set[str] = set()
-    visited_lines: set[str] = set()
+            # TODO: maybe allow unused lines to be considered used (along with
+            # the elements they contain)
+            # I think this is a scenario that's common in reused sublattices
+            # that can be standalone
+            break
 
-    def visit(name: Token | str):
-        if name in used_names:
+    deferred = get_deferred_element_attributes(all_statements)
+    used: dict[Token, str] = {}
+
+    def mark(name: Token, reason: str) -> None:
+        if name in used:
             return
-
-        # Lines themselves are used
-        used_names.add(name)
+        used[name] = reason
 
         item = named_items.get(name)
-        if not item:
+        if item is None:
             return  # Referenced but no definition found
 
         if isinstance(item, Line):
-            if name in visited_lines:
-                return
-            visited_lines.add(name)
-
-            for ele_token in item.elements.items:
-                if isinstance(ele_token, Token):
-                    visit(ele_token.upper())
-
-        elif isinstance(item, (Element, ElementList)):
-            pass
+            for token in _iter_seq_element_names(item.elements):
+                mark(token.upper(), f"in line {name}")
+        elif isinstance(item, ElementList):
+            for token in _iter_seq_element_names(item.elements):
+                mark(token.upper(), f"in list {name}")
+        elif isinstance(item, Element):
+            if (item.element_type or "") in _FORK_TYPES_UPPER:
+                for target in _fork_targets(item, deferred):
+                    mark(target, f"fork target of {name}")
 
     for root in roots:
-        visit(root)
+        mark(root, "use statement")
 
-    for name, item in named_items.items():
-        if isinstance(item, Element):
-            keyword = item.keyword.upper()
-            if keyword in named_items:
-                used_names.add(keyword)
-                parent = named_items[keyword]
-                keyword = parent.keyword.upper()
+    if roots:
+        # The implicit lattice endpoints exist in any expanded lattice
+        for name in (Token("BEGINNING"), Token("END")):
+            if name in named_items:
+                mark(name, "lattice endpoint")
 
-            if keyword in {"OVERLAY"}:
-                used_names.add(name)
-            if name in {"BEGINNING", "END"}:
-                used_names.add(name)
-            for attr in item.attributes:
-                if isinstance(attr, Attribute) and _fmt(attr.name).lower() == "superimpose":
-                    used_names.add(name)
-                    break
+    element_defs = {name: item for name, item in named_items.items() if isinstance(item, Element)}
 
-    return used_names
+    changed = True
+    while changed:
+        changed = False
+        for name, element in element_defs.items():
+            if name in used:
+                base_name = element.keyword.upper()
+                base = named_items.get(base_name)
+                if isinstance(base, Element) and base_name not in used:
+                    mark(base_name, f"base of {name}")
+                    changed = True
+                continue
+
+            resolved_type = element.element_type or element.keyword.upper()
+            if resolved_type in _SLAVE_CONTROLLER_TYPES_UPPER:
+                slave = _first_used_slave(element, named_items, used)
+                if slave is not None:
+                    mark(name, f"controls {slave}")
+                    changed = True
+                continue
+
+            if not roots:
+                continue
+
+            superposition = element.get_superposition_settings(deferred)
+            if not superposition.enabled:
+                continue
+            if superposition.ref is None:
+                mark(name, "superimposed (default ref)")
+                changed = True
+            else:
+                matches = _match_selector_names(superposition.ref, named_items)
+                if matches is None or any(match in used for match in matches):
+                    mark(name, f"superimposed on {superposition.ref}")
+                    changed = True
+
+    return used
 
 
 def get_parameters(files: Files) -> Iterable[dict[str, Any]]:
@@ -205,6 +359,20 @@ def get_parameters(files: Files) -> Iterable[dict[str, Any]]:
         }
 
 
+def get_constants(files: Files) -> Iterable[dict[str, Any]]:
+    """
+    Generate dictionaries describing constant definitions (``name = value``).
+    """
+    for statements in files.by_filename.values():
+        for st in statements:
+            if isinstance(st, Constant):
+                yield {
+                    "name": st.name,
+                    "expression": _fmt(st.value),
+                    "loc_obj": st.name.loc,
+                }
+
+
 def get_elements_status(
     files: Files, filter_status: Literal["all", "used", "unused"] = "all"
 ) -> Iterable[dict[str, Any]]:
@@ -213,16 +381,16 @@ def get_elements_status(
     """
 
     named_items = files.get_named_items()
-    used_names = _resolve_used_elements(files, named_items)
+    used_reasons = _resolve_used_elements(files, named_items)
 
     definitions = {
         name: item
         for name, item in named_items.items()
-        if isinstance(item, (Line, Element, ElementList))
+        if isinstance(item, (Line, Element, ElementList)) and item.name.loc != implicit_location
     }
 
     for name_upper, item in definitions.items():
-        is_used = name_upper in used_names
+        is_used = name_upper in used_reasons
 
         if filter_status == "used" and not is_used:
             continue
@@ -234,9 +402,9 @@ def get_elements_status(
             "type": "",
             "parent": "",
             "used": "YES" if is_used else "NO",
-            "loc_obj": None,
+            "reason": used_reasons.get(name_upper, ""),
+            "loc_obj": item.name.loc,
         }
-        row["loc_obj"] = item.name.loc
 
         if isinstance(item, Line):
             row["type"] = "LINE"
@@ -257,9 +425,6 @@ def print_data(
     root_path: pathlib.Path | None = None,
     console: Console | None = None,
 ):
-    delimiter = delimiter
-    root_path = root_path
-
     display_rows = []
     headers = [c.capitalize() for c in columns if c != "loc_obj"]
 
@@ -299,6 +464,8 @@ def print_data(
         console = console or Console()
         console.print(table)
 
+        console.print(f"{len(display_rows)} matches.")
+
 
 def _load_all_files_and_parse(
     filenames: list[str | pathlib.Path],
@@ -333,9 +500,21 @@ def cmd_parameters(args: argparse.Namespace, files: Files):
     return data, headers
 
 
+def cmd_constants(args: argparse.Namespace, files: Files):
+    data = []
+    headers = ["name", "expression", "loc_obj"]
+
+    for item in get_constants(files):
+        if not _passes_filter(item["name"], args.match, args.match_re):
+            continue
+        data.append(item)
+
+    return data, headers
+
+
 def cmd_used_elements(args: argparse.Namespace, files: Files):
     data = []
-    headers = ["name", "type", "parent", "loc_obj"]
+    headers = ["name", "type", "parent", "reason", "loc_obj"]
 
     for item in get_elements_status(files, filter_status="used"):
         if not _passes_filter(item["name"], args.match, args.match_re):
@@ -370,21 +549,6 @@ def cmd_loaded_files(
             if fn not in res:
                 res.append(fn)
     return res
-
-
-def cmd_all(args: argparse.Namespace, files: Files):
-    """Legacy dump behavior."""
-    if not args.delimiter:
-        print("--- Parameters ---")
-    cmd_parameters(args, files)
-
-    if not args.delimiter:
-        print("\n--- Used Elements ---")
-    cmd_used_elements(args, files)
-
-    if not args.delimiter:
-        print("\n--- Unused Elements ---")
-    cmd_unused_elements(args, files)
 
 
 def main(args: list[str] | None = None) -> None:
@@ -448,6 +612,13 @@ def main(args: list[str] | None = None) -> None:
         dest="dump_parameters",
     )
     parser.add_argument(
+        "-c",
+        "--constants",
+        action="store_true",
+        help="Dump defined constants (name = value)",
+        dest="dump_constants",
+    )
+    parser.add_argument(
         "-U",
         "--used-elements",
         action="store_true",
@@ -497,6 +668,7 @@ def main(args: list[str] | None = None) -> None:
 
     any_dump_flag = (
         parsed_args.dump_parameters
+        or parsed_args.dump_constants
         or parsed_args.dump_used_elements
         or parsed_args.dump_unused_elements
         or parsed_args.dump_loaded_files
@@ -504,9 +676,19 @@ def main(args: list[str] | None = None) -> None:
 
     if not any_dump_flag:
         parsed_args.dump_parameters = True
+        parsed_args.dump_constants = True
         parsed_args.dump_used_elements = True
         parsed_args.dump_unused_elements = True
         parsed_args.dump_loaded_files = True
+
+    sections = [
+        (parsed_args.dump_parameters, "Parameters", cmd_parameters),
+        (parsed_args.dump_constants, "Constants", cmd_constants),
+        (parsed_args.dump_used_elements, "Used Elements", cmd_used_elements),
+        (parsed_args.dump_unused_elements, "Unused Elements", cmd_unused_elements),
+    ]
+    num_selected = sum(flag for flag, _, _ in sections) + bool(parsed_args.dump_loaded_files)
+    show_headers = num_selected > 1 and not parsed_args.delimiter
 
     all_files = _load_all_files_and_parse(
         parsed_args.filename,
@@ -514,33 +696,27 @@ def main(args: list[str] | None = None) -> None:
         parsed_args.verbose,
         combine=parsed_args.combine,
     )
+    first_section = True
     for files in all_files:
         root_path = files.top_files[0].parent
 
-        if parsed_args.dump_parameters:
-            if not any_dump_flag and not parsed_args.delimiter:
-                print("--- Parameters ---")
-
-            data, headers = cmd_parameters(parsed_args, files)
+        for flag, title, cmd in sections:
+            if not flag:
+                continue
+            if show_headers:
+                if not first_section:
+                    print()
+                print(f"--- {title} ---")
+            first_section = False
+            data, headers = cmd(parsed_args, files)
             print_data(data, headers, delimiter=parsed_args.delimiter, root_path=root_path)
 
-        if parsed_args.dump_used_elements:
-            if not any_dump_flag and not parsed_args.delimiter:
-                print("\n--- Used Elements ---")
-            data, headers = cmd_used_elements(parsed_args, files)
-            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=root_path)
-
-        if parsed_args.dump_unused_elements:
-            if not any_dump_flag and not parsed_args.delimiter:
-                print("\n--- Unused Elements ---")
-            data, headers = cmd_unused_elements(parsed_args, files)
-            print_data(data, headers, delimiter=parsed_args.delimiter, root_path=root_path)
-
-    if not any_dump_flag and not parsed_args.delimiter:
-        print("\n--- All loaded files ---")
     if parsed_args.dump_loaded_files:
-        res = cmd_loaded_files(parsed_args, all_files)
-        for fn in res:
+        if show_headers:
+            if not first_section:
+                print()
+            print("--- All loaded files ---")
+        for fn in cmd_loaded_files(parsed_args, all_files):
             print(fn)
 
 
