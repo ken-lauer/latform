@@ -34,7 +34,7 @@ def _rename(code: str, renames: dict[str, str], **kwargs) -> str:
 def test_get_controller_variables():
     (element,) = parse(OVERLAY)
     assert isinstance(element, Element)
-    assert get_controller_variables(element) == {"phase_deg", "f1"}
+    assert get_controller_variables(element) == {"PHASE_DEG", "F1"}
 
 
 def test_get_controller_variables_empty_for_plain_element():

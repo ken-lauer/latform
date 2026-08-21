@@ -64,8 +64,8 @@ class Token(str):
         self._comments = comments
         self.role = role
         self._upper = str.upper(self)
-        # self._hash = hash(self._upper)
-        self._hash = super().__hash__()
+        self._hash = hash(self._upper)
+        # self._hash = super().__hash__()
 
     @property
     def comments(self) -> Comments:
