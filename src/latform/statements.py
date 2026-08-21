@@ -3,11 +3,17 @@ from __future__ import annotations
 import os.path
 import pathlib
 import typing
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from .comments import Comments
-from .const import COMMA, STATEMENT_NAME_COLON, STATEMENT_NAME_EQUALS
+from .const import (
+    COMMA,
+    DEFERRABLE_ELEMENT_ATTRIBUTES_UPPER,
+    STATEMENT_NAME_COLON,
+    STATEMENT_NAME_EQUALS,
+)
 from .token import Role, Token
 from .types import (
     Attribute,
@@ -130,11 +136,12 @@ class Simple(Statement):
                 arg.annotate(named=named)
 
     def get_named_attribute(self, name: Token | str, *, partial_match: bool = True) -> Attribute:
+        name_upper = str(name).upper()
         for arg in self.arguments:
             if isinstance(arg, Attribute) and isinstance(arg.name, Token):
                 if arg.name == name:
                     return arg
-                if partial_match and name.lower().startswith(arg.name.lower()):
+                if partial_match and name_upper.startswith(arg.name._upper):
                     return arg
         raise KeyError(str(name))
 
@@ -144,14 +151,14 @@ class Simple(Statement):
         return name._upper in KNOWN_STATEMENTS_UPPER
 
     def to_output_nodes(self):
-        if self.statement.lower() in {"print"}:
+        if self.statement._upper in {"PRINT"}:
             print_str = Token.join(
                 [arg for arg in self.arguments if isinstance(arg, Token)]
             ).strip()
             return [self.statement, print_str.quoted()]
 
         nodes = [self.statement, *self.arguments]
-        if self.statement.lower() in {"parser_debug"}:
+        if self.statement._upper in {"PARSER_DEBUG"}:
             return nodes
         for idx in range(len(nodes) - 1, 0, -1):
             nodes.insert(idx, COMMA)
@@ -349,13 +356,55 @@ class Element(Statement):
             attr.annotate(named=named)
 
     def get_named_attribute(self, name: Token | str, *, partial_match: bool = True) -> Attribute:
+        name = str(name).upper()
         for attr in self.attributes:
             if isinstance(attr.name, Token):
                 if attr.name == name:
                     return attr
-                if partial_match and name.lower().startswith(attr.name.lower()):
+                if partial_match and name.startswith(attr.name._upper):
                     return attr
         raise KeyError(str(name))
+
+    def get_superposition_settings(
+        self,
+        deferred: dict[Token, dict[str, Token | Seq | None]] | None = None,
+    ) -> SuperpositionSettings:
+        """
+        Resolve an element's effective ``superimpose``/``ref`` settings.
+
+        Inline attributes are read first; deferred ``element[attr] = value``
+        statements (as collected by `get_deferred_element_attributes`) override
+        them.
+        """
+
+        def as_logical(value: Token | Seq | None) -> bool:
+            text = _attribute_value_text(value)
+            return text is None or text.upper() not in FALSE_LOGICALS_UPPER
+
+        enabled = False
+        ref_value: Token | Seq | None = None
+        have_ref = False
+
+        for attr in self.attributes:
+            if not isinstance(attr.name, Token):
+                continue
+            uname = attr.name._upper
+            if uname == "SUPERIMPOSE":
+                enabled = as_logical(attr.value)
+            elif uname == "REF":
+                ref_value = attr.value
+                have_ref = True
+
+        overrides = (deferred or {}).get(self.name.upper(), {})
+        if "SUPERIMPOSE" in overrides:
+            enabled = as_logical(overrides["SUPERIMPOSE"])
+        if "REF" in overrides:
+            ref_value = overrides["REF"]
+            have_ref = True
+
+        ref = _attribute_value_text(ref_value) if have_ref else None
+        ref_token = ref_value if isinstance(ref_value, Token) else None
+        return SuperpositionSettings(enabled=enabled, ref=ref, ref_token=ref_token)
 
     def to_output_nodes(self):
         if self.ele_list is not None:
@@ -397,6 +446,69 @@ def get_call_filename(
     if not caller_directory:
         return sub_filename, pathlib.Path(expanded)
     return sub_filename, caller_directory / expanded
+
+
+FALSE_LOGICALS_UPPER = frozenset({"F", "FALSE", ".FALSE."})
+
+
+def _attribute_value_text(value: Token | Seq | None) -> str | None:
+    """
+    The unquoted text of an attribute value, or None if there is no value.
+    """
+    if value is None:
+        return None
+
+    token = value if isinstance(value, Token) else value.to_token()
+    return str(token.remove_quotes())
+
+
+def get_deferred_element_attributes(
+    statements: Sequence[Statement],
+    names: frozenset[str] = DEFERRABLE_ELEMENT_ATTRIBUTES_UPPER,
+) -> dict[Token, dict[str, Token | Seq | None]]:
+    """
+    Collect ``element[attr] = value`` statements that adjust element definitions.
+
+    Parameters
+    ----------
+    statements : Sequence[Statement]
+        Statements to scan, in file order.
+    names : frozenset[str], optional
+        Uppercased attribute names to collect.
+
+    Returns
+    -------
+    dict[Token, dict[str, Token | Seq | None]]
+        Mapping of uppercased element name to ``{ATTRIBUTE: value}``.  Later
+        statements override earlier ones.
+    """
+    deferred: dict[Token, dict[str, Token | Seq | None]] = {}
+    for st in statements:
+        if isinstance(st, Parameter) and isinstance(st.target, Token):
+            name = st.name._upper
+            if name in names:
+                deferred.setdefault(st.target.upper(), {})[name] = st.value
+    return deferred
+
+
+@dataclass(frozen=True)
+class SuperpositionSettings:
+    """Effective superposition state of an element definition."""
+
+    enabled: bool
+    ref: str | None = None
+    ref_token: Token | None = None
+
+
+def normalize_element_selector(selector: str) -> str:
+    """
+    Strip branch qualifiers (``branch>>name``) and instance counts (``name##2``).
+    """
+    if ">>" in selector:
+        selector = selector.rsplit(">>", 1)[1]
+    if "##" in selector:
+        selector = selector.split("##", 1)[0]
+    return selector
 
 
 def get_controller_variables(element: Element) -> set[Token]:

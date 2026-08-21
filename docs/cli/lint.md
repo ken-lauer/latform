@@ -64,6 +64,7 @@ either `latform --lint` or `latform-lint`).
 | `LF012` | `tao_type_mismatch`          | A Tao namelist value is not valid for the field's declared type (e.g. an unquoted string, or a non-integer for an integer field) |
 | `LF013` | `tao_index_out_of_bounds`    | A Tao namelist array subscript is outside the field's declared bounds |
 | `LF014` | `tao_string_too_long`        | A Tao namelist string value is longer than the field's declared `character(N)` length (Fortran would silently truncate it) |
+| `LF015` | `superimpose_ref_unmatched`  | A superimposed element's `ref` selector matches no defined element — likely a typo (needs `--strict-references`) |
 
 ### Tao namelist checks (`LF011`–`LF014`)
 

@@ -15,6 +15,7 @@ from ..lint import (
     lint_element_attributes,
     lint_files,
     lint_statements,
+    lint_superimpose_refs,
     lint_undefined_references,
     lint_unknown_element_types,
     lint_unused_constants,
@@ -162,6 +163,29 @@ def test_superimpose_still_flags_unknown_attributes():
     lints = lint_element_attributes(element)
     assert [lint.code for lint in lints] == [LintCode.unknown_attribute]
     assert "bogus" in lints[0].message
+
+
+@pytest.mark.parametrize(
+    ("src", "expect_lint"),
+    [
+        pytest.param("s: sext, superimpose, ref = qff", True, id="typo"),
+        pytest.param("s: sext, superimpose, ref = qf", False, id="matches"),
+        pytest.param("s: sext, superimpose, ref = q*", False, id="wildcard-matches"),
+        pytest.param("s: sext, superimpose, ref = z*", True, id="wildcard-unmatched"),
+        pytest.param("s: sext, superimpose = F, ref = qff", False, id="disabled"),
+        pytest.param("s: sext, superimpose", False, id="no-ref"),
+        pytest.param("s: sext, ref = qff", False, id="not-superimposed"),
+        pytest.param("s: sext, superimpose, ref = zz\ns[ref] = qf", False, id="deferred-ref-fixes"),
+    ],
+)
+def test_superimpose_ref_unmatched(src: str, expect_lint: bool):
+    files = _files(f"qf: quad, l = 1\n{src}")
+    named = files.get_named_items()
+    (statements,) = files.by_filename.values()
+    lints = lint_superimpose_refs(statements, named)
+    assert [lint.code for lint in lints] == (
+        [LintCode.superimpose_ref_unmatched] if expect_lint else []
+    )
 
 
 @pytest.mark.parametrize(

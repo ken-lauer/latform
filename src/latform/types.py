@@ -539,6 +539,7 @@ class LintCode(str, enum.Enum):
     tao_type_mismatch = "LF012"
     tao_index_out_of_bounds = "LF013"
     tao_string_too_long = "LF014"
+    superimpose_ref_unmatched = "LF015"
 
 
 @dataclass()
