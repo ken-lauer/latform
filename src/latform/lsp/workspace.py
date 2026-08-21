@@ -10,6 +10,7 @@ from ..config import LatformProjectConfig, discover_config
 from ..parser import MemoryFiles
 from .document import (
     AnalyzedDocument,
+    DiskCache,
     ParseCache,
     _build_project,
     _document_key,
@@ -41,9 +42,17 @@ class Workspace:
     # edit only re-parses the changed file; unchanged files reuse their
     # statements.
     _parse_cache: ParseCache = field(default_factory=dict)
-    # Incremental-annotation state (last definition signature). Lets a rebuild
-    # re-annotate only the re-parsed files when no definition changed.
+    # Incremental-annotation state, keyed by config source so distinct projects
+    # do not clobber each other's signatures. Lets a rebuild re-annotate only
+    # the files whose annotation could have changed.
     _annotate_state: dict = field(default_factory=dict)
+    # On-disk contents of unopened files, keyed by (mtime_ns, size); avoids
+    # re-reading the whole tree on every rebuild.
+    _disk_cache: DiskCache = field(default_factory=dict)
+    # Cross-build lint results per document (see `iter_diagnostics`); entries
+    # are validated against the statements object, definition signatures, and
+    # project used-names, so the cache never needs explicit invalidation.
+    lint_cache: dict = field(default_factory=dict)
 
     def set_text(self, path: pathlib.Path | str, text: str) -> pathlib.Path:
         """Record the current text of an open document; returns its resolved path."""
@@ -62,12 +71,15 @@ class Workspace:
         Drop cached configs and parsed projects.
 
         Called when files change on disk (or a config file is edited) so the
-        next analysis re-discovers config and re-reads unopened files.
+        next analysis re-discovers config and re-reads unopened files.  The
+        per-file parse and annotation caches are kept: they are validated
+        against file contents (and definition signatures), so entries for
+        changed files refresh themselves while unchanged files stay cheap.
         """
         self._config_by_dir.clear()
         self._project_cache.clear()
-        self._parse_cache.clear()
-        self._annotate_state.clear()
+        self._disk_cache.clear()
+        self.lint_cache.clear()
 
     def config_for(self, path: pathlib.Path | str) -> LatformProjectConfig:
         """Discover (and cache) the project config applicable to ``path``."""
@@ -101,7 +113,11 @@ class Workspace:
         if cached is not None and cached[0] == signature:
             return cached[1]
         files, error = _build_project(
-            config, self.open_texts, self._parse_cache, self._annotate_state
+            config,
+            self.open_texts,
+            self._parse_cache,
+            self._annotate_state.setdefault(config.source, {}),
+            self._disk_cache,
         )
         if files is None:
             logger.debug("Project parse failed (%s): %s", config.source, error)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
 
@@ -32,6 +33,7 @@ def create_server(
     version: str = "0.1.0",
     *,
     client_log_level: int | None = None,
+    publish_delay: float = 0.15,
 ):
     """
     Build and return a configured `pygls` `LanguageServer`.
@@ -44,6 +46,10 @@ def create_server(
         When set, latform log records at or above this level are also forwarded
         to the client via ``window/logMessage`` (visible in the client's LSP
         output), in addition to stderr/file logging.
+    publish_delay : float, optional
+        Debounce interval (seconds) for republishing diagnostics after document
+        changes.  Keystroke bursts within this window collapse into a single
+        rebuild; ``0`` publishes synchronously on every change.
 
     Raises
     ------
@@ -121,17 +127,49 @@ def create_server(
                 source="latform",
                 related_information=_related(diag),
             )
-            for diag in iter_diagnostics(analyzed)
+            for diag in iter_diagnostics(analyzed, lint_cache=workspace.lint_cache)
         ]
         logger.debug("Publishing %d diagnostic(s) for %s", len(diagnostics), uri)
         server.text_document_publish_diagnostics(
             lsp.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
         )
 
-    def _publish_all() -> None:
+    def _publish_all_now() -> None:
         # An edit in one project file can change diagnostics in its siblings.
         for uri in list(open_uris.values()):
             _publish(uri)
+
+    pending_publish: dict = {"task": None}
+
+    def _publish_all() -> None:
+        """
+        Republish diagnostics for every open document, debounced.
+
+        Each call resets the timer, so a burst of changes (typing) collapses
+        into one rebuild ``publish_delay`` seconds after the last change.
+        Runs synchronously when the delay is 0 or no event loop is running
+        (direct calls outside the server, e.g. in tests).
+        """
+        task = pending_publish["task"]
+        if task is not None and not task.done():
+            task.cancel()
+        if publish_delay <= 0:
+            _publish_all_now()
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _publish_all_now()
+            return
+
+        async def _delayed() -> None:
+            await asyncio.sleep(publish_delay)
+            try:
+                _publish_all_now()
+            except Exception:
+                logger.exception("Debounced diagnostics publish failed")
+
+        pending_publish["task"] = loop.create_task(_delayed())
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)
     def did_open(params: lsp.DidOpenTextDocumentParams) -> None:

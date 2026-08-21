@@ -44,6 +44,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Communicate over stdio (the default and only transport; accepted "
         "for clients that pass it explicitly).",
     )
+    parser.add_argument(
+        "--publish-delay",
+        type=float,
+        default=0.15,
+        help="Debounce interval in seconds for republishing diagnostics after "
+        "document changes; 0 publishes on every change (default: 0.15).",
+    )
     return parser
 
 
@@ -68,7 +75,10 @@ def main(argv: list[str] | None = None) -> None:
         args.log_level,
         f", log-file={args.log_file}" if args.log_file else "",
     )
-    server = create_server(client_log_level=None if args.no_client_log else level)
+    server = create_server(
+        client_log_level=None if args.no_client_log else level,
+        publish_delay=args.publish_delay,
+    )
     server.start_io()
 
 

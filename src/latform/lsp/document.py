@@ -1,8 +1,6 @@
 """
 Analysis core: parse a document (with its recursive ``call`` includes) into an
 `AnalyzedDocument`, with an incremental parse/annotate cache.
-
-Pure latform — importable without ``pygls``.
 """
 
 from __future__ import annotations
@@ -15,32 +13,64 @@ from ..config import LatformProjectConfig
 from ..parser import MemoryFiles, _resolve_lattice_paths
 from ..statements import Constant, Element, ElementList, Line, Statement
 from ..tao import TaoInit, is_init_file, looks_like_namelist
+from ..token import Token
+from ..walk import walk
 from .positions import definition_name_token
 
 logger = logging.getLogger(__name__)
 
 ParseCache = dict[pathlib.Path, "tuple[str, list[Statement]]"]
 
+# On-disk contents keyed by (st_mtime_ns, st_size), so unopened files are only
+# re-read when they actually change.
+DiskCache = dict[pathlib.Path, tuple[tuple[int, int], str]]
 
-def _definition_signature(by_filename: dict) -> tuple:
+
+def _file_definition_signature(statements: list[Statement]) -> tuple:
     """
-    A signature of everything that affects cross-file annotation.
+    A signature of everything in one file that affects cross-file annotation.
 
-    Two builds with the same signature annotate identically: the set of defined
-    names, their kinds, element inheritance keywords, and file order.  When it is
-    unchanged, files whose contents did not change keep their prior annotation.
+    Two builds in which every file has the same signature (in the same file
+    order) annotate identically: the set of defined names, their kinds, and
+    element inheritance keywords.
     """
     sig: list[tuple] = []
-    for filename, statements in by_filename.items():
-        for st in statements:
-            if isinstance(st, Element):
-                sig.append((filename, "E", str(st.name).upper(), str(st.keyword).upper()))
-            elif isinstance(st, Constant):
-                sig.append((filename, "C", str(st.name).upper()))
-            elif isinstance(st, (Line, ElementList)):
-                tok = definition_name_token(st)
-                sig.append((filename, "L", str(tok).upper() if tok is not None else ""))
+    for st in statements:
+        if isinstance(st, Element):
+            sig.append(("E", str(st.name).upper(), str(st.keyword).upper()))
+        elif isinstance(st, Constant):
+            sig.append(("C", str(st.name).upper()))
+        elif isinstance(st, (Line, ElementList)):
+            tok = definition_name_token(st)
+            sig.append(("L", str(tok).upper() if tok is not None else ""))
     return tuple(sig)
+
+
+def _referenced_names(statements: list[Statement]) -> frozenset[str]:
+    """
+    The upper-cased text of every token in ``statements``.
+
+    Every name the annotation pass can look up for a file is the ``_upper`` of
+    some token within it, so this is a (cheap, conservative) superset of the
+    file's cross-file name dependencies.
+    """
+    return frozenset(item.node._upper for item in walk(statements) if isinstance(item.node, Token))
+
+
+def _propagate_inheritance(changed: set[str], sigs: dict[pathlib.Path, tuple]) -> None:
+    """
+    Grow ``changed`` along element inheritance: an element whose base element's
+    resolution changed resolves differently itself (``element_type`` follows
+    the chain), so names inheriting from a changed name are changed too.
+    """
+    grew = True
+    while grew:
+        grew = False
+        for entries in sigs.values():
+            for entry in entries:
+                if entry[0] == "E" and entry[2] in changed and entry[1] not in changed:
+                    changed.add(entry[1])
+                    grew = True
 
 
 class _OverlayFiles(MemoryFiles):
@@ -53,21 +83,36 @@ class _OverlayFiles(MemoryFiles):
     With ``_parse_cache`` set, per-file parsing reuses cached statements for
     files whose contents are unchanged, so an edit only re-parses the changed
     file.  With ``_annotate_state`` also set, the cross-file annotation pass
-    re-annotates only the re-parsed files when the definition signature is
-    unchanged (an edit that touched no definition), reusing the prior annotation
-    of every other file.
+    re-annotates only the re-parsed files plus the files that may reference a
+    changed definition, reusing the prior annotation of every other file.  With
+    ``_disk_cache`` set, unopened files are re-read from disk only when their
+    (mtime, size) changes.
     """
 
     _parse_cache: ParseCache | None = None
     _annotate_state: dict | None = None
     _reparsed: set | None = None
     _named_cache: dict | None = None
+    _disk_cache: DiskCache | None = None
+    # Per-file definition signatures of this build (set by `annotate`); used by
+    # the diagnostics layer to validate cached lints across builds.
+    _def_sigs: dict | None = None
 
     def _get_file_contents(self, filepath: pathlib.Path) -> str:
         for candidate in (filepath, filepath.resolve()):
             if candidate in self.initial_contents:
                 return self.initial_contents[candidate]
-        return filepath.read_text()
+        cache = self._disk_cache
+        if cache is None:
+            return filepath.read_text()
+        stat = filepath.stat()
+        key = (stat.st_mtime_ns, stat.st_size)
+        entry = cache.get(filepath)
+        if entry is not None and entry[0] == key:
+            return entry[1]
+        text = filepath.read_text()
+        cache[filepath] = (key, text)
+        return text
 
     def get_named_items(self) -> dict:
         # Memoize for this build: statements do not change after parsing, and a
@@ -95,21 +140,80 @@ class _OverlayFiles(MemoryFiles):
             return super().annotate()
 
         named = self.get_named_items()
-        signature = _definition_signature(self.by_filename)
-        # Only reuse prior annotation when no definition changed anywhere.
-        incremental = state.get("signature") == signature
-        state["signature"] = signature
+        dirty = self._dirty_files(state)
 
         defined: dict[str, Element] = {}
         for filename, statements in self.by_filename.items():
-            if incremental and filename not in self._reparsed:
+            if filename not in dirty:
                 # Prior annotation is still valid; just feed the type accumulator
-                # so re-parsed files can resolve inheritance from this one.
+                # so re-annotated files can resolve inheritance from this one.
                 for st in statements:
                     if isinstance(st, Element):
                         defined[str(st.name).upper()] = st
                 continue
             self._annotate_file(filename, named, defined)
+
+    def _dirty_files(self, state: dict) -> set[pathlib.Path]:
+        """
+        The files whose annotation cannot be reused from the previous build.
+
+        Compares per-file definition signatures against the previous build's:
+        the re-parsed files are always dirty, plus every file containing a
+        token matching a changed definition name (a superset of the files whose
+        annotation could differ).  Signatures and per-file token sets are
+        cached by statements-list identity, so unchanged files cost a dict
+        lookup.
+        """
+        file_cache: dict = state.setdefault("files", {})
+        sigs: dict[pathlib.Path, tuple] = {}
+        deps: dict[pathlib.Path, frozenset[str]] = {}
+        for filename, statements in self.by_filename.items():
+            cached = file_cache.get(filename)
+            if cached is None or cached[0] is not statements:
+                cached = (
+                    statements,
+                    _file_definition_signature(statements),
+                    _referenced_names(statements),
+                )
+                file_cache[filename] = cached
+            sigs[filename] = cached[1]
+            deps[filename] = cached[2]
+        for stale in set(file_cache) - set(self.by_filename):
+            del file_cache[stale]
+
+        order = tuple(self.by_filename)
+        old_sigs = state.get("sigs")
+        old_order = state.get("order")
+        state["sigs"] = sigs
+        state["order"] = order
+        self._def_sigs = sigs
+
+        if old_sigs is None or old_order != order:
+            # First build, or the file set/order changed (affects inheritance
+            # accumulation): re-annotate everything.
+            return set(self.by_filename)
+
+        changed: set[str] = set()
+        for filename in old_sigs.keys() | sigs.keys():
+            a = sigs.get(filename, ())
+            b = old_sigs.get(filename, ())
+            if a != b:
+                delta = set(a) ^ set(b)
+                if delta:
+                    changed.update(entry[1] for entry in delta)
+                else:
+                    # Pure reorder within the file: same entries, but
+                    # inheritance can resolve differently.
+                    changed.update(entry[1] for entry in a)
+        if changed:
+            _propagate_inheritance(changed, sigs)
+
+        dirty = self._reparsed & set(self.by_filename) if self._reparsed else set()
+        if changed:
+            for filename in self.by_filename:
+                if filename not in dirty and deps[filename] & changed:
+                    dirty.add(filename)
+        return dirty
 
 
 @dataclass
@@ -151,12 +255,18 @@ def _document_key(files: MemoryFiles, resolved: pathlib.Path) -> pathlib.Path | 
     The ``by_filename`` key matching ``resolved``, or ``None`` if absent.
 
     ``Files`` stores keys as joined-but-not-canonicalized paths, so a resolved
-    comparison is needed to match a document against the parsed tree.
+    comparison is needed to match a document against the parsed tree.  The
+    resolved-key map is built once per build (resolving every key hits the
+    filesystem) and memoized on the files object.
     """
-    for key in files.by_filename:
-        if key == resolved or key.resolve() == resolved:
-            return key
-    return None
+    key_map = getattr(files, "_resolved_key_map", None)
+    if key_map is None:
+        key_map = {}
+        for key in files.by_filename:
+            key_map.setdefault(key, key)
+            key_map.setdefault(key.resolve(), key)
+        files._resolved_key_map = key_map
+    return key_map.get(resolved)
 
 
 def _parse_files(
@@ -164,11 +274,13 @@ def _parse_files(
     contents: dict[pathlib.Path, str],
     parse_cache: ParseCache | None = None,
     annotate_state: dict | None = None,
+    disk_cache: DiskCache | None = None,
 ) -> tuple[MemoryFiles | None, Exception | None]:
     """Parse and annotate a file set, returning ``(files, error)``."""
     files = _OverlayFiles(top_files=top_files, initial_contents=dict(contents))
     files._parse_cache = parse_cache
     files._annotate_state = annotate_state
+    files._disk_cache = disk_cache
     files._reparsed = set() if annotate_state is not None else None
     try:
         files.parse(raise_if_missing=False)
@@ -214,10 +326,11 @@ def _build_project(
     contents: dict[pathlib.Path, str],
     parse_cache: ParseCache | None = None,
     annotate_state: dict | None = None,
+    disk_cache: DiskCache | None = None,
 ) -> tuple[MemoryFiles | None, Exception | None]:
     """Parse a project's lattice tree, expanding any ``tao.init`` entries."""
     top_files, tao_inits = _expand_top_files(config, contents)
-    files, error = _parse_files(top_files, contents, parse_cache, annotate_state)
+    files, error = _parse_files(top_files, contents, parse_cache, annotate_state, disk_cache)
     if files is not None and tao_inits:
         # TODO: with several tao.init entries, associate each with its own tree.
         files.tao_init = tao_inits[0]

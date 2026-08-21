@@ -1074,14 +1074,101 @@ def test_incremental_annotation_correctness(tmp_path: pathlib.Path) -> None:
     assert "Q9" in named and "Q0" not in named
 
 
-def test_workspace_invalidate_clears_parse_cache(project: pathlib.Path) -> None:
+def test_scoped_reannotation_follows_inheritance(tmp_path: pathlib.Path) -> None:
+    """
+    A definition change propagates through element inheritance across files:
+    changing ``q0``'s type updates ``q2``'s resolved type two files away, even
+    though ``q2``'s file references only ``q1``.
+    """
+    (tmp_path / "latform.toml").write_text('top-level = ["main.bmad"]\n')
+    main = tmp_path / "main.bmad"
+    mid = tmp_path / "mid.bmad"
+    sub = tmp_path / "sub.bmad"
+    # Called files are parsed in LIFO order, so sub.bmad is listed first for
+    # mid.bmad (defining q1) to be annotated before sub.bmad (using it).
+    main.write_text("q0: quad, k1 = 1\ncall, file = sub.bmad\ncall, file = mid.bmad\n")
+    mid.write_text("q1: q0\n")
+    sub.write_text("q2: q1\nll: line = (q2)\nuse, ll\n")
+
+    workspace = lsp.Workspace()
+    workspace.set_text(main, main.read_text())
+
+    def q2_type() -> str | None:
+        files = workspace.analyze(sub).files
+        (q2,) = [st for st in files.by_filename[sub.resolve()] if getattr(st, "name", None) == "q2"]
+        return q2.element_type
+
+    assert q2_type() == "QUADRUPOLE"
+
+    # Warm the incremental path with a non-definition edit, then change q0's
+    # base type; sub.bmad is neither re-parsed nor a direct q0 referencer.
+    workspace.set_text(main, "q0: quad, k1 = 2\ncall, file = sub.bmad\ncall, file = mid.bmad\n")
+    assert q2_type() == "QUADRUPOLE"
+    workspace.set_text(main, "q0: sbend, k1 = 2\ncall, file = sub.bmad\ncall, file = mid.bmad\n")
+    assert q2_type() == "SBEND"
+
+
+def test_scoped_reannotation_updates_new_reference(project: pathlib.Path) -> None:
+    """
+    Defining a name that another (unchanged) file already mentions re-annotates
+    that file so the reference resolves.
+    """
+    main = project / "main.bmad"
     sub = project / "sub.bmad"
+    workspace = lsp.Workspace()
+    workspace.set_text(main, MAIN_BMAD)
+    workspace.set_text(sub, SUB_BMAD + "q9x: line = (q_new)\n")
+
+    workspace.analyze(sub)  # first build
+    # q_new is undefined; now define it in main. sub.bmad is not re-parsed,
+    # but must be re-annotated for the reference to resolve.
+    workspace.set_text(main, MAIN_BMAD + "q_new: marker\n")
+    loc = lsp.resolve_definition(
+        workspace.analyze(sub), 3, workspace.text_of(sub).splitlines()[3].index("q_new")
+    )
+    assert loc is not None and loc.filename.name == "main.bmad"
+
+
+def test_workspace_disk_cache_detects_changes(project: pathlib.Path) -> None:
+    """
+    Unopened files are served from the mtime/size-keyed disk cache, and a
+    changed file on disk is picked up after ``invalidate``.
+    """
+    sub = project / "sub.bmad"
+    main = project / "main.bmad"
     workspace = lsp.Workspace()
     workspace.set_text(sub, SUB_BMAD)
     workspace.analyze(sub)
-    assert workspace._parse_cache  # populated
+    assert main.resolve() in {p for p in workspace._disk_cache}
+
+    main.write_text(MAIN_BMAD + "q8: marker\n")
     workspace.invalidate()
-    assert not workspace._parse_cache  # cleared
+    assert "Q8" in workspace.analyze(sub).files.get_named_items()
+
+
+def test_workspace_invalidate_keeps_parse_cache(project: pathlib.Path) -> None:
+    """
+    ``invalidate`` keeps the per-file parse cache (entries are validated
+    against file contents), so a disk change re-parses only the changed file
+    while unchanged files reuse their statements.
+    """
+    sub = project / "sub.bmad"
+    main = project / "main.bmad"
+    workspace = lsp.Workspace()
+    workspace.set_text(sub, SUB_BMAD)
+    files = workspace.analyze(sub).files
+    sub_ids = [id(st) for st in files.by_filename[sub.resolve()]]
+    main_ids = [id(st) for st in files.by_filename[main.resolve()]]
+    assert workspace._parse_cache  # populated
+
+    main.write_text(MAIN_BMAD + "q9: marker\n")
+    workspace.invalidate()
+    assert workspace._parse_cache  # kept; entries self-validate
+
+    files2 = workspace.analyze(sub).files
+    assert "Q9" in files2.get_named_items()  # disk change picked up
+    assert [id(st) for st in files2.by_filename[sub.resolve()]] == sub_ids  # reused
+    assert [id(st) for st in files2.by_filename[main.resolve()]] != main_ids  # re-parsed
 
 
 def test_workspace_caches_project_parse(project: pathlib.Path) -> None:
