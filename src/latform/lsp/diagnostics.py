@@ -54,23 +54,50 @@ def _used_names(files: MemoryFiles) -> frozenset[str]:
     return cached
 
 
-def _file_lints(analyzed: AnalyzedDocument) -> list[Lint]:
-    """Lints for the current document (empty if it did not parse)."""
+def _file_lints(analyzed: AnalyzedDocument, lint_cache: dict | None = None) -> list[Lint]:
+    """
+    Lints for the current document (empty if it did not parse).
+
+    With ``lint_cache`` (a workspace-lifetime dict), a document's lints are
+    reused across builds when nothing they depend on changed: the document's
+    statements (compared by identity — the parse cache reuses the list object
+    when contents are unchanged), the project's definition signatures, its
+    used-names set, and the config.
+    """
     if analyzed.files is None:
         return []
     config = analyzed.config
-    return lint_statements(
+    used_names = _used_names(analyzed.files)
+    def_sigs = getattr(analyzed.files, "_def_sigs", None)
+    statements = analyzed.files.by_filename.get(analyzed.path)
+    cacheable = lint_cache is not None and def_sigs is not None and statements is not None
+    if cacheable:
+        entry = lint_cache.get(analyzed.path)
+        if (
+            entry is not None
+            and entry[0] is statements
+            and entry[1] is config
+            and entry[2] == def_sigs
+            and entry[3] == used_names
+        ):
+            return entry[4]
+    lints = lint_statements(
         list(analyzed.statements),
         named=analyzed.files.get_named_items(),
         assume_defined=False,
         ignore=config.ignores_for(analyzed.path) if config is not None else (),
-        used_names=_used_names(analyzed.files),
+        used_names=used_names,
         min_name_length=config.min_name_length if config is not None else 1,
         builtin_constant_rtol=config.builtin_constant_rtol if config is not None else 1e-4,
     )
+    if cacheable:
+        lint_cache[analyzed.path] = (statements, config, def_sigs, used_names, lints)
+    return lints
 
 
-def iter_diagnostics(analyzed: AnalyzedDocument) -> Generator[Diagnostic, None, None]:
+def iter_diagnostics(
+    analyzed: AnalyzedDocument, lint_cache: dict | None = None
+) -> Generator[Diagnostic, None, None]:
     """
     Yield diagnostics for the analyzed document (parse errors and lints).
     """
@@ -81,7 +108,7 @@ def iter_diagnostics(analyzed: AnalyzedDocument) -> Generator[Diagnostic, None, 
         )
         return
 
-    for lint in _file_lints(analyzed):
+    for lint in _file_lints(analyzed, lint_cache):
         primary, related = _lint_locations(lint)
         if primary is None:
             continue
