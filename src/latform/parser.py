@@ -847,22 +847,25 @@ class Files:
         self,
         filename: pathlib.Path,
         named: dict[Token, Statement],
-        defined: dict[str, Element],
     ):
         statements = self.by_filename[filename]
         for st in statements:
             st.annotate(named=named)
-        _resolve_element_types(statements, defined)
         _resolve_references(statements)
+
+    def _resolve_element_types_in_order(self) -> None:
+        # Inheritance follows Bmad's evaluation order (a ``call`` is executed at
+        # the point it appears), which is not the file parse order.
+        _resolve_element_types(self.get_statements_in_order(repeat_called_files=False))
 
     def annotate(self):
         """
         Resolve named items across all parsed files.
         """
         named = self.get_named_items()
-        defined: dict[str, Element] = {}
         for fn in self.by_filename:
-            self._annotate_file(fn, named, defined)
+            self._annotate_file(fn, named)
+        self._resolve_element_types_in_order()
 
     def match_elements(self, pattern: str) -> list[Element] | None:
         """

@@ -1084,9 +1084,10 @@ def test_scoped_reannotation_follows_inheritance(tmp_path: pathlib.Path) -> None
     main = tmp_path / "main.bmad"
     mid = tmp_path / "mid.bmad"
     sub = tmp_path / "sub.bmad"
-    # Called files are parsed in LIFO order, so sub.bmad is listed first for
-    # mid.bmad (defining q1) to be annotated before sub.bmad (using it).
-    main.write_text("q0: quad, k1 = 1\ncall, file = sub.bmad\ncall, file = mid.bmad\n")
+    # Bmad evaluation order: mid.bmad (defining q1) is called before sub.bmad
+    # (which uses it).  The parser visits called files in a different order, so
+    # this also guards inheritance following evaluation rather than parse order.
+    main.write_text("q0: quad, k1 = 1\ncall, file = mid.bmad\ncall, file = sub.bmad\n")
     mid.write_text("q1: q0\n")
     sub.write_text("q2: q1\nll: line = (q2)\nuse, ll\n")
 
@@ -1102,9 +1103,9 @@ def test_scoped_reannotation_follows_inheritance(tmp_path: pathlib.Path) -> None
 
     # Warm the incremental path with a non-definition edit, then change q0's
     # base type; sub.bmad is neither re-parsed nor a direct q0 referencer.
-    workspace.set_text(main, "q0: quad, k1 = 2\ncall, file = sub.bmad\ncall, file = mid.bmad\n")
+    workspace.set_text(main, "q0: quad, k1 = 2\ncall, file = mid.bmad\ncall, file = sub.bmad\n")
     assert q2_type() == "QUADRUPOLE"
-    workspace.set_text(main, "q0: sbend, k1 = 2\ncall, file = sub.bmad\ncall, file = mid.bmad\n")
+    workspace.set_text(main, "q0: sbend, k1 = 2\ncall, file = mid.bmad\ncall, file = sub.bmad\n")
     assert q2_type() == "SBEND"
 
 

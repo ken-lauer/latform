@@ -10,7 +10,7 @@ import pathlib
 from dataclasses import dataclass
 
 from ..config import LatformProjectConfig
-from ..parser import MemoryFiles, _resolve_lattice_paths
+from ..parser import MemoryFiles, _resolve_lattice_paths, is_call_statement
 from ..statements import Constant, Element, ElementList, Line, Statement
 from ..tao import TaoInit, is_init_file, looks_like_namelist
 from ..token import Token
@@ -31,8 +31,9 @@ def _file_definition_signature(statements: list[Statement]) -> tuple:
     A signature of everything in one file that affects cross-file annotation.
 
     Two builds in which every file has the same signature (in the same file
-    order) annotate identically: the set of defined names, their kinds, and
-    element inheritance keywords.
+    order) annotate identically: the set of defined names, their kinds, element
+    inheritance keywords, and ``call`` sites (whose position determines
+    evaluation order, and with it inheritance resolution).
     """
     sig: list[tuple] = []
     for st in statements:
@@ -43,6 +44,8 @@ def _file_definition_signature(statements: list[Statement]) -> tuple:
         elif isinstance(st, (Line, ElementList)):
             tok = definition_name_token(st)
             sig.append(("L", str(tok).upper() if tok is not None else ""))
+        elif is_call_statement(st):
+            sig.append(("call", str(st.metadata.get("local_path", ""))))
     return tuple(sig)
 
 
@@ -55,22 +58,6 @@ def _referenced_names(statements: list[Statement]) -> frozenset[str]:
     file's cross-file name dependencies.
     """
     return frozenset(item.node._upper for item in walk(statements) if isinstance(item.node, Token))
-
-
-def _propagate_inheritance(changed: set[str], sigs: dict[pathlib.Path, tuple]) -> None:
-    """
-    Grow ``changed`` along element inheritance: an element whose base element's
-    resolution changed resolves differently itself (``element_type`` follows
-    the chain), so names inheriting from a changed name are changed too.
-    """
-    grew = True
-    while grew:
-        grew = False
-        for entries in sigs.values():
-            for entry in entries:
-                if entry[0] == "E" and entry[2] in changed and entry[1] not in changed:
-                    changed.add(entry[1])
-                    grew = True
 
 
 class _OverlayFiles(MemoryFiles):
@@ -140,22 +127,17 @@ class _OverlayFiles(MemoryFiles):
             return super().annotate()
 
         named = self.get_named_items()
-        dirty = self._dirty_files(state)
-
-        defined: dict[str, Element] = {}
-        for filename, statements in self.by_filename.items():
-            if filename not in dirty:
-                # Prior annotation is still valid; just feed the type accumulator
-                # so re-annotated files can resolve inheritance from this one.
-                for st in statements:
-                    if isinstance(st, Element):
-                        defined[str(st.name).upper()] = st
-                continue
-            self._annotate_file(filename, named, defined)
+        for filename in self._dirty_files(state):
+            self._annotate_file(filename, named)
+        # Inheritance resolution is cheap relative to token annotation, and it
+        # depends on evaluation order rather than any one file: redo it in full
+        # every build.
+        self._resolve_element_types_in_order()
 
     def _dirty_files(self, state: dict) -> set[pathlib.Path]:
         """
-        The files whose annotation cannot be reused from the previous build.
+        The files whose token annotation cannot be reused from the previous
+        build.
 
         Compares per-file definition signatures against the previous build's:
         the re-parsed files are always dirty, plus every file containing a
@@ -189,24 +171,17 @@ class _OverlayFiles(MemoryFiles):
         self._def_sigs = sigs
 
         if old_sigs is None or old_order != order:
-            # First build, or the file set/order changed (affects inheritance
-            # accumulation): re-annotate everything.
+            # First build, or the file set changed: re-annotate everything.
             return set(self.by_filename)
 
+        # Definition names whose presence changed; ``call`` entries only affect
+        # evaluation order (handled by the full inheritance pass), not roles.
         changed: set[str] = set()
         for filename in old_sigs.keys() | sigs.keys():
             a = sigs.get(filename, ())
             b = old_sigs.get(filename, ())
             if a != b:
-                delta = set(a) ^ set(b)
-                if delta:
-                    changed.update(entry[1] for entry in delta)
-                else:
-                    # Pure reorder within the file: same entries, but
-                    # inheritance can resolve differently.
-                    changed.update(entry[1] for entry in a)
-        if changed:
-            _propagate_inheritance(changed, sigs)
+                changed.update(entry[1] for entry in set(a) ^ set(b) if entry[0] != "call")
 
         dirty = self._reparsed & set(self.by_filename) if self._reparsed else set()
         if changed:

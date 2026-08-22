@@ -396,6 +396,27 @@ def test_unused_constant_cross_file_usage_not_reported(tmp_path):
     assert LintCode.unused_constant not in codes
 
 
+def test_base_element_from_earlier_sibling_call_not_reported(tmp_path):
+    """
+    Inheritance follows Bmad evaluation order: a base element defined in an
+    earlier ``call`` resolves in a later-called file (and its sub-files), even
+    though the parser visits called files in a different order.
+    """
+    (tmp_path / "cavity.bmad").write_text("le.cav: lcavity, rf_frequency = 1.0e8\n")
+    (tmp_path / "l1.bmad").write_text("call, file = l1.crmods.bmad\n")
+    (tmp_path / "l1.crmods.bmad").write_text("cav1: le.cav\nll: line = (cav1)\nuse, ll\n")
+    main = tmp_path / "main.bmad"
+    main.write_text("call, file = cavity.bmad\ncall, file = l1.bmad\n")
+
+    from ..parser import Files
+
+    files = Files(top_files=[main])
+    files.parse(recurse=True)
+    files.annotate()
+    codes = {lint.code for _fn, lint in lint_files(files, assume_defined=False)}
+    assert LintCode.unknown_element_type not in codes
+
+
 def test_unused_constant_via_lint_files():
     files = _files("dead = 1\nq1: quadrupole, k1 = 0.5")
     codes = {lint.code for _fn, lint in lint_files(files)}
