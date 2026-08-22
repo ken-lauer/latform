@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .dump import _fmt as dump_fmt
-from .dump import _load_files_and_parse
+from .dump import _load_all_files_and_parse
 from .parser import Files
 from .statements import Assignment, Constant, Element, Line, Parameter
 
@@ -440,15 +440,10 @@ def main(args: list[str] | None = None) -> None:
 
     cwd = pathlib.Path.cwd()
 
-    def load(fn: str):
+    def load(fn: str) -> Files:
         if ":" in fn and not pathlib.Path(fn).exists():
-            is_git = ":" in fn and not pathlib.Path(fn).exists()
-            if is_git:
-                return _load_git_files_and_parse(
-                    *_split_rev_path(fn), cwd, verbose=parsed_args.verbose
-                )
-            return _load_files_and_parse(fn, cwd, verbose=parsed_args.verbose)
-        return _load_files_and_parse(fn, cwd, verbose=parsed_args.verbose)
+            return _load_git_files_and_parse(*_split_rev_path(fn), cwd)
+        return _load_all_files_and_parse([fn], cwd, verbose=parsed_args.verbose)[0]
 
     with console.status("Loading file 1..."):
         f1 = load(parsed_args.file1)
