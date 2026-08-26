@@ -2746,6 +2746,32 @@ def test_roundtrip(code: str, expected) -> None:
 
 
 @pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param("q: quad, l = ((1+2))*3", id="doubled-parens"),
+        pytest.param("ov: overlay = {{q[k1]: 0.1}}, var = {a}", id="doubled-braces"),
+        pytest.param(
+            "foo[phi0_multipass] = -(acos(e2/e1*cos(phi/180*pi)) + phi/180*pi)/(2*pi)",
+            id="negated-group",
+        ),
+        pytest.param(
+            "bar[phi0_multipass] = -(\n  acos(e2/e1*cos(phi/180*pi)) + phi/180*pi\n)/(2*pi)",
+            id="negated-group-multiline",
+        ),
+    ],
+)
+def test_nested_parens_roundtrip(code: str) -> None:
+    # Redundant nesting like (( )) is collapsed on output, so this checks
+    # parse -> format -> parse equality rather than byte preservation.
+    roundtrip_code(code)
+
+
+def test_nested_brackets_invalid() -> None:
+    with pytest.raises(ValueError, match=r"Nested '\[\[ \]\]'"):
+        parse("m: marker, type = [[x]]")
+
+
+@pytest.mark.parametrize(
     ("code",),
     [
         pytest.param("ename[amp_vs_time(1)%time]"),

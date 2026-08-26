@@ -88,6 +88,44 @@ def test_lattice_files_ordered_and_skips_comments():
     ]
 
 
+USE_LINE_INIT = """\
+&tao_design_lattice
+  design_lattice(2)%file = 'b.lat.bmad@lineA'
+  design_lattice(1)%file = 'a.lat.bmad'
+  design_lattice(3)%file = 'sub/c.lat.bmad@lineA@lineB'
+/
+"""
+
+
+def test_lattice_file_with_use_line():
+    tao = TaoInit.parse(USE_LINE_INIT)
+    assert tao.lattice_file_with_use_line == [
+        ("a.lat.bmad", []),
+        ("b.lat.bmad", ["lineA"]),
+        ("sub/c.lat.bmad", ["lineA", "lineB"]),
+    ]
+    # The '@use_line' suffixes are stripped from the plain filename view
+    assert tao.lattice_files == ["a.lat.bmad", "b.lat.bmad", "sub/c.lat.bmad"]
+    assert tao.render() == USE_LINE_INIT
+
+
+def test_set_lattice_file_with_use_line():
+    tao = TaoInit.parse(USE_LINE_INIT)
+    entries = [("a2.lat.bmad", []), ("b2.lat.bmad", ["lineC"]), ("c2.lat.bmad", ["l1", "l2"])]
+    tao.lattice_file_with_use_line = entries
+    assert tao.lattice_file_with_use_line == entries
+    assert tao.lattice_files == ["a2.lat.bmad", "b2.lat.bmad", "c2.lat.bmad"]
+    assert TaoInit.parse(tao.render()).lattice_file_with_use_line == entries
+
+
+def test_set_lattice_files_passes_at_suffix_through():
+    """The plain setter writes '@' suffixes verbatim; the getter strips them (asymmetric)."""
+    tao = TaoInit.parse(USE_LINE_INIT)
+    tao.lattice_files = ["x.lat.bmad@ln"]
+    assert tao.lattice_files == ["x.lat.bmad"]
+    assert tao.lattice_file_with_use_line == [("x.lat.bmad", ["ln"])]
+
+
 def test_keypath_decomposes_nested_key():
     path = KeyPath.parse("foo(3)%bar(2)%val")
     assert path.names == ("foo", "bar", "val")
@@ -245,6 +283,21 @@ def test_memory_files_from_tao_init_contents():
         root,
         lattice_contents={"mem.lat.bmad": "M_Q: quadrupole, l = 1\nml: line = (M_Q)\nuse, ml\n"},
     )
+    files.parse()
+    files.annotate()
+    assert "M_Q" in files.get_named_items()
+
+
+def test_memory_files_from_tao_init_use_line():
+    """A '@use_line' suffix does not interfere with resolving the lattice file itself."""
+    contents = "&tao_design_lattice\n  design_lattice(1)%file = 'mem.lat.bmad@ml'\n/\n"
+    root = FILES / "virtual" / "tao.init"
+    files = MemoryFiles.from_tao_init_contents(
+        contents,
+        root,
+        lattice_contents={"mem.lat.bmad": "M_Q: quadrupole, l = 1\nml: line = (M_Q)\nuse, ml\n"},
+    )
+    assert [p.name for p in files.top_files] == ["mem.lat.bmad"]
     files.parse()
     files.annotate()
     assert "M_Q" in files.get_named_items()

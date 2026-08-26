@@ -222,7 +222,10 @@ def _resolve_used_elements(
     """
     Resolve which named items are active in the expanded lattice.
 
-    Starting from the roots of the last USE statement, lines are expanded
+    Roots are resolved per top-level lattice file: the last USE statement in
+    each file's call tree, or the ``@use_line`` names from the corresponding
+    ``tao.init`` ``design_lattice(i)%file`` entry, which override that
+    lattice's own USE statement.  From those roots, lines are expanded
     recursively (including repetitions, reflections, replacement-line calls,
     list members, and fork targets).  A fixpoint pass then folds in usage that
     depends on other elements being used:
@@ -239,17 +242,17 @@ def _resolve_used_elements(
         Mapping of uppercased active names to a human-readable reason.
     """
     all_statements = files.get_statements_in_order(repeat_called_files=False)
-    use_cmds = [
-        st
-        for st in all_statements
-        if isinstance(st, Simple) and st.statement._upper == "USE" and st.arguments
-    ]
 
-    # Bmad semantics: the last USE statement wins; each of its arguments is
-    # the root line of a branch.  Bare argument tokens are parsed as
-    # value-less Attributes.
-    roots: list[Token] = []
-    if use_cmds:
+    def last_use_roots(statements: list[Statement]) -> list[Token]:
+        # Bmad semantics: the last USE statement wins; each of its arguments is
+        # the root line of a branch.  Bare argument tokens are parsed as
+        # value-less Attributes.
+        use_cmds = [
+            st
+            for st in statements
+            if isinstance(st, Simple) and st.statement._upper == "USE" and st.arguments
+        ]
+        roots: list[Token] = []
         for use_cmd in reversed(use_cmds):
             for arg in use_cmd.arguments:
                 if isinstance(arg, Token):
@@ -264,6 +267,27 @@ def _resolve_used_elements(
             # I think this is a scenario that's common in reused sublattices
             # that can be standalone
             break
+        return roots
+
+    # Roots are resolved per top-level lattice file.  A tao.init
+    # ``design_lattice(i)%file = 'lat.bmad@line_name'`` suffix overrides that
+    # lattice's own USE statement (Tao/bmad_parser semantics); lattices without
+    # a suffix fall back to their in-file USE.
+    tao_entries: list[tuple[str, list[str]]] = (
+        files.tao_init.lattice_file_with_use_line if files.tao_init is not None else []
+    )
+    root_reasons: dict[Token, str] = {}
+    for index, top_file in enumerate(files.top_files):
+        use_lines = tao_entries[index][1] if index < len(tao_entries) else []
+        if use_lines:
+            for name in use_lines:
+                root_reasons.setdefault(Token(name.upper()), "tao.init use_line")
+        else:
+            statements = files.get_statements_in_order(
+                repeat_called_files=False, top_files=[top_file]
+            )
+            for root in last_use_roots(statements):
+                root_reasons.setdefault(root, "use statement")
 
     deferred = get_deferred_element_attributes(all_statements)
     used: dict[Token, str] = {}
@@ -288,10 +312,10 @@ def _resolve_used_elements(
                 for target in _fork_targets(item, deferred):
                     mark(target, f"fork target of {name}")
 
-    for root in roots:
-        mark(root, "use statement")
+    for root, reason in root_reasons.items():
+        mark(root, reason)
 
-    if roots:
+    if root_reasons:
         # The implicit lattice endpoints exist in any expanded lattice
         for name in (Token("BEGINNING"), Token("END")):
             if name in named_items:
@@ -319,7 +343,7 @@ def _resolve_used_elements(
                     changed = True
                 continue
 
-            if not roots:
+            if not root_reasons:
                 continue
 
             superposition = element.get_superposition_settings(deferred)

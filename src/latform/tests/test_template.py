@@ -346,6 +346,24 @@ def test_instantiate_renames_elements_in_tao_init(tmp_path):
     assert "var(1)%ele_name='C1_Q'" in flat
 
 
+def test_instantiate_renames_use_line_in_tao_init(tmp_path):
+    """A design_lattice '@use_line' suffix is kept and renamed along with the line."""
+    (tmp_path / "cx.lat.bmad").write_text(
+        "CX_Q: quadrupole, k1=0.0\nCX_LINE: line=(CX_Q)\nuse, CX_LINE\n"
+    )
+    (tmp_path / "tao.init").write_text(
+        "&tao_design_lattice\n  design_lattice(1)%file = 'cx.lat.bmad@cx_line'\n/\n"
+    )
+    spec = {
+        "template": [{"input": "cx.lat.bmad", "output": "{instance}.lat.bmad"}],
+        "renames": {r"CX(_.*|$)": r"{instance:upper}\1"},
+        "tao_init": {"input": "tao.init", "output": "{instance}/tao.init"},
+        "instances": {"c1": {}},
+    }
+    out = instantiate(spec, base_dir=tmp_path, options=default_options)["c1"]["c1/tao.init"]
+    assert "design_lattice(1)%file = '../c1.lat.bmad@C1_LINE'" in out
+
+
 def test_instantiate_renames_tao_init_only_elements(tmp_path):
     """Names only the tao.init references (not defined in the template lattices)
     are still renamed by the instance's rename rules."""
