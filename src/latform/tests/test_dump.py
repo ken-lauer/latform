@@ -227,6 +227,69 @@ def test_reasons():
     assert status["UNUSED_Q"]["reason"] == ""
 
 
+TAO_TWO_LINE_LATTICE = """\
+m1: marker
+m2: marker
+l1: line = (m1)
+l2: line = (m2)
+use, l1
+"""
+
+
+def _tao_files(entries: list[str], lattice_contents: dict[str, str]) -> MemoryFiles:
+    body = "\n".join(
+        f"  design_lattice({i})%file = '{entry}'" for i, entry in enumerate(entries, start=1)
+    )
+    files = MemoryFiles.from_tao_init_contents(
+        f"&tao_design_lattice\n{body}\n/\n",
+        "/virtual/tao.init",
+        lattice_contents=lattice_contents,
+    )
+    files.parse()
+    files.annotate()
+    return files
+
+
+def _tao_used(entries: list[str], lattice_contents: dict[str, str]) -> set[str]:
+    files = _tao_files(entries, lattice_contents)
+    return {row["name"] for row in get_elements_status(files, "all") if row["used"] == "YES"}
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected_used", "expected_unused"),
+    [
+        pytest.param("mem.lat.bmad", {"L1", "M1"}, {"L2", "M2"}, id="no-use-line"),
+        pytest.param("mem.lat.bmad@l2", {"L2", "M2"}, {"L1", "M1"}, id="use-line-overrides-use"),
+        pytest.param(
+            "mem.lat.bmad@l1@l2", {"L1", "M1", "L2", "M2"}, set(), id="multiple-use-lines"
+        ),
+    ],
+)
+def test_tao_init_use_line_roots(entry: str, expected_used: set[str], expected_unused: set[str]):
+    used = _tao_used([entry], {"mem.lat.bmad": TAO_TWO_LINE_LATTICE})
+    assert expected_used <= used
+    assert not expected_unused & used
+
+
+def test_tao_init_use_line_is_per_file():
+    """A use_line overrides only its own lattice's USE; other lattices keep theirs."""
+    first = "m1: marker\nm2: marker\nl1: line = (m1)\nl2: line = (m2)\nuse, l1\n"
+    second = "m3: marker\nm4: marker\nl3: line = (m3)\nl4: line = (m4)\nuse, l3\n"
+    used = _tao_used(
+        ["first.lat.bmad", "second.lat.bmad@l4"],
+        {"first.lat.bmad": first, "second.lat.bmad": second},
+    )
+    assert {"L1", "M1", "L4", "M4"} <= used
+    assert not {"L2", "M2", "L3", "M3"} & used
+
+
+def test_tao_init_use_line_reason():
+    files = _tao_files(["mem.lat.bmad@l2"], {"mem.lat.bmad": TAO_TWO_LINE_LATTICE})
+    status = {row["name"]: row for row in get_elements_status(files, "all")}
+    assert status["L2"]["reason"] == "tao.init use_line"
+    assert status["M2"]["reason"] == "in line L2"
+
+
 def test_get_constants():
     src = """
 my_const = 0.5

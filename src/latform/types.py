@@ -68,7 +68,12 @@ class Seq:
     ) -> Self:
         unwrapped, inner_delimiter = self.maybe_unwrap()
         assert unwrapped is not None
-        assert not isinstance(unwrapped, Seq)
+        if isinstance(unwrapped, Seq):
+            if opener == "[" and unwrapped.opener == "[":
+                raise ValueError(f"Nested '[[ ]]' is not valid syntax at {opener.loc}")
+            # Nested sequences, possibly unnecessarily (TODO)
+            return unwrapped
+
         if inner_delimiter == expected_delimiter or not self.items:
             # If the sequence is already delimited as expected, give it back directly
             items = unwrapped

@@ -944,8 +944,18 @@ class Files:
         """Flatten each top-level file independently, keyed by its path."""
         return {top: self.flatten(call=call, inline=inline, top=top) for top in self.top_files}
 
-    def get_statements_in_order(self, *, repeat_called_files: bool = True) -> list[Statement]:
-        """Get all statements in order, as evaluated by Bmad."""
+    def get_statements_in_order(
+        self,
+        *,
+        repeat_called_files: bool = True,
+        top_files: Sequence[pathlib.Path] | None = None,
+    ) -> list[Statement]:
+        """
+        Get all statements in order, as evaluated by Bmad.
+
+        ``top_files`` restricts the traversal to the call trees of the given
+        top-level files (defaulting to all of them).
+        """
 
         handled = set()
         active = set()
@@ -969,7 +979,7 @@ class Files:
                 active.discard(fn)
 
         res = []
-        for fn in self.top_files:
+        for fn in self.top_files if top_files is None else top_files:
             res.extend(_flatten(fn))
         return res
 

@@ -421,20 +421,44 @@ class TaoInit(NamelistFile):
         ]
 
     @property
-    def lattice_files(self) -> list[str]:
+    def lattice_file_with_use_line(self) -> list[tuple[str, list[str]]]:
         """
-        Ordered ``design_lattice(i)%file`` values (unquoted), by index.
+        Ordered, unquoted ``design_lattice(i)%file`` values with `use_line` names.
 
-        When set, rewritse the ``design_lattice(i)%file`` entries to ``files`` (1-based).
-        Existing entries are updated in place. Non-matching additional entries
-        are removed, and new entries are appended.
+        When set, rewrites the entries from ``(filename, use_line_names)``
+        tuples, joining the names back into the ``@`` suffix form.
         """
+
+        def item(assignment: Assignment) -> tuple[str, list[str]]:
+            # Unquote and remove the '@use_line1@use_line2...' suffix
+
+            filename = unquote_value(assignment.value.strip())
+            if "@" in filename:
+                filename, use_lines = filename.split("@", 1)
+                return (filename, use_lines.split("@"))
+            return filename, []
+
         by_index = {
-            assignment.path.components[0].index: unquote_value(assignment.value.strip())
+            assignment.path.components[0].index: item(assignment)
             for assignment in self._lattice_file_assignments()
             if assignment.path.components[0].index is not None
         }
         return [by_index[i] for i in sorted(by_index)]
+
+    @lattice_file_with_use_line.setter
+    def lattice_file_with_use_line(self, entries: list[tuple[str, list[str]]]) -> None:
+        self.lattice_files = ["@".join([fn, *use_lines]) for fn, use_lines in entries]
+
+    @property
+    def lattice_files(self) -> list[str]:
+        """
+        Ordered ``design_lattice(i)%file`` values (unquoted), by index.
+
+        When set, rewrites the ``design_lattice(i)%file`` entries to ``files`` (1-based).
+        Existing entries are updated in place. Non-matching additional entries
+        are removed, and new entries are appended.
+        """
+        return [fn for fn, _ in self.lattice_file_with_use_line]
 
     @lattice_files.setter
     def lattice_files(self, files: list[str]) -> None:

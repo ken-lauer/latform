@@ -253,17 +253,6 @@ def _instantiate_tao_init(
 
     in_dir = posixpath.dirname(input_rel)
     out_dir = posixpath.dirname(output_rel)
-    remapped: list[str] = []
-    changed = False
-    for entry in tao_init.lattice_files:
-        mapped = _map_reference(entry, in_dir, out_dir, explicit_paths, in_to_out)
-        if mapped is None:
-            remapped.append(entry)
-        else:
-            remapped.append(mapped)
-            changed = True
-    if changed:
-        tao_init.lattice_files = remapped
 
     merged: dict[str, str] = {}
     if rules and (rules["literal"] or rules["regex"] or rules["parts"]):
@@ -275,6 +264,20 @@ def _instantiate_tao_init(
     merged.update({old.upper(): new for old, new in (renames or {}).items()})
     if merged:
         rename_tao_elements(tao_init, merged)
+
+    remapped: list[tuple[str, list[str]]] = []
+    changed = False
+    for filename, use_lines in tao_init.lattice_file_with_use_line:
+        mapped = _map_reference(filename, in_dir, out_dir, explicit_paths, in_to_out)
+        mapped = mapped or filename
+
+        new_use_lines = [merged.get(name.upper(), name) for name in use_lines]
+        remapped.append((mapped, new_use_lines))
+
+        if mapped != filename or new_use_lines != use_lines:
+            changed = True
+    if changed:
+        tao_init.lattice_file_with_use_line = remapped
 
     for name_key, assignments in ((override or {}).get("namelists") or {}).items():
         name, index = split_namelist_key(name_key)
